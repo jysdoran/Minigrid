@@ -23,7 +23,7 @@ class Maze_Dataset(VisionDataset):
 
     """
 
-    base_folder = "test_dataset"
+    base_folder = ""
     train_list = [
         ["batch_0.data", "TODO"],
     ]
@@ -82,8 +82,8 @@ class Maze_Dataset(VisionDataset):
 
     def _load_meta(self) -> None:
         path = os.path.join(self.root, self.base_folder, self.meta["filename"])
-        if not check_integrity(path, self.meta["md5"]):
-            raise RuntimeError("Dataset metadata file not found or corrupted.")
+        # if not check_integrity(path, self.meta["md5"]): #TODO: reenable
+        #     raise RuntimeError("Dataset metadata file not found or corrupted.")
         with open(path, "rb") as infile:
             self.dataset_metadata = pickle.load(infile, encoding="latin1")
             self.label_descriptors = self.dataset_metadata["label_descriptors"]
