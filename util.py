@@ -30,10 +30,15 @@ def seed_everything(seed=20211201):
     # torch.backends.cudnn.deterministic = True
 
 
-def plot_grid_of_samples(samples, grid=(5, 5), figsize=(8,8)):
-    """A helper furnction for plotting samples"""
-    fig, axes = plt.subplots(grid[0], grid[1], figsize=figsize)
-    axes = axes.flatten()
+def plot_grid_of_samples(samples, grid=None, figsize=(8, 8)):
+    """A helper function for plotting samples"""
+    if grid is None:
+        grid = (samples.shape[0], samples.shape[1])
+    else:
+        samples = samples.reshape(grid[0], grid[1], *samples.shape[2:])
+
+    fig, axes = plt.subplots(grid[0], grid[1], sharex=True, sharey=True, figsize=figsize)
+    fig.subplots_adjust(wspace=0., hspace=0.)
 
     if samples.shape[-1] == 3:
         cmaps = [plt.get_cmap('Reds'), plt.get_cmap('Greens')]
@@ -42,23 +47,20 @@ def plot_grid_of_samples(samples, grid=(5, 5), figsize=(8,8)):
             color_array = cmap(range(256))
             color_array[:, -1] = np.linspace(0.0, 1.0, 256)
             new_cmap_name = str(cmap.name) + '_alpha'
-            new_cmap = LinearSegmentedColormap.from_list(name=new_cmap_name,colors=color_array)
+            new_cmap = LinearSegmentedColormap.from_list(name=new_cmap_name, colors=color_array)
             transparent_cmaps.append(new_cmap)
 
-    #[cmap.set_under('white') for cmap in cmaps]
-    for idx, ax in enumerate(axes):
+    # Plot samples
+    for i, j in itertools.product(range(grid[0]), range(grid[1])):
         if samples.shape[-1] == 3:
-            ax.imshow(samples[idx, ..., 0], cmap=plt.get_cmap('gray_r'))
-            ax.imshow(samples[idx, ..., 1], cmap=transparent_cmaps[0], vmin=0.9)
-            ax.imshow(samples[idx, ..., 2], cmap=transparent_cmaps[1], vmin=0.9)
+            axes[j, i].imshow(samples[i, grid[0] - j - 1, ..., 0], cmap='gray_r')
+            axes[j, i].imshow(samples[i, grid[0] - j - 1, ..., 1], cmap=transparent_cmaps[0], vmin=0.9)
+            axes[j, i].imshow(samples[i, grid[0] - j - 1, ..., 2], cmap=transparent_cmaps[1], vmin=0.9)
         else:
-            ax.imshow(samples[idx], cmap=plt.get_cmap('gray_r'))
+            axes[j, i].imshow(samples[i, grid[0] - j - 1], cmap='gray_r')
+        axes[j, i].tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
 
-        ax.tick_params(left=False, labelleft=False,
-                       bottom=False, labelbottom=False)
-
-    fig.tight_layout()
-    return fig
+    return fig, axes
 
 def create_base_argparser():
     parser = argparse.ArgumentParser(description='VAE MNIST Example')
