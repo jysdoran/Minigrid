@@ -9,6 +9,8 @@ import argparse
 import itertools
 from tqdm import tqdm
 from copy import deepcopy
+from typing import Tuple
+
 
 def seed_everything(seed=20211201):
     """
@@ -62,6 +64,72 @@ def plot_grid_of_samples(samples, grid=None, figsize=(8, 8)):
 
     return fig, axes
 
+
+# only for dim 2 at the moment
+def plot_latent_visualisation(model, z_max: Tuple[float, float], z_min: Tuple[float, float], grid: Tuple[int, int],
+                              img_dims: Tuple[int, int, int], figsize: Tuple[int, int] = (14, 14), Z_points=None,
+                              labels=None, device='cpu'):
+    #TODO: finish implementation with labels
+    #TODO: profiling to figure out why so slow for larger grids
+
+    # Locations of the grid samples
+    x = np.linspace(z_min[0], z_max[0], grid[0])
+    y = np.linspace(z_min[1], z_max[1], grid[1])
+
+    # Create the tuples of latent locations
+    x0, x1 = np.meshgrid(x,y)
+    Z_grid = np.empty(x0.shape + (2,))
+    Z_grid[:, :, 0] = x0
+    Z_grid[:, :, 1] = x1
+
+    model.eval()
+    logits = model.decoder(torch.tensor(Z_grid, dtype=torch.float, device=device))
+    samples = model.decoder.param_b(logits).detach().cpu()
+    samples = samples.reshape(*samples.shape[:2], *img_dims).squeeze()
+
+    fig, axes = plot_grid_of_samples(samples, grid=None, figsize=figsize)
+
+    for i, j in itertools.product(range(grid[0]), range(grid[1])):
+        if j == 0:
+            axes[j, i].set_title(f'{x[i]:.2f}', fontsize=13)
+        if i == 0:
+            axes[j, i].set_ylabel(f'{y[grid[0] - j - 1]:.2f}', fontsize=13)
+
+    if Z_points is not None:
+        if isinstance(Z_points, torch.Tensor):
+            Z_points = Z_points.cpu().numpy()
+        # Overlay another axes
+        rect = [axes[0][0].get_position().get_points()[0, 0], axes[-1][-1].get_position().get_points()[0, 1],
+                axes[-1][-1].get_position().get_points()[1, 0] - axes[0][0].get_position().get_points()[0, 0],
+                axes[0][0].get_position().get_points()[1, 1] - axes[-1][-1].get_position().get_points()[0, 1]
+                ]
+        ax = fig.add_axes(rect)
+
+        if labels is not None:
+            if isinstance(labels, torch.Tensor):
+                labels = labels.cpu().numpy()
+            # Create legend
+            colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+            c = np.array(colors)[0]  # TODO: Y.numpy()
+            legend_elements = [mpl.patches.Patch(facecolor=colors[i], label=i) for i in range(10)]
+            ax.legend(handles=legend_elements, ncol=10,
+                      bbox_to_anchor=(0.5, 0.92),
+                      bbox_transform=fig.transFigure,
+                      loc='center',
+                      prop={'size': 14},
+                      frameon=False)
+        else:
+            c = 'g'
+        # Plot projections
+        ax.scatter(Z_points[:, 0], Z_points[:, 1], color=c, alpha=0.5)
+        ax.patch.set_alpha(0.)
+        ax.set_xlim(z_min[0], z_max[0])
+        ax.set_ylim(z_min[1], z_max[1])
+        ax.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+
+    return fig
+
+
 def create_base_argparser():
     parser = argparse.ArgumentParser(description='VAE MNIST Example')
     parser.add_argument('--seed', type=int, default=20211201,
@@ -76,12 +144,14 @@ def create_base_argparser():
                         help='Learning rate for the Adam optimiser (default: 0.0001)')
     return parser
 
+
 class BinaryTransform(object):
     def __init__(self, thr):
         self.thr = thr  # input threshold for [0..255] gray level, convert to [0..1]
 
     def __call__(self, x):
         return (x > self.thr).to(x.dtype)  # do not change the data type
+
 
 ### Kind of VAE specific:
 

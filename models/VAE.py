@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from util import BinaryTransform
 
 
 def evaluate_logprob_continuous_bernoulli(X, *, logits):
@@ -426,13 +427,13 @@ class Decoder(nn.Module):
 
     def param_p(self, logits):
         """
-        Returns the success probability p of the continuous Bernoulli
+        Returns the distribution parameters
 
         Args:
-            logits (Tensor):   parameters of the continuous Bernoulli, shape (*, B, D)
+            logits (Tensor): decoder output (non-normalised log probabilities), shape (*, B, D)
 
         Returns:
-            p (Tensor):  success probability p of the continuous Bernoulli, shape (*, B, D)
+            p (Tensor): parameters of the distribution, shape (*, B, D)
         """
         if self.data_dist == 'Bernoulli':
             dist = torch.distributions.Bernoulli(logits=logits)
@@ -441,6 +442,21 @@ class Decoder(nn.Module):
         else:
             raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
         return dist.probs
+
+    def param_b(self, logits, threshold: float = 0.5):
+        """
+        Returns a binary transformation of the distribution parameters
+
+        Args:
+            logits (Tensor): decoder output (non-normalised log probabilities), shape (*, B, D)
+            :param threshold (float): Threshold for binary transformation, [0,1]
+
+        Returns:
+            b (Tensor):  Binary transformation of the distribution parameters, shape (*, B, D)
+        """
+
+        binary_transform = BinaryTransform(threshold)
+        return binary_transform(self.param_p(logits))
 
 
 class VAE(nn.Module):
