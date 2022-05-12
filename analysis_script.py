@@ -18,8 +18,6 @@ dataset_dir = base_dir + '/datasets/'
 cifar_dir = dataset_dir + 'cifar10_data'
 maze_dir = dataset_dir + 'only_grid_10000x11'#'only_grid_10000x11'
 
-img_size = 11
-
 train_data = Maze_Dataset(
           maze_dir, train=True,
           transform = transforms.Compose([
@@ -27,37 +25,12 @@ train_data = Maze_Dataset(
               transforms.ToTensor(),
           ]))
 
-parser = create_base_argparser()
-parser = VAE.add_model_args(parser)
-parser.print_help()
-
 # Specify the hyperpameter choices
-data_dim = train_data[0][0].numel()
+img_size = 11
 data_dims = (img_size,img_size,1)
-args_dist_b = ['--dec_layer_dims', '2', '100', f'{data_dim}',
-             '--enc_layer_dims', f'{data_dim}', '100', '2',
-             '--gradient_type', 'pathwise',
-             '--num_variational_samples', '1',
-             '--data_distribution', 'Bernoulli',
-             '--epochs', '50',
-             '--learning_rate', '1e-4',
-             '--cuda']
 
-args_dist_b = parser.parse_args(args_dist_b)
-args_dist_b.cuda = args_dist_b.cuda and torch.cuda.is_available()
-args_dist_b.device = torch.device("cuda" if args_dist_b.cuda else "cpu")
+model_dist_b, optimiser_dist_b, args_dist_b = load_state('checkpoints/VAE_cnn_onlygrid_10.pt', model_type=VAE, optim_type=optim.Adam)
 
-# Seed all random number generators for reproducibility of the runs
-seed_everything(args_dist_b.seed)
-
-# Initialise the model and the Adam (SGD) optimiser
-model_dist_b = VAE(args_dist_b).to(args_dist_b.device)
-optimizer_dist_b = optim.Adam(model_dist_b.parameters(), lr=args_dist_b.learning_rate)
-
-load_state(model_dist_b, optimizer_dist_b, 'checkpoints/VAE_discrete_onlygrid_10.pt')
-
-N = 1000
-Z = torch.randn(N, 2, device=args_dist_b.device)
 bin_threshold = 0.5
 binary_transform = BinaryTransform(bin_threshold)
 
@@ -104,7 +77,8 @@ with torch.inference_mode():
     for batch_idx, (X, labels) in tqdm(enumerate(train_loader)):
         # Prepare
         X = X.to(args_dist_b.device)
-        X = X.view([-1] + [X.shape[-2] * X.shape[-1]])
+        #X = X.view([-1] + [X.shape[-2] * X.shape[-1]])
+        X = X.squeeze()
 
         mean, _ = model_dist_b.encoder(X)
 
@@ -115,11 +89,14 @@ with torch.inference_mode():
     Z = torch.vstack(Z)
     Y = torch.hstack(Y)
 
+    # N = 1000
+    # Z = 2*torch.randn(N, 2, device=args_dist_b.device)
+
     # Establish limits in the latent space
     mx = Z.max(0)[0].cpu().numpy()
     mn = Z.min(0)[0].cpu().numpy()
 
-    fig = plot_latent_visualisation(model=model_dist_b, z_min=mn, z_max=mx, grid=(6, 6), img_dims=data_dims, Z_points=Z, labels=None, device=args_dist_b.device)
+    fig = plot_latent_visualisation(model=model_dist_b, z_min=mn, z_max=mx, grid=(12, 12), img_dims=data_dims, Z_points=Z, labels=None, device=args_dist_b.device)
 
 plt.show()
 

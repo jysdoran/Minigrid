@@ -1,8 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from util import BinaryTransform
+from util import BinaryTransform, layer_dim
+from models.networks import FC_ReLU_Network, CNN_ReLU_Network, dConv_ReLU_Network
 
+from typing import Iterable, Tuple
+from math import prod
 
 def evaluate_logprob_continuous_bernoulli(X, *, logits):
     """
@@ -257,28 +260,30 @@ class Encoder(nn.Module):
         enc_layer_dims = self.hparams.enc_layer_dims
 
         # Create all layers except last
-        layers = []
-        for i in range(len(enc_layer_dims) - 2):
-            layers.append(nn.Linear(enc_layer_dims[i],
-                                    enc_layer_dims[i + 1]))
-            # Use a non-linearity
-            layers.append(nn.ReLU())
-
-        self.model = nn.Sequential(*layers)
+        self.model = self.create_model(enc_layer_dims[:-1])
 
         # Create separate final layers for each parameter (mean and log-variance)
         # We use log-variance to unconstrain the optimisation of the positive-only variance parameters
-        self.mean = nn.Linear(enc_layer_dims[-2],
-                              enc_layer_dims[-1])
-        self.logvar = nn.Linear(enc_layer_dims[-2],
-                                enc_layer_dims[-1])
+        self.mean = nn.Linear(*enc_layer_dims[-2],
+                              *enc_layer_dims[-1])
+        self.logvar = nn.Linear(*enc_layer_dims[-2],
+                                *enc_layer_dims[-1])
+
+    def create_model(self, dims: Iterable[int]):
+        raise NotImplementedError
 
     @staticmethod
     def add_model_args(parser):
         """Here we define the arguments for our encoder model."""
-        parser.add_argument('--enc_layer_dims', type=int, nargs='+',
-                            help='Encoder layer dimensions.')
+        parser.add_argument('--enc_architecture', type=str,
+                            choices=['FC', 'CNN'],
+                            help='Layer Architecture of Encoder Model')
+
         return parser
+
+    @staticmethod
+    def add_extra_args(parser):
+        raise NotImplementedError
 
     def forward(self, X):
         """
@@ -320,6 +325,65 @@ class Encoder(nn.Module):
         # Reuse the implemented code
         return evaluate_logprob_diagonal_gaussian(Z, mean=mean, logvar=logvar)
 
+class FCEncoder(Encoder):
+
+    def __init__(self, hparams):
+        super().__init__(hparams)
+
+    def create_model(self, dims):
+        return FC_ReLU_Network(dims, output_activation=nn.modules.activation.ReLU)
+
+    @staticmethod
+    def add_extra_args(parser):
+        parser.add_argument('--enc_layer_dims', type=int, nargs='+',
+                            help='Encoder layer dimensions.')
+        return parser
+
+
+class CNNEncoder(Encoder):
+
+    def __init__(self, hparams):
+        self.kernel_sizes = hparams.enc_kernel_size[0] #TODO: handle lists of ints too
+        super().__init__(hparams)
+
+    def create_model(self, dims):
+        cnn_net = CNN_ReLU_Network(dims[:-1], kernel_sizes=self.kernel_sizes, output_activation=nn.ReLU)
+        flatten_layer = nn.Flatten()
+        lin_layer = nn.Linear(prod(dims[-2]), prod(dims[-1]))
+        activation_layer = nn.ReLU()
+        model = nn.Sequential(cnn_net, flatten_layer, lin_layer, activation_layer)
+
+        return model
+
+    def forward(self, X):
+        """
+        Predicts the parameters of the variational distribution
+
+        Args:
+            X (Tensor):      data, a batch of shape (B, D)
+
+        Returns:
+            mean (Tensor):   means of the variational distributions, shape (B, K)
+            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
+        """
+
+        X = X.reshape(X.shape[0], *self.hparams.enc_layer_dims[0]) #(B, D) -> (B, H, W, C)
+        X = torch.permute(X, (0, 3, 1, 2)) #(B, H, W, C) -> (B, C, H, W)
+        features = self.model(X)
+        mean = self.mean(features)
+        logvar = self.logvar(features)
+
+        return mean, logvar
+
+    @staticmethod
+    def add_extra_args(parser):
+        """Here we define the arguments for our encoder model."""
+        parser.add_argument('--enc_layer_dims', type=layer_dim, nargs='+',
+                            help='Encoder layer dimensions.')
+        parser.add_argument('--enc_kernel_size', type=int, nargs='+',
+                            help='Encoder Kernel size.')
+        return parser
+
 
 class Decoder(nn.Module):
     """
@@ -329,28 +393,24 @@ class Decoder(nn.Module):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-        dec_layer_dims = self.hparams.dec_layer_dims
         self.data_dist = self.hparams.data_distribution
+        self.model = self.create_model(self.hparams.dec_layer_dims)
 
-        # Create all layers except last
-        layers = []
-        for i in range(len(dec_layer_dims) - 2):
-            layers.append(nn.Linear(dec_layer_dims[i],
-                                    dec_layer_dims[i + 1]))
-            # Add non-linearity
-            layers.append(nn.ReLU())
-
-        self.model = nn.Sequential(*layers)
-        # Create final layers that predicts the parameters of the continuous Bernoulli
-        self.logits = nn.Linear(dec_layer_dims[-2],
-                                dec_layer_dims[-1])
+    def create_model(self, dims: Iterable):
+        raise NotImplementedError
 
     @staticmethod
     def add_model_args(parser):
         """Here we define the arguments for our decoder model."""
-        parser.add_argument('--dec_layer_dims', type=int, nargs='+',
-                            help='Decoder layer dimensions.')
+        parser.add_argument('--dec_architecture', type=str,
+                            choices=['FC', 'dConv'],
+                            help='Layer Architecture of Decoder Model')
+
         return parser
+
+    @staticmethod
+    def add_extra_args(parser):
+        raise NotImplementedError
 
     def forward(self, Z):
         """
@@ -362,8 +422,7 @@ class Decoder(nn.Module):
         Returns:
             logits (Tensor):   parameters of the continuous Bernoulli, shape (M, B, D)
         """
-        features = self.model(Z)
-        logits = self.logits(features)
+        logits = self.model(Z)
 
         return logits
 
@@ -382,7 +441,7 @@ class Decoder(nn.Module):
         if self.data_dist == 'Bernoulli':
             return evaluate_logprob_bernoulli(X, logits=logits)
         elif self.data_dist == 'ContinuousBernoulli':
-            log_px_given_z = evaluate_logprob_continuous_bernoulli(X, logits=logits)
+            return evaluate_logprob_continuous_bernoulli(X, logits=logits)
         else:
             raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
 
@@ -459,6 +518,75 @@ class Decoder(nn.Module):
         return binary_transform(self.param_p(logits))
 
 
+class FCDecoder(Decoder):
+
+    def __init__(self, hparams):
+        super().__init__(hparams)
+
+    def create_model(self, dims: Iterable[int]):
+        return FC_ReLU_Network(dims, output_activation=None)
+
+    @staticmethod
+    def add_extra_args(parser):
+        parser.add_argument('--dec_layer_dims', type=int, nargs='+',
+                            help='Decoder layer dimensions.')
+        return parser
+
+
+class dConvDecoder(Decoder):
+
+    def __init__(self, hparams):
+        self.kernel_sizes = hparams.dec_kernel_size[0] #TODO: handle lists of ints too
+        super().__init__(hparams)
+
+    def create_model(self, dims):
+
+        lin_layer = nn.Linear(prod(dims[0]), prod(dims[1]))
+        lin_2_dconv = nn.Unflatten(1, torch.Size([prod(dims[1]), 1, 1]))
+        dconv_net = dConv_ReLU_Network(dims[1:], kernel_sizes=self.kernel_sizes, output_activation=None)
+
+        model = nn.Sequential(lin_layer, lin_2_dconv, dconv_net)
+        return model
+
+    def forward(self, Z):
+        """
+        Computes the parameters of the generative distribution p(x | z)
+
+        Args:
+            Z (Tensor):  latent vectors, a batch of shape (M, B, K)
+
+        Returns:
+            logits (Tensor):   parameters of the continuous Bernoulli, shape (M, B, D)
+        """
+
+        #(M, B, H) => (M * B, H)
+        if len(Z.shape)==3:
+            reshape = True
+            M, B, H = Z.shape
+            Z = Z.reshape(M * B, H)
+        else:
+            reshape = False
+
+        logits = self.model(Z)
+        logits = torch.permute(logits, (0, 2, 3, 1)) #(M * B, C, H, W) => (M * B, H, W, C)
+        logits = logits.reshape(logits.shape[0], -1) # (M * B, H, W, C) => (M * B, H * W * C)
+
+        # (M * B, H * W * C) => (M, B, H * W * C)
+        if reshape:
+            logits = logits.reshape(M, B, logits.shape[-1])
+
+        return logits
+
+    @staticmethod
+    def add_extra_args(parser):
+        """Here we define the arguments for our decoder model."""
+        parser.add_argument('--dec_layer_dims', type=layer_dim, nargs='+',
+                            help='Decoder layer dimensions.')
+        parser.add_argument('--dec_kernel_size', type=int, nargs='+',
+                            help='Decoder Kernel size.')
+        return parser
+
+
 class VAE(nn.Module):
     """
     A wrapper for the VAE model
@@ -469,9 +597,16 @@ class VAE(nn.Module):
         self.hparams = hparams
 
         # Use the encoder and decoder implemented above
-        self.encoder = Encoder(hparams)
-        self.decoder = Decoder(hparams)
+        # TODO: check again if best way after implementing the CNN arch. Consider moving into Encoder class.
+        if self.hparams.enc_architecture == 'FC':
+            self.encoder = FCEncoder(hparams)
+        elif self.hparams.enc_architecture == 'CNN':
+            self.encoder = CNNEncoder(hparams)
 
+        if self.hparams.dec_architecture == 'FC':
+            self.decoder = FCDecoder(hparams)
+        elif self.hparams.dec_architecture == 'dConv':
+            self.decoder = dConvDecoder(hparams)
     @staticmethod
     def add_model_args(parser):
         """Here we define the arguments for our decoder model."""
@@ -487,7 +622,7 @@ class VAE(nn.Module):
                                   'distribution to approximate the expectation.'))
         parser.add_argument('--data_distribution',
                             type=str, choices=['Bernoulli', 'ContinuousBernoulli'],
-                            help='The data distribution familly of the Decoder.')
+                            help='The data distribution family of the Decoder.')
 
         return parser
 
