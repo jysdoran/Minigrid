@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from util import BinaryTransform, layer_dim
 from models.networks import FC_ReLU_Network, CNN_ReLU_Network, dConv_ReLU_Network
+from models.layers import Reshape
 
 from typing import Iterable, Tuple
 from math import prod
@@ -560,7 +561,7 @@ class dConvDecoder(Decoder):
         except ValueError:
             cnn_layer_start = None
         self.bottleneck = FC_ReLU_Network(dims[:fc_layer_end+1], output_activation=nn.ReLU)
-        self.lin2deconv = nn.Unflatten(1, dims[fc_layer_end])
+        self.lin2deconv = Reshape(-1, *dims[fc_layer_end])
         if cnn_layer_start == fc_layer_end:
             self.dconv_layer = None
         else:

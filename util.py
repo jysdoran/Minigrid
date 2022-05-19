@@ -185,7 +185,7 @@ def create_dataloader(data, args):
         data, batch_size=args.batch_size, shuffle=True, **kwargs)
 
 
-def fit_model(model, optimizer, train_data, args, *, test_data=None):
+def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard=None):
     # We will plot the learning curves during training
     fig, ax = plt.subplots(1, 1, figsize=(8, 4))
 
@@ -250,8 +250,9 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None):
                                           f'({100. * batch_idx / len(test_loader):.0f}%)] ELBO: {elbo:.6f}'))
 
         # Store epoch summary in list
+        epoch_avg_train_elbo = np.mean(epoch_train_elbos)
         train_avg_epochs += [epoch]
-        train_avg_elbos += [np.mean(epoch_train_elbos)]
+        train_avg_elbos += [epoch_avg_train_elbo]
         train_epochs += np.linspace(epoch - 1, epoch, len(epoch_train_elbos)).tolist()
         train_elbos += epoch_train_elbos
         if test_data is not None:
@@ -266,6 +267,12 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None):
 
                 best_model_state = deepcopy(model.state_dict())
                 best_optim_state = deepcopy(optimizer.state_dict())
+
+        # Tensorboard tracking
+        if tensorboard is not None:
+            tensorboard.add_scalar('train ELBO', epoch_avg_train_elbo, epoch * len(train_loader))
+            if test_data is not None:
+                tensorboard.add_scalar('test ELBO', epoch_avg_test_elbo, epoch * len(train_loader))
 
         # Update learning curve figure
         ax.clear()

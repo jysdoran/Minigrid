@@ -26,7 +26,8 @@ model_files = [
 #     'VAE_cnn_maze10000x27_l3.pt',
 #     'VAE_maze10000x27_6cnn_fc_bs50_e250.pt',
 #     'VAE_maze10000x27_enc_6cnn_fc_dec_fc_2dconv_bs50_e250.pt',
-    'VAE_maze10000x27_6cnn_fc_bs50_e10.pt',
+#     'VAE_maze10000x27_6cnn_fc_bs50_e10.pt',
+    'test.pt',
 ]
 
 train_data = Maze_Dataset(

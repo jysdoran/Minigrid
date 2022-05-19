@@ -27,7 +27,7 @@ class Reshape(nn.Module):
         self.shape = args
 
     def forward(self, x):
-        return x.view(self.shape)
+        return x.view(*self.shape)
 
 
 class Conv2dSame(nn.Module):
