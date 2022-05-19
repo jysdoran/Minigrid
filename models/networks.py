@@ -64,10 +64,10 @@ class FC_ReLU_Network(Network):
         mods = []
 
         for i in range(len(dims) - 2):
-            mods.append(nn.Linear(dims[i], dims[i + 1]))
+            mods.append(nn.Linear(prod(dims[i]), prod(dims[i + 1])))
             mods.append(nn.ReLU())
 
-        mods.append(nn.Linear(dims[-2], dims[-1]))
+        mods.append(nn.Linear(prod(dims[-2]), prod(dims[-1])))
         if output_activation:
             mods.append(output_activation())
         return nn.Sequential(*mods)
@@ -80,6 +80,9 @@ class CNN_ReLU_Network(Network):
     :attr input_size (int): dimensionality of input tensors
     :attr out_size (int): dimensionality of output tensors
     :attr layers (torch.nn.Module): neural network as sequential network of multiple layers
+
+    img_dim_out = (img_dim_in + 2*p - dil*(k-1) - 1)/s + 1
+    with Conv2DSame: solve for p such that img_dim_out = img_dim_in
     """
 
     def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], output_activation: nn.Module = None):
@@ -87,8 +90,8 @@ class CNN_ReLU_Network(Network):
         if not isinstance(kernel_sizes, int):
             assert len(kernel_sizes) == len(dims) - 1
         self.kernel_sizes = kernel_sizes
-        self.channels = np.array(dims)[:, -1]
-        self.img_dims = np.array(dims)[:, 0:2]
+        self.channels = np.array(dims)[:, 0]
+        self.img_dims = np.array(dims)[:, 1:]
         self.strides = np.ceil(self.img_dims[0:-1]/self.img_dims[1:]).astype(int)
 
         super().__init__(dims, output_activation)
@@ -118,16 +121,6 @@ class CNN_ReLU_Network(Network):
             mods.append(output_activation())
         return nn.Sequential(*mods)
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Computes a forward pass through the network
-
-        :param x (torch.Tensor): input tensor to feed into the network
-        :return (torch.Tensor): output computed by the network
-        """
-
-        # Feedforward
-        return self.layers(x)
-
 
 class dConv_ReLU_Network(Network):
 
@@ -136,6 +129,7 @@ class dConv_ReLU_Network(Network):
     :attr input_size (int): dimensionality of input tensors
     :attr out_size (int): dimensionality of output tensors
     :attr layers (torch.nn.Module): neural network as sequential network of multiple layers
+    Dout = (Din−1)×stride−2×padding+dilation×(kernel_size−1) + output_padding + 1
     """
 
     def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], output_activation: nn.Module = None):
@@ -146,8 +140,10 @@ class dConv_ReLU_Network(Network):
         self.channels = np.array(dims)[:, 0]
         self.img_dims = np.array(dims)[:, 1:]
         # check dimensions were correctly specified
-        assert np.all(np.diff(self.img_dims, axis=0) % (self.kernel_sizes - 1) == 0)
-        self.strides = (np.diff(self.img_dims,axis=0)/(self.kernel_sizes - 1)).astype(int)
+        #assert np.all(np.diff(self.img_dims, axis=0) % (self.kernel_sizes - 1) == 0)
+        self.strides = ((self.img_dims[1:] - 1 - (self.kernel_sizes - 1)) / (self.img_dims[0:-1] - 1)).astype(int)
+        self.out_padding = (self.img_dims[1:] - 1 - (self.img_dims[0:-1] - 1)*self.strides - (self.kernel_sizes - 1)).astype(int)
+        # (np.diff(self.img_dims,axis=0)/(self.kernel_sizes - 1)).astype(int)
 
         super().__init__(dims, output_activation)
 
@@ -168,21 +164,11 @@ class dConv_ReLU_Network(Network):
                 kernel_size = self.kernel_sizes
             else:
                 kernel_size = self.kernel_sizes[i]
-            mods.append(nn.ConvTranspose2d(self.channels[i], self.channels[i+1], kernel_size, self.strides[i]))
+            mods.append(nn.ConvTranspose2d(self.channels[i], self.channels[i+1], kernel_size, self.strides[i],
+                                           output_padding=self.out_padding[i]))
             if i != (len(dims) - 2): #do not append ReLU layer on the last one.
                 mods.append(nn.ReLU())
 
         if output_activation:
             mods.append(output_activation())
         return nn.Sequential(*mods)
-
-    def forward(self, x: Tensor) -> Tensor:
-        """Computes a forward pass through the network
-
-        :param x (torch.Tensor): input tensor to feed into the network (N, C, H, W)
-        :return (torch.Tensor): output computed by the network
-        """
-
-        # Feedforward
-        x = self.layers(x)
-        return x

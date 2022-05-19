@@ -6,6 +6,7 @@ from models.networks import FC_ReLU_Network, CNN_ReLU_Network, dConv_ReLU_Networ
 
 from typing import Iterable, Tuple
 from math import prod
+import numpy as np
 
 def evaluate_logprob_continuous_bernoulli(X, *, logits):
     """
@@ -296,7 +297,9 @@ class Encoder(nn.Module):
             mean (Tensor):   means of the variational distributions, shape (B, K)
             logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
         """
-        features = self.model(X)
+        features = X
+        for net in self.model:
+            features = net(features)
         mean = self.mean(features)
         logvar = self.logvar(features)
 
@@ -331,7 +334,7 @@ class FCEncoder(Encoder):
         super().__init__(hparams)
 
     def create_model(self, dims):
-        return FC_ReLU_Network(dims, output_activation=nn.modules.activation.ReLU)
+        return [FC_ReLU_Network(dims, output_activation=nn.modules.activation.ReLU)]
 
     @staticmethod
     def add_extra_args(parser):
@@ -347,11 +350,14 @@ class CNNEncoder(Encoder):
         super().__init__(hparams)
 
     def create_model(self, dims):
-        cnn_net = CNN_ReLU_Network(dims[:-1], kernel_sizes=self.kernel_sizes, output_activation=nn.ReLU)
-        flatten_layer = nn.Flatten()
-        lin_layer = nn.Linear(prod(dims[-2]), prod(dims[-1]))
-        activation_layer = nn.ReLU()
-        model = nn.Sequential(cnn_net, flatten_layer, lin_layer, activation_layer)
+        cnn_layer_inds = [len(dim)==3 for dim in dims]
+        cnn_layer_end = cnn_layer_inds.index(False)
+        self.cnn_net = CNN_ReLU_Network(dims[:cnn_layer_end], kernel_sizes=self.kernel_sizes, output_activation=nn.ReLU)
+        self.flatten_layer = nn.Flatten()
+        self.lin_layer = FC_ReLU_Network(dims[cnn_layer_end-1:], output_activation=nn.ReLU)
+
+        model = [self.cnn_net, self.flatten_layer, self.lin_layer]
+        model = list(filter(None, model))
 
         return model
 
@@ -367,9 +373,13 @@ class CNNEncoder(Encoder):
             logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
         """
 
-        X = X.reshape(X.shape[0], *self.hparams.enc_layer_dims[0]) #(B, D) -> (B, H, W, C)
-        X = torch.permute(X, (0, 3, 1, 2)) #(B, H, W, C) -> (B, C, H, W)
-        features = self.model(X)
+        X = X.reshape(X.shape[0], *self.hparams.enc_layer_dims[0]) #(B, D) -> (B, C, H, W)
+        #X = torch.permute(X, (0, 3, 1, 2)) #(B, H, W, C) -> (B, C, H, W) TODO: work out how to permute for mazes
+
+        features = X
+        for net in self.model:
+            features = net(features)
+
         mean = self.mean(features)
         logvar = self.logvar(features)
 
@@ -422,7 +432,9 @@ class Decoder(nn.Module):
         Returns:
             logits (Tensor):   parameters of the continuous Bernoulli, shape (M, B, D)
         """
-        logits = self.model(Z)
+        logits = Z
+        for net in self.model:
+            logits = net(logits)
 
         return logits
 
@@ -524,7 +536,7 @@ class FCDecoder(Decoder):
         super().__init__(hparams)
 
     def create_model(self, dims: Iterable[int]):
-        return FC_ReLU_Network(dims, output_activation=None)
+        return [FC_ReLU_Network(dims, output_activation=None),]
 
     @staticmethod
     def add_extra_args(parser):
@@ -540,12 +552,28 @@ class dConvDecoder(Decoder):
         super().__init__(hparams)
 
     def create_model(self, dims):
+        fc_layer_inds = [len(dim)==1 for dim in dims]
+        fc_layer_end = fc_layer_inds.index(False)
+        cnn_layer_inds = list(np.array([(len(dims[i])==3 and dims[i][1]==dims[i+1][1]) for i in range(0,len(dims)-1)]))
+        try:
+            cnn_layer_start = cnn_layer_inds.index(True)
+        except ValueError:
+            cnn_layer_start = None
+        self.bottleneck = FC_ReLU_Network(dims[:fc_layer_end+1], output_activation=nn.ReLU)
+        self.lin2deconv = nn.Unflatten(1, dims[fc_layer_end])
+        if cnn_layer_start == fc_layer_end:
+            self.dconv_layer = None
+        else:
+            self.dconv_layer = dConv_ReLU_Network(dims[fc_layer_end:cnn_layer_start+1], kernel_sizes=self.kernel_sizes, output_activation=nn.ReLU)
 
-        lin_layer = nn.Linear(prod(dims[0]), prod(dims[1]))
-        lin_2_dconv = nn.Unflatten(1, torch.Size([prod(dims[1]), 1, 1]))
-        dconv_net = dConv_ReLU_Network(dims[1:], kernel_sizes=self.kernel_sizes, output_activation=None)
+        if cnn_layer_start is None:
+            self.conv_layer = None
+        else:
+            self.conv_layer = CNN_ReLU_Network(dims[cnn_layer_start:], kernel_sizes=self.kernel_sizes, output_activation=None)
 
-        model = nn.Sequential(lin_layer, lin_2_dconv, dconv_net)
+        model = [self.bottleneck, self.lin2deconv, self.dconv_layer, self.conv_layer]
+        model = list(filter(None, model))
+
         return model
 
     def forward(self, Z):
@@ -567,7 +595,10 @@ class dConvDecoder(Decoder):
         else:
             reshape = False
 
-        logits = self.model(Z)
+        logits = Z
+        for net in self.model:
+            logits = net(logits)
+
         logits = torch.permute(logits, (0, 2, 3, 1)) #(M * B, C, H, W) => (M * B, H, W, C)
         logits = logits.reshape(logits.shape[0], -1) # (M * B, H, W, C) => (M * B, H * W * C)
 

@@ -37,7 +37,7 @@ def plot_grid_of_samples(samples, grid=None, figsize=(8, 8)):
     if grid is None:
         grid = (samples.shape[0], samples.shape[1])
     else:
-        samples = samples.reshape(grid[0], grid[1], *samples.shape[2:])
+        samples = samples.reshape(grid[0], grid[1], *samples.shape[1:])
 
     fig, axes = plt.subplots(grid[0], grid[1], sharex=True, sharey=True, figsize=figsize)
     fig.subplots_adjust(wspace=0., hspace=0.)
@@ -55,12 +55,12 @@ def plot_grid_of_samples(samples, grid=None, figsize=(8, 8)):
     # Plot samples
     for i, j in itertools.product(range(grid[0]), range(grid[1])):
         if samples.shape[-1] == 3:
-            axes[j, i].imshow(samples[i, grid[0] - j - 1, ..., 0], cmap='gray_r')
-            axes[j, i].imshow(samples[i, grid[0] - j - 1, ..., 1], cmap=transparent_cmaps[0], vmin=0.9)
-            axes[j, i].imshow(samples[i, grid[0] - j - 1, ..., 2], cmap=transparent_cmaps[1], vmin=0.9)
+            axes[i, j].imshow(samples[i, j, ..., 0], cmap='gray_r')
+            axes[i, j].imshow(samples[i, j, ..., 1], cmap=transparent_cmaps[0], vmin=0.9)
+            axes[i, j].imshow(samples[i, j, ..., 2], cmap=transparent_cmaps[1], vmin=0.9)
         else:
-            axes[j, i].imshow(samples[i, grid[0] - j - 1], cmap='gray_r')
-        axes[j, i].tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+            axes[i, j].imshow(samples[i, j], cmap='gray_r')
+        axes[i, j].tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
 
     return fig, axes
 
@@ -68,7 +68,7 @@ def plot_grid_of_samples(samples, grid=None, figsize=(8, 8)):
 # only for dim 2 at the moment
 def plot_latent_visualisation(model, z_max: Tuple[float, float], z_min: Tuple[float, float], grid: Tuple[int, int],
                               img_dims: Tuple[int, int, int], figsize: Tuple[int, int] = (14, 14), Z_points=None,
-                              labels=None, device='cpu'):
+                              labels=None, device='cpu', alpha=0.5, title=None):
     #TODO: finish implementation with labels
     #TODO: profiling to figure out why so slow for larger grids
 
@@ -121,11 +121,14 @@ def plot_latent_visualisation(model, z_max: Tuple[float, float], z_min: Tuple[fl
         else:
             c = 'g'
         # Plot projections
-        ax.scatter(Z_points[:, 0], Z_points[:, 1], color=c, alpha=0.5)
+        ax.scatter(Z_points[:, 0], Z_points[:, 1], color=c, alpha=alpha)
         ax.patch.set_alpha(0.)
         ax.set_xlim(z_min[0], z_max[0])
         ax.set_ylim(z_min[1], z_max[1])
         ax.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+
+    if title is not None:
+        fig.suptitle(title, size=13)
 
     return fig
 
@@ -154,6 +157,16 @@ class BinaryTransform(object):
 
 
 ### Kind of VAE specific:
+
+def layer_dim(s):
+    try:
+        x, y, z = map(int, s.split(','))
+        return x, y, z
+    except:
+        try:
+            return (int(s),)
+        except:
+            raise argparse.ArgumentTypeError("Each tuple must be x,y,z")
 
 def per_datapoint_elbo_to_avgelbo_and_loss(elbos):
     # Compute the average ELBO over the mini-batch
@@ -301,15 +314,20 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None):
     return model, optimizer, out, fig
 
 
-def save_state(model, optimizer, file):
+def save_state(args, model, optimizer, file):
     return torch.save({
+        'argparser': args,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
     }, file)
 
 
-def load_state(model, optimizer, file):
+def load_state(file, model=None, optimizer=None, model_type=None, optim_type=None):
     checkpoint = torch.load(file)
+    parser = checkpoint['argparser']
+    if model is None:
+        model = model_type(parser).to(parser.device)
+        optimizer = optim_type(model.parameters(), lr=parser.learning_rate)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    return
+    return model, optimizer, parser
