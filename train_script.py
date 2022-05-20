@@ -15,30 +15,31 @@ from data_loaders import Maze_Dataset
 from util import *
 from models.VAE import *
 
-run_name = 'test' #CHANGE
+run_name = 'test_embedding_mnist' #CHANGE
+use_gpu = True
 
-writer = SummaryWriter(run_name)
+writer = SummaryWriter('runs/' + run_name)
 base_dir = str(Path(__file__).resolve().parent)
 dataset_dir = base_dir + '/datasets/'
 cifar_dir = dataset_dir + 'cifar10_data'
-maze_dir = dataset_dir + 'only_grid_10000x27'#'only_grid_10000x11'
+maze_dir = dataset_dir + 'only_grid_128x27'#'only_grid_10000x11'
 mnist_dir = dataset_dir #+ 'MNIST'
-
-img_size = 27
 
 # #Uncomment
 train_data = Maze_Dataset(
           maze_dir, train=True,
           transform = transforms.Compose([
-              #transforms.Resize((img_size, img_size)),
+              SelectChannelsTransform(0),
               transforms.ToTensor(),
+
           ]))
 
 # train_data = torchvision.datasets.MNIST(
 #     mnist_dir, train=True, download=False,
 #     transform=torchvision.transforms.Compose([
-#         #torchvision.transforms.Resize((img_size,img_size)),
+#         torchvision.transforms.Resize((img_size,img_size)),
 #         torchvision.transforms.ToTensor(),
+#         FlattenTransform(1,-1),
 #         BinaryTransform(0.6),
 #         ]))
 # test_data = torchvision.datasets.MNIST(
@@ -46,26 +47,20 @@ train_data = Maze_Dataset(
 #     transform=torchvision.transforms.Compose([
 #         torchvision.transforms.Resize((img_size,img_size)),
 #         torchvision.transforms.ToTensor(),
+#         FlattenTransform(1, -1),
 #         BinaryTransform(0.6),
 #         ]))
 
 
 # plot some data
-indices = np.random.choice(len(train_data), size=64)
-samples = torch.vstack([train_data[idx][0] for idx in indices])
-# #samples = samples.reshape(samples.shape[0], img_size, img_size, samples.shape[-1])
-# samples = samples.reshape(samples.shape[0], img_size, img_size)
+# indices = np.random.choice(len(train_data), size=64)
+# samples = torch.vstack([train_data[idx][0] for idx in indices])
 # fig = plot_grid_of_samples(samples, grid=(8,8))
 # plt.show()
+# sys.exit()
 
 train_loader = DataLoader(dataset=train_data, batch_size=64, shuffle=False)
-examples = iter(train_loader)
-example_data, example_targets = examples.next()
 
-example_data = example_data.reshape(-1, 1,img_size,img_size) #TODO: modify maze dataset so that data comes out in this format.
-
-img_grid = torchvision.utils.make_grid(example_data)
-writer.add_image('sample_image', img_grid)
 # VAE setup
 
 parser = create_base_argparser()
@@ -134,11 +129,13 @@ args_cnn_fc = ['--dec_layer_dims', '2', '16', '64,13,13', '32,27,27', '1,27,27',
              '--cuda']
 
 args_dist_b = parser.parse_args(args_cnn_fc)# CHANGE
-args_dist_b.batch_size = 50
+args_dist_b.batch_size = 64
 #args_dist_b.seed = 10111201
 
-
-args_dist_b.cuda = args_dist_b.cuda and torch.cuda.is_available() #change for enable
+if use_gpu == True:
+    args_dist_b.cuda = args_dist_b.cuda and torch.cuda.is_available()
+else:
+    args_dist_b.cuda = False
 args_dist_b.device = torch.device("cuda" if args_dist_b.cuda else "cpu")
 
 # Seed all random number generators for reproducibility of the runs
@@ -147,8 +144,6 @@ seed_everything(args_dist_b.seed)
 # Initialise the model and the Adam (SGD) optimiser
 model_dist_b = VAE(args_dist_b).to(args_dist_b.device)
 optimizer_dist_b = optim.Adam(model_dist_b.parameters(), lr=args_dist_b.learning_rate)
-
-writer.add_graph(model_dist_b, example_data.reshape(-1, img_size*img_size).to(args_dist_b.device))
 # sys.exit()
 
 model_dist_b, optimizer_dist_b, out_b, fig = fit_model(model_dist_b, optimizer_dist_b,

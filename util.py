@@ -1,4 +1,5 @@
 import torch
+import torchvision
 import os
 import numpy as np
 import random
@@ -38,6 +39,9 @@ def plot_grid_of_samples(samples, grid=None, figsize=(8, 8)):
         grid = (samples.shape[0], samples.shape[1])
     else:
         samples = samples.reshape(grid[0], grid[1], *samples.shape[1:])
+
+    if len(samples.shape) == 5:
+        samples = torch.permute(samples, (0, 1, 3, 4, 2)) #(Gx, Gy, C, H, W) -> (Gx, Gy, H, W, C)
 
     fig, axes = plt.subplots(grid[0], grid[1], sharex=True, sharey=True, figsize=figsize)
     fig.subplots_adjust(wspace=0., hspace=0.)
@@ -150,10 +154,69 @@ def create_base_argparser():
 
 class BinaryTransform(object):
     def __init__(self, thr):
-        self.thr = thr  # input threshold for [0..255] gray level, convert to [0..1]
+        self.thr = thr
 
     def __call__(self, x):
         return (x > self.thr).to(x.dtype)  # do not change the data type
+
+
+class FlipBinaryTransform(object):
+    def __init__(self):
+        pass
+
+    def __call__(self, x):
+        return torch.abs(x - 1)
+
+
+class ReshapeTransform(object):
+    def __init__(self, *args):
+        self.shape = args
+
+    def __call__(self, x: torch.Tensor):
+        return x.view(*self.shape)
+
+
+class FlattenTransform(object):
+    def __init__(self, *args):
+        self.dims = args # start and end dim
+
+    def __call__(self, x: torch.Tensor):
+        return x.view(*self.dims)
+
+
+class SelectChannelsTransform(object):
+    def __init__(self, *args):
+        self.selected_channels = args
+
+    def __call__(self, x: torch.Tensor):
+        return x[..., self.selected_channels]
+
+
+class ToDeviceTransform(object):
+    def __init__(self, device):
+        self.device = device
+
+    def __call__(self, x: torch.Tensor):
+        return x.to(self.device)
+
+
+class WrappedDataLoader:
+    def __init__(self, dl, func):
+        self.dl = dl
+        self.func = func
+
+    def __len__(self):
+        return len(self.dl)
+
+    def __iter__(self):
+        batches = iter(self.dl)
+        for b in batches:
+            data, targets = b
+            yield (self.func(data), self.func(targets))
+
+    @property
+    def dataset(self):
+        return self.dl.dataset
 
 
 ### Kind of VAE specific:
@@ -181,18 +244,34 @@ def per_datapoint_elbo_to_avgelbo_and_loss(elbos):
 def create_dataloader(data, args):
     kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
 
-    return torch.utils.data.DataLoader(
+    data_loader = torch.utils.data.DataLoader(
         data, batch_size=args.batch_size, shuffle=True, **kwargs)
+
+    wrapped_data_loader = WrappedDataLoader(data_loader, ToDeviceTransform(args.device))
+
+    return wrapped_data_loader
 
 
 def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard=None):
     # We will plot the learning curves during training
     fig, ax = plt.subplots(1, 1, figsize=(8, 4))
+    flip_bits = FlipBinaryTransform()
 
     # Create data loaders
     train_loader = create_dataloader(train_data, args)
+    example_data_train, example_targets_train = next(iter(train_loader))
+    target_metadata_train = example_targets_train.tolist() #TODO: change depending on dataset
+    if tensorboard is not None:
+        img_grid = torchvision.utils.make_grid(flip_bits(example_data_train))
+        tensorboard.add_image('train_samples', img_grid)
+        tensorboard.add_graph(model, example_data_train)
     if test_data is not None:
         test_loader = create_dataloader(test_data, args)
+        example_data_test, example_targets_test = next(iter(test_loader))
+        target_metadata_test = example_targets_test.tolist()  # TODO: change depending on dataset
+        if tensorboard is not None:
+            img_grid = torchvision.utils.make_grid(flip_bits(example_data_test))
+            tensorboard.add_image('test_samples', img_grid)
 
     train_epochs = []
     train_elbos = []
@@ -214,9 +293,9 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         epoch_train_elbos = []
         # We don't use labels hence discard them with a _
         for batch_idx, (mbatch, _) in enumerate(train_loader):
-            mbatch = mbatch.to(args.device)
+            #mbatch = mbatch.to(args.device)
             # Flatten the images
-            mbatch = mbatch.view([-1] + [mbatch.shape[-2] * mbatch.shape[-1]])
+            #mbatch = mbatch.view([-1] + [mbatch.shape[-2] * mbatch.shape[-1]])
             # Reset gradient computations in the computation graph
             optimizer.zero_grad()
 
@@ -238,9 +317,9 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                 model.eval()
                 epoch_test_elbos = []
                 for batch_idx, (mbatch, _) in enumerate(test_loader):
-                    mbatch = mbatch.to(args.device)
+                    #mbatch = mbatch.to(args.device)
                     # Flatten the images
-                    mbatch = mbatch.view([-1] + [mbatch.shape[-2] * mbatch.shape[-1]])
+                    #mbatch = mbatch.view([-1] + [mbatch.shape[-2] * mbatch.shape[-1]])
 
                     # Compute the loss for the test mini-batch
                     elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
@@ -271,8 +350,15 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         # Tensorboard tracking
         if tensorboard is not None:
             tensorboard.add_scalar('train ELBO', epoch_avg_train_elbo, epoch * len(train_loader))
+
+            mean, logvar = model.encoder(example_data_train)
+            tensorboard.add_embedding(mean, metadata=target_metadata_train, label_img=flip_bits(example_data_train), tag='train_data_latent_representation', global_step=epoch)
+
             if test_data is not None:
-                tensorboard.add_scalar('test ELBO', epoch_avg_test_elbo, epoch * len(train_loader))
+                tensorboard.add_scalar('test ELBO', epoch_avg_test_elbo, epoch * len(test_loader))
+                mean, logvar = model.encoder(example_data_test)
+                tensorboard.add_embedding(mean, metadata=target_metadata_test, label_img=flip_bits(example_data_test),
+                                          tag='test_data_latent_representation', global_step=epoch)
 
         # Update learning curve figure
         ax.clear()

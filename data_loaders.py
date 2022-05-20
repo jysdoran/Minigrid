@@ -3,6 +3,7 @@ import pickle
 from typing import Any, Callable, Optional, Tuple
 
 import numpy as np
+import torch
 from PIL import Image
 
 from torchvision.datasets.utils import check_integrity
@@ -100,11 +101,11 @@ class Maze_Dataset(VisionDataset):
         img, target = self.data[index], self.targets[index]
 
         # doing this so that it is consistent with all other datasets
-        # to return a PIL Image
-        img = Image.fromarray(img)
+        # to return a PIL Image: Comment - not needed unless we do image transforms
+        # img = Image.fromarray(img)
 
         if self.transform is not None:
-            img = self.transform(img)
+            img = self.transform(img).type(torch.float)
 
         if self.target_transform is not None:
             target = self.target_transform(target)

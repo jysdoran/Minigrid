@@ -1,5 +1,6 @@
 import itertools
 from pathlib import Path
+import sys
 
 import torch
 import torchvision
@@ -12,57 +13,52 @@ import matplotlib.pyplot as plt
 from data_loaders import Maze_Dataset
 from util import *
 from models.VAE import *
+from torch.utils.tensorboard import SummaryWriter
 
 base_dir = str(Path(__file__).resolve().parent)
 dataset_dir = base_dir + '/datasets/'
 cifar_dir = dataset_dir + 'cifar10_data'
 maze_dir = dataset_dir + 'only_grid_10000x27'#'only_grid_10000x11'
 mnist_dir = dataset_dir #+ 'MNIST'
-model_files = [
-#    'VAE_cnn_maze10000x27_cnn_fc.pt',
-#     'VAE_cnn_maze10000x27_fc_sd.pt',
-#     'VAE_cnn_maze10000x27_fc_l2.pt',
-#     'VAE_cnn_maze10000x27_l3_s.pt',
-#     'VAE_cnn_maze10000x27_l3.pt',
-#     'VAE_maze10000x27_6cnn_fc_bs50_e250.pt',
-#     'VAE_maze10000x27_enc_6cnn_fc_dec_fc_2dconv_bs50_e250.pt',
-#     'VAE_maze10000x27_6cnn_fc_bs50_e10.pt',
-    'test.pt',
+model_names = [
+#    'VAE_cnn_maze10000x27_cnn_fc',
+#     'VAE_cnn_maze10000x27_fc_sd',
+#     'VAE_cnn_maze10000x27_fc_l2',
+#     'VAE_cnn_maze10000x27_l3_s',
+#     'VAE_cnn_maze10000x27_l3',
+#     'VAE_maze10000x27_6cnn_fc_bs50_e250',
+#     'VAE_maze10000x27_enc_6cnn_fc_dec_fc_2dconv_bs50_e250',
+#     'VAE_maze10000x27_6cnn_fc_bs50_e10',
+    'test_embedding_mnist',
 ]
-
-train_data = Maze_Dataset(
-          maze_dir, train=True,
-          transform = transforms.Compose([
-              #transforms.Resize((img_size, img_size)),
-              transforms.ToTensor(),
-          ]))
-
-X = train_data[0][0]
 
 img_size = 27
 
-# train_data = torchvision.datasets.MNIST(
-#     mnist_dir, train=True, download=False,
-#     transform=torchvision.transforms.Compose([
-#         torchvision.transforms.Resize((img_size,img_size)),
-#         torchvision.transforms.ToTensor(),
-#         BinaryTransform(0.6),
-#         ]))
-# test_data = torchvision.datasets.MNIST(
-#     mnist_dir, train=False,
-#     transform=torchvision.transforms.Compose([
-#         torchvision.transforms.Resize((img_size,img_size)),
-#         torchvision.transforms.ToTensor(),
-#         BinaryTransform(0.6),
-#         ]))
+train_data = torchvision.datasets.MNIST(
+    mnist_dir, train=True, download=False,
+    transform=torchvision.transforms.Compose([
+        torchvision.transforms.Resize((img_size,img_size)),
+        torchvision.transforms.ToTensor(),
+        FlattenTransform(1, -1),
+        BinaryTransform(0.6),
+        ]))
+test_data = torchvision.datasets.MNIST(
+    mnist_dir, train=False,
+    transform=torchvision.transforms.Compose([
+        torchvision.transforms.Resize((img_size,img_size)),
+        torchvision.transforms.ToTensor(),
+        FlattenTransform(1, -1),
+        BinaryTransform(0.6),
+        ]))
 
 # Specify the hyperpameter choices
 
-data_dims = (img_size,img_size,1)
+data_dims = (1,img_size,img_size)
 
-for model_file in model_files:
-    model_dist_b, optimiser_dist_b, args_dist_b = load_state('checkpoints/'+model_file, model_type=VAE, optim_type=optim.Adam)
-    args_dist_b.cuda = False #CHANGE
+for model_name in model_names:
+    writer = SummaryWriter('runs/' + model_name + 'analysis1')
+    model_dist_b, optimiser_dist_b, args_dist_b = load_state('checkpoints/'+model_name+'.pt', model_type=VAE, optim_type=optim.Adam)
+    #args_dist_b.cuda = False #CHANGE
     args_dist_b.device = torch.device("cuda" if args_dist_b.cuda else "cpu")
     bin_threshold = 0.5
     binary_transform = BinaryTransform(bin_threshold)
@@ -104,16 +100,28 @@ for model_file in model_files:
         model_dist_b.eval()
         model_dist_b = model_dist_b.to(args_dist_b.device)
 
-        train_loader = torch.utils.data.DataLoader(
-            Maze_Dataset(
-                maze_dir, train=True,
-                transform=transforms.Compose([
-                    #transforms.Resize((img_size, img_size)),
-                    transforms.ToTensor(),
-                ])),
-            batch_size=50,
-            shuffle=True
-        )
+        # train_loader = torch.utils.data.DataLoader(
+        #     Maze_Dataset(
+        #         maze_dir, train=True,
+        #         transform=transforms.Compose([
+        #             #transforms.Resize((img_size, img_size)),
+        #             transforms.ToTensor(),
+        #         ])),
+        #     batch_size=50,
+        #     shuffle=True
+        # )
+
+        train_loader = DataLoader(dataset=train_data, batch_size=1000, shuffle=False)
+        # examples = iter(train_loader)
+        # example_data, example_targets = examples.next()
+        # metadata = example_targets.tolist()
+        #
+        # X = example_data.squeeze().to(args_dist_b.device)
+        # mean, logvar = model_dist_b.encoder(X)
+        #
+        # writer.add_embedding(mean, metadata=metadata, label_img=example_data, tag='test_embedding', global_step=0)
+        # writer.close()
+        # sys.exit()
 
         Z = []
         Y = []
@@ -143,7 +151,7 @@ for model_file in model_files:
         mx = Z.max(0)[0].cpu().numpy()
         mn = Z.min(0)[0].cpu().numpy()
 
-        print(f"Model: {model_file}")
+        print(f"Model: {model_name}")
         print(model_dist_b)
         print(args_dist_b)
 
@@ -152,9 +160,9 @@ for model_file in model_files:
 
         print(f"Bounds on x axis: {(mn[0], mx[0])} / Bounds on y axis: {(mn[1], mx[1])}")
 
-        figtitle = model_file + ' Latent space visualisation, Z ~ q(z|x)'
+        figtitle = model_name + ' Latent space visualisation, Z ~ q(z|x)'
         fig = plot_latent_visualisation(model=model_dist_b, z_min=mn, z_max=mx, grid=(12, 12), img_dims=data_dims, Z_points=Z, labels=None, device=args_dist_b.device, alpha=0.2, title=figtitle)
-        figtitle = model_file + ' Wide Latent space visualisation'
+        figtitle = model_name + ' Wide Latent space visualisation'
         fig2 = plot_latent_visualisation(model=model_dist_b, z_min=(-10,-10), z_max=(10,10), grid=(12, 12), img_dims=data_dims,
                                         Z_points=None, labels=None, device=args_dist_b.device, alpha=0.2, title=figtitle)
 

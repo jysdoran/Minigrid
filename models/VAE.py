@@ -136,6 +136,11 @@ def elbo_with_pathwise_gradients(X, *, encoder, decoder, num_samples, data_dist=
 
     # mean = torch.randn(X.shape[0], 10) for testing
     # logvar = torch.randn(*mean.shape) for testing
+
+    reshape = False
+    if len(X.shape) > 2: # X is of dim (B, C, H, W) or (B, H, W)
+        reshape = True
+
     mean, logvar = encoder(X)  # (B, H), (B, H)
 
     # Sample the latents using the reparametrisation trick
@@ -146,7 +151,7 @@ def elbo_with_pathwise_gradients(X, *, encoder, decoder, num_samples, data_dist=
     # generative model p(x|z)
 
     # logits = torch.randn(num_samples, *X.shape) for testing
-    logits = decoder(Z)  # (M, B, D)
+    logits = decoder(Z)  # (M, B, C, H, W)
 
     # Compute KLD( q(z|x) || p(z) )
     kld = compute_kld_with_standard_gaussian(mean, logvar)  # (B,)
@@ -154,6 +159,10 @@ def elbo_with_pathwise_gradients(X, *, encoder, decoder, num_samples, data_dist=
     # Compute ~E_{q(z|x)}[ p(x | z) ]
     # Important: the samples are "propagated" all the way to the decoder output,
     # indeed we are interested in the mean of p(X|z)
+
+    if reshape:
+        X = X.flatten(1) # (B, d1, d2, ..., dn) -> (B, D)
+        logits = logits.flatten(2) # (M, B, d1, d2, ..., dn) -> (M, B, D)
 
     if data_dist == 'Bernoulli':
         neg_cross_entropy = evaluate_logprob_bernoulli(X, logits=logits).mean(dim=0)  # (B,)
@@ -298,13 +307,7 @@ class Encoder(nn.Module):
             mean (Tensor):   means of the variational distributions, shape (B, K)
             logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
         """
-        features = X
-        for net in self.model:
-            features = net(features)
-        mean = self.mean(features)
-        logvar = self.logvar(features)
-
-        return mean, logvar
+        raise NotImplementedError
 
     def sample_with_reparametrisation(self, mean, logvar, *, num_samples=1):
         # Reuse the implemented code
@@ -336,6 +339,25 @@ class FCEncoder(Encoder):
 
     def create_model(self, dims):
         return [FC_ReLU_Network(dims, output_activation=nn.modules.activation.ReLU)]
+
+    def forward(self, X):
+        """
+        Predicts the parameters of the variational distribution
+
+        Args:
+            X (Tensor):      data, a batch of shape (B, D)
+
+        Returns:
+            mean (Tensor):   means of the variational distributions, shape (B, K)
+            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
+        """
+        features = X.flatten(1)
+        for net in self.model:
+            features = net(features)
+        mean = self.mean(features)
+        logvar = self.logvar(features)
+
+        return mean, logvar
 
     @staticmethod
     def add_extra_args(parser):
@@ -374,7 +396,7 @@ class CNNEncoder(Encoder):
             logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
         """
 
-        X = X.reshape(X.shape[0], *self.hparams.enc_layer_dims[0]) #(B, D) -> (B, C, H, W)
+        X = X.reshape(X.shape[0], *self.hparams.enc_layer_dims[0]) #(B, D) -> (B, C, H, W) #however already handled by default
         #X = torch.permute(X, (0, 3, 1, 2)) #(B, H, W, C) -> (B, C, H, W) TODO: work out how to permute for mazes
 
         features = X
@@ -600,12 +622,12 @@ class dConvDecoder(Decoder):
         for net in self.model:
             logits = net(logits)
 
-        logits = torch.permute(logits, (0, 2, 3, 1)) #(M * B, C, H, W) => (M * B, H, W, C)
-        logits = logits.reshape(logits.shape[0], -1) # (M * B, H, W, C) => (M * B, H * W * C)
+        # logits = torch.permute(logits, (0, 2, 3, 1)) #(M * B, C, H, W) => (M * B, H, W, C)
+        # logits = logits.reshape(logits.shape[0], -1) # (M * B, H, W, C) => (M * B, H * W * C)
 
         # (M * B, H * W * C) => (M, B, H * W * C)
         if reshape:
-            logits = logits.reshape(M, B, logits.shape[-1])
+            logits = logits.reshape(M, B, *logits.shape[1:])
 
         return logits
 
