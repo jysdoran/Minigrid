@@ -70,8 +70,8 @@ def plot_grid_of_samples(samples, grid=None, figsize=(8, 8)):
 
 
 # only for dim 2 at the moment
-def plot_latent_visualisation(model, z_max: Tuple[float, float], z_min: Tuple[float, float], grid: Tuple[int, int],
-                              img_dims: Tuple[int, int, int], figsize: Tuple[int, int] = (14, 14), Z_points=None,
+def plot_latent_visualisation(model, z_max: Tuple[float, float] = (10,10), z_min: Tuple[float, float] = (-10,-10), grid: Tuple[int, int] = (12,12),
+                              img_dims: Tuple[int, int, int] = None, figsize: Tuple[int, int] = (14, 14), Z_points=None,
                               labels=None, device='cpu', alpha=0.5, title=None):
     #TODO: finish implementation with labels
     #TODO: profiling to figure out why so slow for larger grids
@@ -89,7 +89,9 @@ def plot_latent_visualisation(model, z_max: Tuple[float, float], z_min: Tuple[fl
     model.eval()
     logits = model.decoder(torch.tensor(Z_grid, dtype=torch.float, device=device))
     samples = model.decoder.param_b(logits).detach().cpu()
-    samples = samples.reshape(*samples.shape[:2], *img_dims).squeeze()
+    if img_dims is not None:
+        samples = samples.reshape(*samples.shape[:2], *img_dims)
+    samples = samples.squeeze() #TODO: check if you can remove.
 
     fig, axes = plot_grid_of_samples(samples, grid=None, figsize=figsize)
 
@@ -101,7 +103,7 @@ def plot_latent_visualisation(model, z_max: Tuple[float, float], z_min: Tuple[fl
 
     if Z_points is not None:
         if isinstance(Z_points, torch.Tensor):
-            Z_points = Z_points.cpu().numpy()
+            Z_points = Z_points.detach().cpu().numpy()
         # Overlay another axes
         rect = [axes[0][0].get_position().get_points()[0, 0], axes[-1][-1].get_position().get_points()[0, 1],
                 axes[-1][-1].get_position().get_points()[1, 0] - axes[0][0].get_position().get_points()[0, 0],
@@ -149,6 +151,8 @@ def create_base_argparser():
                         help='Number of epochs to train (default: 3000)')
     parser.add_argument('--learning_rate', type=float, default=1e-4,
                         help='Learning rate for the Adam optimiser (default: 0.0001)')
+    parser.add_argument('--data_dims', type=tuple, default=(1,27,27),
+                        help='Input and output data dimensions')
     return parser
 
 
@@ -253,8 +257,6 @@ def create_dataloader(data, args):
 
 
 def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard=None):
-    # We will plot the learning curves during training
-    fig, ax = plt.subplots(1, 1, figsize=(8, 4))
     flip_bits = FlipBinaryTransform()
 
     # Create data loaders
@@ -262,6 +264,10 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
     example_data_train, example_targets_train = next(iter(train_loader))
     target_metadata_train = example_targets_train.tolist() #TODO: change depending on dataset
     if tensorboard is not None:
+        tensorboard.add_text('Encoder Architecture', str(model.encoder.model))
+        tensorboard.add_text('Bottleneck Architecture', str(model.encoder.mean))
+        tensorboard.add_text('Decoder Architecture', str(model.decoder.model))
+
         img_grid = torchvision.utils.make_grid(flip_bits(example_data_train))
         tensorboard.add_image('train_samples', img_grid)
         tensorboard.add_graph(model, example_data_train)
@@ -352,39 +358,33 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
             tensorboard.add_scalar('train ELBO', epoch_avg_train_elbo, epoch * len(train_loader))
 
             mean, logvar = model.encoder(example_data_train)
+            std_of_abs_mean = torch.linalg.norm(mean, dim=1).std().item()
+            mean_of_abs_std = logvar.exp().sum(axis=1).sqrt().mean().item()
+            tensorboard.add_scalars('Train data Encoder stats', {'std(||mean(z)||), z~q(z|x)': std_of_abs_mean,
+                                                                  'E[std(z)], z~q(z|x)': mean_of_abs_std,}, epoch)
+
             tensorboard.add_embedding(mean, metadata=target_metadata_train, label_img=flip_bits(example_data_train), tag='train_data_latent_representation', global_step=epoch)
+
+            if epoch % 10 == 0:
+                latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets_train, device=args.device)
+                tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x)', latent_space_vis, global_step=epoch)
 
             if test_data is not None:
                 tensorboard.add_scalar('test ELBO', epoch_avg_test_elbo, epoch * len(test_loader))
+
                 mean, logvar = model.encoder(example_data_test)
+                std_of_abs_mean = torch.linalg.norm(mean, dim=1).std().item()
+                mean_of_abs_std = logvar.exp().sum(axis=1).sqrt().mean().item()
+                tensorboard.add_scalars('Test data Encoder stats', {'std(||mean(z)||), z~q(z|x)': std_of_abs_mean,
+                                                                     'E[std(z)], z~q(z|x)': mean_of_abs_std, }, epoch)
+
                 tensorboard.add_embedding(mean, metadata=target_metadata_test, label_img=flip_bits(example_data_test),
                                           tag='test_data_latent_representation', global_step=epoch)
-
-        # Update learning curve figure
-        ax.clear()
-        ax.plot(train_epochs, train_elbos, color='b', alpha=0.5, label='train')
-        ax.plot(np.array(train_avg_epochs) - 0.5, train_avg_elbos, color='b', label='train (avg)')
-        if len(test_avg_elbos) > 0:
-            ax.plot(np.array(test_avg_epochs) - 0.5, test_avg_elbos, color='r', label='test (avg)')
-        ax.grid(True)
-        ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
-        ax.legend(loc='lower right')
-        ax.set_ylabel('ELBO')
-        ax.set_xlabel('Epoch')
-
-        fig_title = f'Epoch: {epoch}, Avg. train ELBO: {np.mean(epoch_train_elbos):.2f}, Avg. test ELBO: {np.mean(epoch_test_elbos):.2f}'
-        # If we are tracking best model, then also highlight it on the plot and figure title
-        if best_avg_test_elbo != float('-inf'):
-            fig_title += f', Best avg. test ELBO: {best_avg_test_elbo:.2f}'
-            ax.scatter(best_epoch - 0.5, best_avg_test_elbo, marker='*', color='r')
-
-        fig.suptitle(fig_title, size=13)
-        fig.tight_layout()
-        # display.clear_output(wait=True) #TODO: check
-        # if epoch != args.epochs:
-        #     # Force display of the figure (except last epoch, where
-        #     # jupyter automatically shows the contained figure)
-        #     display.display(fig)
+                if epoch % 10 == 0:
+                    latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets_test,
+                                                                 device=args.device)
+                    tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x)', latent_space_vis,
+                                           global_step=epoch)
 
     # Reset gradient computations in the computation graph
     optimizer.zero_grad()
@@ -395,16 +395,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
     if best_optim_state is not None and best_epoch != args.epochs:
         print(f'Loading best optimizer state from epoch {best_epoch}.')
         optimizer.load_state_dict(best_optim_state)
-
-    out = {
-        'train_avg_epochs': train_avg_epochs,
-        'train_avg_elbos': train_avg_elbos,
-        'train_epochs': train_epochs,
-        'train_elbos': train_elbos,
-        'test_avg_epochs': test_avg_epochs,
-        'test_avg_elbos': test_avg_elbos
-    }
-    return model, optimizer, out, fig
+    return model, optimizer
 
 
 def save_state(args, model, optimizer, file):

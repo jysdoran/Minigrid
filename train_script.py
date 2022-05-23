@@ -15,14 +15,14 @@ from data_loaders import Maze_Dataset
 from util import *
 from models.VAE import *
 
-run_name = 'test_embedding_mnist' #CHANGE
+run_name = 'VAE_maze10000x27_fc_bs64_e300' #CHANGE
 use_gpu = True
 
 writer = SummaryWriter('runs/' + run_name)
 base_dir = str(Path(__file__).resolve().parent)
 dataset_dir = base_dir + '/datasets/'
 cifar_dir = dataset_dir + 'cifar10_data'
-maze_dir = dataset_dir + 'only_grid_128x27'#'only_grid_10000x11'
+maze_dir = dataset_dir + 'only_grid_10000x27'#'only_grid_10000x11'
 mnist_dir = dataset_dir #+ 'MNIST'
 
 # #Uncomment
@@ -72,16 +72,16 @@ parser.print_help()
 # Specify the hyperpameter choices
 data_dim = train_data[0][0].numel()
 
-# args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
-#             '--dec_architecture', 'FC',
-#              '--enc_architecture', 'FC',
-#              '--enc_layer_dims', f'{data_dim}', '256', '32', '2',
-#              '--gradient_type', 'pathwise',
-#              '--num_variational_samples', '1',
-#              '--data_distribution', 'Bernoulli',
-#              '--epochs', '50',
-#              '--learning_rate', '1e-4',
-#              '--cuda']
+args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
+            '--dec_architecture', 'FC',
+             '--enc_architecture', 'FC',
+             '--enc_layer_dims', f'{data_dim}', '128', '32', '2',
+             '--gradient_type', 'pathwise',
+             '--num_variational_samples', '1',
+             '--data_distribution', 'Bernoulli',
+             '--epochs', '300',
+             '--learning_rate', '1e-4',
+             '--cuda']
 
 # args_cnn_mnist = ['--dec_layer_dims', '2', '32', '64,13,13', '32,28,28', '1,28,28',
 #             '--dec_architecture', 'dConv',
@@ -124,11 +124,11 @@ args_cnn_fc = ['--dec_layer_dims', '2', '16', '64,13,13', '32,27,27', '1,27,27',
              '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
              '--data_distribution', 'Bernoulli',
-             '--epochs', '10',
+             '--epochs', '300',
              '--learning_rate', '1e-4',
              '--cuda']
 
-args_dist_b = parser.parse_args(args_cnn_fc)# CHANGE
+args_dist_b = parser.parse_args(args_fc)# CHANGE
 args_dist_b.batch_size = 64
 #args_dist_b.seed = 10111201
 
@@ -146,9 +146,9 @@ model_dist_b = VAE(args_dist_b).to(args_dist_b.device)
 optimizer_dist_b = optim.Adam(model_dist_b.parameters(), lr=args_dist_b.learning_rate)
 # sys.exit()
 
-model_dist_b, optimizer_dist_b, out_b, fig = fit_model(model_dist_b, optimizer_dist_b,
+model_dist_b, optimizer_dist_b = fit_model(model_dist_b, optimizer_dist_b,
                                                       train_data, args_dist_b,
-                                                      test_data=train_data, tensorboard=writer)
+                                                      test_data=None, tensorboard=writer)
 save_file = 'checkpoints/' + run_name + '.pt'
 print(f"Saving to {save_file}")
 save_state(args_dist_b, model_dist_b, optimizer_dist_b, save_file)

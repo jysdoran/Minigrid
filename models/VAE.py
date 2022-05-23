@@ -338,7 +338,7 @@ class FCEncoder(Encoder):
         super().__init__(hparams)
 
     def create_model(self, dims):
-        return [FC_ReLU_Network(dims, output_activation=nn.modules.activation.ReLU)]
+        return nn.ModuleList([FC_ReLU_Network(dims, output_activation=nn.modules.activation.ReLU)])
 
     def forward(self, X):
         """
@@ -559,7 +559,7 @@ class FCDecoder(Decoder):
         super().__init__(hparams)
 
     def create_model(self, dims: Iterable[int]):
-        return [FC_ReLU_Network(dims, output_activation=None),]
+        return nn.ModuleList([FC_ReLU_Network(dims, output_activation=None),])
 
     @staticmethod
     def add_extra_args(parser):
@@ -567,6 +567,23 @@ class FCDecoder(Decoder):
                             help='Decoder layer dimensions.')
         return parser
 
+    def forward(self, Z):
+        """
+        Computes the parameters of the generative distribution p(x | z)
+
+        Args:
+            Z (Tensor):  latent vectors, a batch of shape (M, B, K)
+
+        Returns:
+            logits (Tensor):   parameters of the continuous Bernoulli, shape (M, B, D)
+        """
+
+        logits = Z
+        for net in self.model:
+            logits = net(logits)
+
+        logits = logits.reshape(*logits.shape[0:2], *self.hparams.data_dims)
+        return logits
 
 class dConvDecoder(Decoder):
 
