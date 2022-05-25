@@ -572,17 +572,19 @@ class FCDecoder(Decoder):
         Computes the parameters of the generative distribution p(x | z)
 
         Args:
-            Z (Tensor):  latent vectors, a batch of shape (M, B, K)
+            Z (Tensor):  latent vectors, a batch of shape (M, B, K) / (B, K)
 
         Returns:
-            logits (Tensor):   parameters of the continuous Bernoulli, shape (M, B, D)
+            logits (Tensor):   parameters of the continuous Bernoulli, shape (M, B, D) / (B, D)
         """
+
+        base_shape = Z.shape[:-1] # (M, B) or (B)
 
         logits = Z
         for net in self.model:
             logits = net(logits)
 
-        logits = logits.reshape(*logits.shape[0:2], *self.hparams.data_dims)
+        logits = logits.reshape(*base_shape, *self.hparams.data_dims)
         return logits
 
 class dConvDecoder(Decoder):
