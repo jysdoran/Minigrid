@@ -373,12 +373,12 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                 latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets, device=args.device)
                 tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ train data', latent_space_vis, global_step=epoch)
 
-                tensorboard.add_embedding(mean, metadata=target_metadata_train, label_img=flip_bits(example_data),
+                tensorboard.add_embedding(mean, metadata=target_metadata_train, label_img=flip_bits(resize(example_data)),
                                           tag='train_data_encoded_samples', global_step=epoch)
 
                 logits = model.decoder(mean)
                 decoded_samples = model.decoder.param_b(logits)
-                tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(decoded_samples),
+                tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(decoded_samples)),
                                           tag='train_data_decoded_samples', global_step=epoch)
 
             if test_data is not None:
@@ -402,14 +402,14 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                                            global_step=epoch)
 
                     tensorboard.add_embedding(mean, metadata=target_metadata,
-                                              label_img=flip_bits(example_data),
+                                              label_img=flip_bits(resize(example_data)),
                                               tag='test_data_encoded_samples', global_step=epoch)
 
                     logits = model.decoder(mean)
                     decoded_samples = model.decoder.param_b(logits)
                     tensorboard.add_embedding(mean, metadata=target_metadata,
-                                              label_img=flip_bits(decoded_samples),
-                                              tag='train_data_decoded_samples', global_step=epoch)
+                                              label_img=flip_bits(resize(decoded_samples)),
+                                              tag='test_data_decoded_samples', global_step=epoch)
 
     # Reset gradient computations in the computation graph
     optimizer.zero_grad()

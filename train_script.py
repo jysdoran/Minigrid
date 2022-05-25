@@ -17,7 +17,7 @@ from models.VAE import *
 
 run_name = 'test' #CHANGE
 use_gpu = True
-plot_every = 100
+plot_every = 10
 
 writer = SummaryWriter('runs/' + run_name)
 base_dir = str(Path(__file__).resolve().parent)
@@ -71,7 +71,7 @@ args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
              '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
              '--data_distribution', 'Bernoulli',
-             '--epochs', '2000',
+             '--epochs', '20',
              '--learning_rate', '1e-4',
              '--cuda']
 
