@@ -15,15 +15,17 @@ from data_loaders import Maze_Dataset
 from util import *
 from models.VAE import *
 
-run_name = 'test' #CHANGE
+run_name = 'multiroom128x27_6cnn_b16e6000' #CHANGE
 use_gpu = True
-plot_every = 10
+plot_every = 1000
+batch_size = 16
+epochs = 6000
 
 writer = SummaryWriter('runs/' + run_name)
 base_dir = str(Path(__file__).resolve().parent)
 dataset_dir = base_dir + '/datasets/'
 cifar_dir = dataset_dir + 'cifar10_data'
-maze_dir = dataset_dir + 'only_grid_128x27'#'only_grid_10000x11'
+maze_dir = dataset_dir + 'multi_room128x27'#'multi_room128x27'#'only_grid_128x27'
 mnist_dir = dataset_dir #+ 'MNIST'
 
 # #Uncomment
@@ -51,7 +53,7 @@ train_data = Maze_Dataset(
 #         BinaryTransform(0.6),
 #         ]))
 
-train_loader = DataLoader(dataset=train_data, batch_size=64, shuffle=False)
+train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=False)
 
 # VAE setup
 
@@ -71,7 +73,7 @@ args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
              '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
              '--data_distribution', 'Bernoulli',
-             '--epochs', '20',
+             '--epochs', str(epochs),
              '--learning_rate', '1e-4',
              '--cuda']
 
@@ -116,12 +118,12 @@ args_cnn_fc = ['--dec_layer_dims', '2', '16', '64,13,13', '32,27,27', '1,27,27',
              '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
              '--data_distribution', 'Bernoulli',
-             '--epochs', '300',
+             '--epochs', str(epochs),
              '--learning_rate', '1e-4',
              '--cuda']
 
-args_dist_b = parser.parse_args(args_fc)# CHANGE
-args_dist_b.batch_size = 16
+args_dist_b = parser.parse_args(args_cnn_fc)# CHANGE
+args_dist_b.batch_size = batch_size
 #args_dist_b.seed = 10111201
 
 if use_gpu == True:
