@@ -262,7 +262,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
 
     # Create data loaders
     train_loader = create_dataloader(train_data, args)
-    example_data_train, example_targets_train = next(iter(train_loader))
+    example_data_train, example_targets_train = next(iter(train_loader)) #TODO: make deterministic accross runs
     target_metadata_train = example_targets_train.tolist() #TODO: change depending on dataset
     if tensorboard is not None:
         tensorboard.add_text('Encoder Architecture', str(model.encoder.model))
@@ -366,14 +366,14 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
             mean, logvar = model.encoder(example_data)
             std_of_abs_mean = torch.linalg.norm(mean, dim=1).std().item()
             mean_of_abs_std = logvar.exp().sum(axis=1).sqrt().mean().item()
-            tensorboard.add_scalars('Train data Encoder stats', {'std(||mean(z)||), z~q(z|x)': std_of_abs_mean,
-                                                                  'E[std(z)], z~q(z|x)': mean_of_abs_std,}, epoch)
+            tensorboard.add_scalars('Train data Encoder stats vs steps', {'std(||mean(z)||), z~q(z|x)': std_of_abs_mean,
+                                                                  'E[std(z)], z~q(z|x)': mean_of_abs_std,}, epoch * len(loader))
 
             if epoch % latent_eval_freq == 0:
-                latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets, device=args.device)
-                tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ train data', latent_space_vis, global_step=epoch)
+                # latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets, device=args.device)
+                # tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ train data', latent_space_vis, global_step=epoch)
 
-                tensorboard.add_embedding(mean, metadata=target_metadata_train, label_img=flip_bits(resize(example_data)),
+                tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(example_data)),
                                           tag='train_data_encoded_samples', global_step=epoch)
 
                 logits = model.decoder(mean)
@@ -385,21 +385,20 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                 example_data = example_data_test
                 example_targets = example_targets_test
                 target_metadata = target_metadata_test
-                loader = test_loader
                 epoch_avg_elbo = epoch_avg_test_elbo
                 tensorboard.add_scalar('test ELBO', epoch_avg_elbo, epoch * len(loader))
 
                 mean, logvar = model.encoder(example_data)
                 std_of_abs_mean = torch.linalg.norm(mean, dim=1).std().item()
                 mean_of_abs_std = logvar.exp().sum(axis=1).sqrt().mean().item()
-                tensorboard.add_scalars('Test data Encoder stats', {'std(||mean(z)||), z~q(z|x)': std_of_abs_mean,
-                                                                     'E[std(z)], z~q(z|x)': mean_of_abs_std, }, epoch)
+                tensorboard.add_scalars('Test data Encoder stats vs steps', {'std(||mean(z)||), z~q(z|x)': std_of_abs_mean,
+                                                                     'E[std(z)], z~q(z|x)': mean_of_abs_std, }, epoch * len(loader))
 
                 if epoch % latent_eval_freq == 0:
-                    latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets,
-                                                                 device=args.device)
-                    tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ test data', latent_space_vis,
-                                           global_step=epoch)
+                    # latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets,
+                    #                                              device=args.device)
+                    # tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ test data', latent_space_vis,
+                    #                        global_step=epoch)
 
                     tensorboard.add_embedding(mean, metadata=target_metadata,
                                               label_img=flip_bits(resize(example_data)),
@@ -422,15 +421,44 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         optimizer.load_state_dict(best_optim_state)
 
     if tensorboard is not None:
+        Z = torch.randn(1024, *model.decoder.bottleneck.input_size).to(args.device) #M, B, D
+        logits = model.decoder(Z)
+        generated_samples = model.decoder.param_b(logits)
+        tensorboard.add_embedding(Z,
+                                  label_img=flip_bits(resize(generated_samples)),
+                                  tag='Generated_samples_from_prior', global_step=0)
+        tensorboard.add_images('Generated_samples_from_prior', flip_bits(resize(generated_samples[0:64])), dataformats='NCHW')
+
+        example_data = example_data_train
+        example_targets = example_targets_train
+        target_metadata = target_metadata_train
+
         mean, logvar = model.encoder(example_data_train)
         logits = model.decoder(mean)
         decoded_samples = model.decoder.param_b(logits)
+        tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(example_data)),
+                                  tag='train_data_encoded_samples', global_step=0)
+        tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(decoded_samples)),
+                                  tag='train_data_decoded_samples', global_step=0)
+
         tensorboard.add_images('decoded_train_samples', flip_bits(resize(decoded_samples)), dataformats='NCHW')
 
         if test_data is not None:
-            mean, logvar = model.encoder(example_data_test)
+            example_data = example_data_test
+            example_targets = example_targets_test
+            target_metadata = target_metadata_test
+            epoch_avg_elbo = epoch_avg_test_elbo
+
+            mean, logvar = model.encoder(example_data)
             logits = model.decoder(mean)
             decoded_samples = model.decoder.param_b(logits)
+
+            tensorboard.add_embedding(mean, metadata=target_metadata,
+                                      label_img=flip_bits(resize(example_data)),
+                                      tag='test_data_encoded_samples', global_step=0)
+            tensorboard.add_embedding(mean, metadata=target_metadata,
+                                      label_img=flip_bits(resize(decoded_samples)),
+                                      tag='test_data_decoded_samples', global_step=0)
             tensorboard.add_images('decoded_test_samples', flip_bits(resize(decoded_samples)), dataformats='NCHW')
 
     return model, optimizer

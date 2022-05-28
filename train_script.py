@@ -15,17 +15,17 @@ from data_loaders import Maze_Dataset
 from util import *
 from models.VAE import *
 
-run_name = 'multiroom128x27_6cnn_b16e6000' #CHANGE
+run_name = 'multiroom10000x27_6cnn_z32_b64e2000' #CHANGE
 use_gpu = True
-plot_every = 1000
-batch_size = 16
-epochs = 6000
+plot_every = 100
+batch_size = 64
+epochs = 1000
 
 writer = SummaryWriter('runs/' + run_name)
 base_dir = str(Path(__file__).resolve().parent)
 dataset_dir = base_dir + '/datasets/'
 cifar_dir = dataset_dir + 'cifar10_data'
-maze_dir = dataset_dir + 'multi_room128x27'#'multi_room128x27'#'only_grid_128x27'
+maze_dir = dataset_dir + 'multi_room10000x27'#'multi_room128x27'#'only_grid_128x27'
 mnist_dir = dataset_dir #+ 'MNIST'
 
 # #Uncomment
@@ -108,12 +108,14 @@ args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
 # '--dec_layer_dims', '2', '16', '128', '64,13,13', '32,27,27', '32,27,27', '32,27,27', '1,27,27',
 # '--dec_layer_dims', '2', '16', '128', '64,13,13', '32,27,27', '32,27,27', '16,27,27', '1,27,27',
 # '--dec_layer_dims', '2', '16', '128', '32,6,6', '8,13,13', '1,27,27', #no conv layer, need modification of decoder code
+# try this: https://indico.cern.ch/event/996880/contributions/4188468/attachments/2193001/3706891/ChiakiYanagisawa_20210219_Conv2d_and_ConvTransposed2d.pdf
 
-args_cnn_fc = ['--dec_layer_dims', '2', '16', '64,13,13', '32,27,27', '1,27,27',
+
+args_cnn_fc = ['--dec_layer_dims', '32', '1024', '128,13,13', '64,27,27', '32,27,27', '1,27,27',
             '--dec_architecture', 'dConv',
             '--dec_kernel_size', '3',
              '--enc_architecture', 'CNN',
-             '--enc_layer_dims', '1,27,27', '32,27,27', '64,14,14', '64,14,14', '128,7,7', '128,7,7', '1024', '128', '16', '2',
+             '--enc_layer_dims', '1,27,27', '32,27,27', '64,14,14', '64,14,14', '128,7,7', '128,7,7', '1024', '1024', '256', '32',
              '--enc_kernel_size', '3',
              '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',

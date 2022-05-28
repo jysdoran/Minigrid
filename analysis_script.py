@@ -29,7 +29,7 @@ model_names = [
 #     'VAE_maze10000x27_6cnn_fc_bs50_e250',
 #     'VAE_maze10000x27_enc_6cnn_fc_dec_fc_2dconv_bs50_e250',
 #     'VAE_maze10000x27_6cnn_fc_bs50_e10',
-    'test_embedding_mnist',
+    'multiroom10000x27_6cnn_z32_b64e2000',
 ]
 
 img_size = 27
@@ -56,60 +56,33 @@ test_data = torchvision.datasets.MNIST(
 data_dims = (1,img_size,img_size)
 
 for model_name in model_names:
-    writer = SummaryWriter('runs/' + model_name + 'analysis1')
+    tensorboard = SummaryWriter('runs/' + model_name)
     model_dist_b, optimiser_dist_b, args_dist_b = load_state('checkpoints/'+model_name+'.pt', model_type=VAE, optim_type=optim.Adam)
     #args_dist_b.cuda = False #CHANGE
     args_dist_b.device = torch.device("cuda" if args_dist_b.cuda else "cpu")
     bin_threshold = 0.5
     binary_transform = BinaryTransform(bin_threshold)
+    flip_bits = FlipBinaryTransform()
+    resize = torchvision.transforms.Resize((100, 100), interpolation=torchvision.transforms.InterpolationMode.NEAREST)
 
     with torch.inference_mode():
-        # # TODO: put in a function
-        # # Experiment: generating samples using standard Gaussian
-        # # Sample the latents
-        # logits = model_dist_b.decoder(Z)
-        #
-        # # Use ancestral sampling to produce samples
-        # indices = np.random.choice(len(train_data), size=42)
-        # original_samples = torch.vstack([train_data[idx][0] for idx in indices]).squeeze()
-        # samples = model_dist_b.decoder.sample(logits, num_samples=1).detach().cpu()[0]
-        # means = model_dist_b.decoder.mean(logits).detach().cpu()
-        # # means = binary_transform(means)
-        # params = binary_transform(model_dist_b.decoder.param_p(logits).detach().cpu())
-        #
-        # # Create a matrix of samples
-        # X = torch.vstack([original_samples, samples, means, params])
-        # X = X.view(-1, *data_dims).detach().cpu()
-        # X = X.squeeze()
-        #
-        # # Create a figure
-        # fig = plot_grid_of_samples(X, grid=(12, 14), figsize=(14, 10))
-        # fig.suptitle('VAE with Bernoulli Variational Distribution, trained on 10 000 11x11 Mazes.', fontsize=16)
-        # fig.text(0, 0.833, '$\mathbf{x} \sim p(\mathbf{x})$',
-        #          rotation='vertical', verticalalignment='center', fontsize=16)
-        # fig.text(0, 0.6, '$\mathbf{x} \sim \mathcal{CB}(\mathbf{x} | \mathbf{z}; \eta)$',
-        #          rotation='vertical', verticalalignment='center', fontsize=16)
-        # fig.text(0, 0.35, '$\mathbf{x} = \mathbb{E}_{\mathcal{B}}(\mathbf{x} | \mathbf{z}; \eta)$',
-        #          rotation='vertical', verticalalignment='center', fontsize=16)
-        # fig.text(0, 0.125, 'discrete$(\mathbf{x} = \eta)$',
-        #          rotation='vertical', verticalalignment='center', fontsize=16)
-        # fig.tight_layout()
-
         #######
 
         model_dist_b.eval()
         model_dist_b = model_dist_b.to(args_dist_b.device)
 
-        # train_loader = torch.utils.data.DataLoader(
-        #     Maze_Dataset(
-        #         maze_dir, train=True,
-        #         transform=transforms.Compose([
-        #             #transforms.Resize((img_size, img_size)),
-        #             transforms.ToTensor(),
-        #         ])),
-        #     batch_size=50,
-        #     shuffle=True
-        # )
+        Z = torch.randn(1024, *model_dist_b.decoder.bottleneck.input_size).to(args_dist_b.device) #M, B, D
+        logits = model_dist_b.decoder(Z)
+        generated_samples = model_dist_b.decoder.param_b(logits, bin_threshold)
+
+        tensorboard.add_embedding(Z,
+                                  label_img=flip_bits(resize(generated_samples)),
+                                  tag='Generated_samples_from_prior', global_step=0)
+
+        tensorboard.add_images('Generated_samples_from_prior', flip_bits(resize(generated_samples[0:64])), dataformats='NCHW')
+
+        tensorboard.close()
+        sys.exit()
 
         train_loader = DataLoader(dataset=train_data, batch_size=1000, shuffle=False)
         # examples = iter(train_loader)
@@ -120,8 +93,7 @@ for model_name in model_names:
         # mean, logvar = model_dist_b.encoder(X)
         #
         # writer.add_embedding(mean, metadata=metadata, label_img=example_data, tag='test_embedding', global_step=0)
-        # writer.close()
-        # sys.exit()
+
 
         Z = []
         Y = []
