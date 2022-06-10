@@ -46,6 +46,8 @@ def plot_grid_of_samples(samples, grid=None, figsize=(8, 8)):
     fig, axes = plt.subplots(grid[0], grid[1], sharex=True, sharey=True, figsize=figsize)
     fig.subplots_adjust(wspace=0., hspace=0.)
 
+    samples = samples.cpu()
+
     if samples.shape[-1] == 3:
         cmaps = [plt.get_cmap('Reds'), plt.get_cmap('Greens')]
         transparent_cmaps = []
@@ -137,6 +139,188 @@ def plot_latent_visualisation(model, z_max: Tuple[float, float] = (10,10), z_min
         fig.suptitle(title, size=13)
 
     return fig
+
+def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None, n_interp:int = 4, dim_r_threshold=None, interpolation_scheme:str = 'linear', img_dims: Tuple[int, int, int] = None, figsize: Tuple[int, int] = (10, 10),
+                              labels=None, device='cpu', alpha=0.5, title=None):
+
+    assert len(minibatch) % 2 == 0
+
+    if Z_mean is None: Z_mean = 0
+    if Z_std is None: Z_std = 1
+
+    model.eval()
+    latents, _ = model.encoder(minibatch)
+
+    # remove dimensions with average standard deviation of 1 (e.g. uninformative)
+    if dim_r_threshold is not None:
+        kept_dims = torch.where(Z_std < dim_r_threshold)[0].cpu().numpy()
+        original_latents = latents.clone()
+        latents = latents[..., kept_dims]
+        Z_std_red = Z_std[kept_dims]
+        Z_mean_red = Z_mean[kept_dims]
+    else:
+        Z_std_red = Z_std.clone()
+        Z_mean_red = Z_mean.clone()
+
+    latents = (latents - Z_mean_red) / Z_std_red
+
+
+    if interpolation_scheme == 'linear':
+        latents_dist = torch.cdist(latents, latents, p=2)
+        eps = 5e-3
+    if interpolation_scheme == 'polar':
+        eps = 0.
+        latents_dist = cdist_polar(latents, latents)
+
+    latents_dist[latents_dist<=eps] = float('inf')
+    dist, pair_indices = latents_dist.min(axis=0)
+    dist = dist.cpu().numpy()
+    pair_indices = pair_indices.cpu().numpy()
+
+    distances = {}
+    for ind_a, ind_b in enumerate(pair_indices):
+        assert ind_a != ind_b
+        key = (min(ind_a, ind_b), max(ind_a, ind_b))
+        distances[key] = dist[ind_a]
+
+    # sort the distances in ascending order
+    sorted_distances = {k: v for k, v in sorted(distances.items(), key=lambda item: item[1])}
+
+    interpolation_points = np.linspace(0, 1, n_interp+2)[1:-1]
+    interpolated_latents_dict = {}
+    for pair in sorted_distances.keys():
+        interpolated_latents = [latents[pair[0]],]
+        for loc in interpolation_points:
+            if interpolation_scheme == 'linear':
+                interp = lerp(loc, latents[pair[0]], latents[pair[1]])
+            elif interpolation_scheme == 'polar':
+                interp = slerp(loc, latents[pair[0]], latents[pair[1]])
+            interpolated_latents.append(interp)
+        interpolated_latents.append(latents[pair[1]])
+        interpolated_latents_dict[pair] = interpolated_latents
+
+    # convert back to tensor
+    l_t = [torch.stack(i) for i in list(interpolated_latents_dict.values())]
+    interpolated_latents_grid = torch.stack(l_t).to(device)
+
+    # Go back to original sample
+    interpolated_latents_grid = (interpolated_latents_grid * Z_std_red) + Z_mean_red
+
+    #reassembly
+    if dim_r_threshold is not None:
+        interpolated_latents_grid_r = torch.zeros(*interpolated_latents_grid.shape[:-1], original_latents.shape[-1], dtype=torch.float).to(device)
+        interpolated_latents_grid_r[..., kept_dims] = interpolated_latents_grid
+    else:
+        interpolated_latents_grid_r = interpolated_latents_grid
+
+    # Obtain the interpolated samples
+    interpolated_logits = model.decoder(interpolated_latents_grid_r)
+    interpolated_samples = model.decoder.param_b(interpolated_logits)
+
+
+    #TODO decode back before plotting
+    # use the plot samples function
+
+    return interpolated_latents_grid, interpolated_samples
+
+
+
+
+    logits = model.decoder(torch.tensor(Z_grid, dtype=torch.float, device=device))
+    samples = model.decoder.param_b(logits).detach().cpu()
+    if img_dims is not None:
+        samples = samples.reshape(*samples.shape[:2], *img_dims)
+    samples = samples.squeeze() #TODO: check if you can remove.
+
+    fig, axes = plot_grid_of_samples(samples, grid=None, figsize=figsize)
+
+    for i, j in itertools.product(range(grid[0]), range(grid[1])):
+        if j == 0:
+            axes[j, i].set_title(f'{x[i]:.2f}', fontsize=13)
+        if i == 0:
+            axes[j, i].set_ylabel(f'{y[grid[0] - j - 1]:.2f}', fontsize=13)
+
+    if Z_points is not None:
+        if isinstance(Z_points, torch.Tensor):
+            Z_points = Z_points.detach().cpu().numpy()
+        # Overlay another axes
+        rect = [axes[0][0].get_position().get_points()[0, 0], axes[-1][-1].get_position().get_points()[0, 1],
+                axes[-1][-1].get_position().get_points()[1, 0] - axes[0][0].get_position().get_points()[0, 0],
+                axes[0][0].get_position().get_points()[1, 1] - axes[-1][-1].get_position().get_points()[0, 1]
+                ]
+        ax = fig.add_axes(rect)
+
+        if labels is not None:
+            if isinstance(labels, torch.Tensor):
+                labels = labels.cpu().numpy()
+            # Create legend
+            colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+            c = np.array(colors)[0]  # TODO: Y.numpy()
+            legend_elements = [mpl.patches.Patch(facecolor=colors[i], label=i) for i in range(10)]
+            ax.legend(handles=legend_elements, ncol=10,
+                      bbox_to_anchor=(0.5, 0.92),
+                      bbox_transform=fig.transFigure,
+                      loc='center',
+                      prop={'size': 14},
+                      frameon=False)
+        else:
+            c = 'g'
+        # Plot projections
+        ax.scatter(Z_points[:, 0], Z_points[:, 1], color=c, alpha=alpha)
+        ax.patch.set_alpha(0.)
+        ax.set_xlim(z_min[0], z_max[0])
+        ax.set_ylim(z_min[1], z_max[1])
+        ax.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+
+    if title is not None:
+        fig.suptitle(title, size=13)
+
+    return fig
+
+def lerp(val, low, high):
+    return (1.0-val) * low + val * high
+
+def slerp(val, low, high):
+    omega = torch.arccos(torch.clip(torch.dot(low/torch.linalg.norm(low), high/torch.linalg.norm(high)), -1, 1))
+    so = torch.sin(omega)
+    if so == 0:
+        return lerp(val, low, high) # L'Hopital's rule/LERP
+    return torch.sin((1.0-val)*omega) / so * low + torch.sin(val*omega) / so * high
+
+def slerp2(val, low, high):
+    low_n = np.linalg.norm(low)
+    high_n = np.linalg.norm(high)
+    omega = np.arccos(np.clip(np.dot(low/low_n, high/high_n), -1, 1))
+    so = np.sin(omega)
+    if so == 0:
+        return lerp(val, low, high) # L'Hopital's rule/LERP
+    return (np.sin((1.0-val)*omega) / so * low / low_n + np.sin(val*omega) / so * high / high_n) * ((1.0 - val)*low_n + val * high_n)
+
+# "ellipse lerp": will work for vectors that do not have the same norm
+def elerp(val, low, high):
+    low_n = np.linalg.norm(low)
+    high_n = np.linalg.norm(high)
+    omega = np.arccos(np.clip(np.dot(low/low_n, high/high_n), -1, 1))
+    so = np.sin(omega)
+    if so == 0:
+        return lerp(val, low, high) # L'Hopital's rule/LERP
+    return slerp(val, low / low_n, high / high_n) * lerp(val, low_n, high_n)
+
+# only gives sensible values if low and high both have unit norm
+def nlerp(val, low, high):
+    p = lerp(val, low, high)
+    return p / np.linalg.norm(p)
+
+# broken
+def celerp(val, low, high, centroid):
+    #centroid = (low + high)/2
+    low = low - centroid
+    high = high - centroid
+    return elerp(val, low, high) + centroid
+
+def cdist_polar(x1, x2, eps=1e-08):
+    return torch.abs(torch.nn.functional.cosine_similarity(x1[:, None, :], x2[None, :, :], dim=-1, eps=eps))
+
 
 
 def create_base_argparser():
@@ -472,9 +656,10 @@ def save_state(args, model, optimizer, file):
     }, file)
 
 
-def load_state(file, model=None, optimizer=None, model_type=None, optim_type=None):
-    checkpoint = torch.load(file)
+def load_state(file, model=None, optimizer=None, model_type=None, optim_type=None, device=None):
+    checkpoint = torch.load(file, map_location=device)
     parser = checkpoint['argparser']
+    if device is not None: parser.device = device
     if model is None:
         model = model_type(parser).to(parser.device)
         optimizer = optim_type(model.parameters(), lr=parser.learning_rate)

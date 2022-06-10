@@ -15,10 +15,12 @@ from util import *
 from models.VAE import *
 from torch.utils.tensorboard import SummaryWriter
 
+CUDA = True
+
 base_dir = str(Path(__file__).resolve().parent)
 dataset_dir = base_dir + '/datasets/'
 cifar_dir = dataset_dir + 'cifar10_data'
-maze_dir = dataset_dir + 'only_grid_10000x27'#'only_grid_10000x11'
+maze_dir = dataset_dir + 'multi_room10000x27'#'only_grid_10000x11'
 mnist_dir = dataset_dir #+ 'MNIST'
 model_names = [
 #    'VAE_cnn_maze10000x27_cnn_fc',
@@ -34,22 +36,29 @@ model_names = [
 
 img_size = 27
 
-train_data = torchvision.datasets.MNIST(
-    mnist_dir, train=True, download=False,
-    transform=torchvision.transforms.Compose([
-        torchvision.transforms.Resize((img_size,img_size)),
-        torchvision.transforms.ToTensor(),
-        FlattenTransform(1, -1),
-        BinaryTransform(0.6),
-        ]))
-test_data = torchvision.datasets.MNIST(
-    mnist_dir, train=False,
-    transform=torchvision.transforms.Compose([
-        torchvision.transforms.Resize((img_size,img_size)),
-        torchvision.transforms.ToTensor(),
-        FlattenTransform(1, -1),
-        BinaryTransform(0.6),
-        ]))
+train_data = Maze_Dataset(
+          maze_dir, train=True,
+          transform = transforms.Compose([
+              SelectChannelsTransform(0),
+              transforms.ToTensor(),
+          ]))
+
+# train_data = torchvision.datasets.MNIST(
+#     mnist_dir, train=True, download=False,
+#     transform=torchvision.transforms.Compose([
+#         torchvision.transforms.Resize((img_size,img_size)),
+#         torchvision.transforms.ToTensor(),
+#         FlattenTransform(1, -1),
+#         BinaryTransform(0.6),
+#         ]))
+# test_data = torchvision.datasets.MNIST(
+#     mnist_dir, train=False,
+#     transform=torchvision.transforms.Compose([
+#         torchvision.transforms.Resize((img_size,img_size)),
+#         torchvision.transforms.ToTensor(),
+#         FlattenTransform(1, -1),
+#         BinaryTransform(0.6),
+#         ]))
 
 # Specify the hyperpameter choices
 
@@ -57,16 +66,43 @@ data_dims = (1,img_size,img_size)
 
 for model_name in model_names:
     tensorboard = SummaryWriter('runs/' + model_name)
-    model_dist_b, optimiser_dist_b, args_dist_b = load_state('checkpoints/'+model_name+'.pt', model_type=VAE, optim_type=optim.Adam)
-    #args_dist_b.cuda = False #CHANGE
+    if not CUDA: device = torch.device('cpu')
+    else: device = None
+    model_dist_b, optimiser_dist_b, args_dist_b = load_state('checkpoints/'+model_name+'.pt', model_type=VAE, optim_type=optim.Adam, device=device)
+    args_dist_b.cuda = CUDA
     args_dist_b.device = torch.device("cuda" if args_dist_b.cuda else "cpu")
     bin_threshold = 0.5
     binary_transform = BinaryTransform(bin_threshold)
     flip_bits = FlipBinaryTransform()
     resize = torchvision.transforms.Resize((100, 100), interpolation=torchvision.transforms.InterpolationMode.NEAREST)
 
+    train_loader = create_dataloader(train_data, args_dist_b)
+    example_data_train, example_targets_train = next(iter(train_loader))  # TODO: make deterministic accross runs
+
     with torch.inference_mode():
         #######
+
+        # Compute latent space statistics
+        # We don't use labels hence discard them with a _
+        all_means = []
+        all_stds = []
+        for batch_idx, (mbatch, _) in enumerate(train_loader):
+            mean, std = model_dist_b.encoder(mbatch)
+            all_means.append(mean)
+            all_stds.append(torch.exp(std)**0.5)
+
+        all_means = torch.cat(all_means)
+        all_stds = torch.cat(all_stds)
+
+        variational_mean = all_means.mean(axis=0)
+        variational_std = all_stds.mean(axis=0)
+
+        Z_interp, X_interp = latent_interpolation(model=model_dist_b, minibatch=example_data_train, Z_mean=variational_mean, Z_std=variational_std, dim_r_threshold=.2, n_interp=16, interpolation_scheme='polar', device=args_dist_b.device)
+        X_interp = X_interp.reshape(X_interp.shape[0]*X_interp.shape[1], *X_interp.shape[2:])
+        img_grid = torchvision.utils.make_grid(flip_bits(resize(X_interp)), nrow=Z_interp.shape[-2])
+        tensorboard.add_image('Interpolated samples, Polar', img_grid)
+        # tensorboard.close()
+        # sys.exit()
 
         model_dist_b.eval()
         model_dist_b = model_dist_b.to(args_dist_b.device)
