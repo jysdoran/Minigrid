@@ -30,7 +30,7 @@ class Maze_Dataset(VisionDataset):
     ]
 
     test_list = [
-        ["test_batch", "TODO"],
+        ["test_batch.data", "TODO"],
     ]
     meta = {
         "filename": "dataset.meta",

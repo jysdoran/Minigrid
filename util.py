@@ -10,7 +10,7 @@ import argparse
 import itertools
 from tqdm import tqdm
 from copy import deepcopy
-from typing import Tuple
+from typing import Tuple, List
 
 
 def seed_everything(seed=20211201):
@@ -154,6 +154,7 @@ def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None,
     # remove dimensions with average standard deviation of 1 (e.g. uninformative)
     if dim_r_threshold is not None:
         kept_dims = torch.where(Z_std < dim_r_threshold)[0].cpu().numpy()
+        print(f"Useful dimensions: {len(kept_dims)} out of {latents.shape[-1]}")
         original_latents = latents.clone()
         latents = latents[..., kept_dims]
         Z_std_red = Z_std[kept_dims]
@@ -443,9 +444,9 @@ def create_dataloader(data, args):
 def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard=None, latent_eval_freq=10):
     flip_bits = FlipBinaryTransform()
     resize = torchvision.transforms.Resize((100, 100), interpolation=torchvision.transforms.InterpolationMode.NEAREST)
-
     # Create data loaders
     train_loader = create_dataloader(train_data, args)
+    early_termination = False
     example_data_train, example_targets_train = next(iter(train_loader)) #TODO: make deterministic accross runs
     target_metadata_train = example_targets_train.tolist() #TODO: change depending on dataset
     if tensorboard is not None:
@@ -461,7 +462,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         target_metadata_test = example_targets_test.tolist()  # TODO: change depending on dataset
         if tensorboard is not None:
             img_grid = torchvision.utils.make_grid(flip_bits(example_data_test))
-            tensorboard.add_images('train_samples', flip_bits(resize(example_data_test)), dataformats='NCHW')
+            tensorboard.add_images('test_samples', flip_bits(resize(example_data_test)), dataformats='NCHW')
 
     train_epochs = []
     train_elbos = []
@@ -469,6 +470,9 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
     train_avg_elbos = []
     test_avg_epochs = []
     test_avg_elbos = []
+    epoch_avg_test_elbo = float('-inf')
+    epoch_avg_train_elbo = float('-inf')
+
 
     # We will use these to track the best performing model on test data
     best_avg_test_elbo = float('-inf')
@@ -478,64 +482,68 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
 
     pbar = tqdm(range(1, args.epochs + 1))
     for epoch in pbar:
-        # Train
-        model.train()
-        epoch_train_elbos = []
-        # We don't use labels hence discard them with a _
-        for batch_idx, (mbatch, _) in enumerate(train_loader):
-            #mbatch = mbatch.to(args.device)
-            # Flatten the images
-            #mbatch = mbatch.view([-1] + [mbatch.shape[-2] * mbatch.shape[-1]])
-            # Reset gradient computations in the computation graph
-            optimizer.zero_grad()
+        try:
+            # Train
+            model.train()
+            epoch_train_elbos = []
+            # We don't use labels hence discard them with a _
+            for batch_idx, (mbatch, _) in enumerate(train_loader):
+                # Reset gradient computations in the computation graph
+                optimizer.zero_grad()
 
-            # Compute the loss for the mini-batch
-            elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
+                # Compute the loss for the mini-batch
+                elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
 
-            # Compute the gradients using backpropagation
-            loss.backward()
-            # Perform an SGD update
-            optimizer.step()
+                # Compute the gradients using backpropagation
+                loss.backward()
+                # Perform an SGD update
+                optimizer.step()
 
-            epoch_train_elbos += [elbo.detach().item()]
-            pbar.set_description((f'Train Epoch: {epoch} [{batch_idx * len(mbatch)}/{len(train_loader.dataset)}'
-                                  f'({100. * batch_idx / len(train_loader):.0f}%)] ELBO: {elbo:.6f}'))
+                epoch_train_elbos += [elbo.detach().item()]
+                pbar.set_description((f'Train Epoch: {epoch} [{batch_idx * len(mbatch)}/{len(train_loader.dataset)}'
+                                      f'({100. * batch_idx / len(train_loader):.0f}%)] ELBO: {elbo:.6f}'))
 
-        # Test
-        if test_data is not None:
-            with torch.inference_mode():
-                model.eval()
-                epoch_test_elbos = []
-                for batch_idx, (mbatch, _) in enumerate(test_loader):
-                    #mbatch = mbatch.to(args.device)
-                    # Flatten the images
-                    #mbatch = mbatch.view([-1] + [mbatch.shape[-2] * mbatch.shape[-1]])
+            # Test
+            if test_data is not None:
+                with torch.inference_mode():
+                    model.eval()
+                    epoch_test_elbos = []
+                    for batch_idx, (mbatch, _) in enumerate(test_loader):
+                        #mbatch = mbatch.to(args.device)
+                        # Flatten the images
+                        #mbatch = mbatch.view([-1] + [mbatch.shape[-2] * mbatch.shape[-1]])
 
-                    # Compute the loss for the test mini-batch
-                    elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
+                        # Compute the loss for the test mini-batch
+                        elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
 
-                    epoch_test_elbos += [elbo.detach().item()]
-                    pbar.set_description((f'Test Epoch: {epoch} [{batch_idx * len(mbatch)}/{len(test_loader.dataset)} '
-                                          f'({100. * batch_idx / len(test_loader):.0f}%)] ELBO: {elbo:.6f}'))
+                        epoch_test_elbos += [elbo.detach().item()]
+                        pbar.set_description((f'Test Epoch: {epoch} [{batch_idx * len(mbatch)}/{len(test_loader.dataset)} '
+                                              f'({100. * batch_idx / len(test_loader):.0f}%)] ELBO: {elbo:.6f}'))
 
-        # Store epoch summary in list
-        epoch_avg_train_elbo = np.mean(epoch_train_elbos)
-        train_avg_epochs += [epoch]
-        train_avg_elbos += [epoch_avg_train_elbo]
-        train_epochs += np.linspace(epoch - 1, epoch, len(epoch_train_elbos)).tolist()
-        train_elbos += epoch_train_elbos
-        if test_data is not None:
-            test_avg_epochs += [epoch]
-            epoch_avg_test_elbo = np.mean(epoch_test_elbos)
-            test_avg_elbos += [epoch_avg_test_elbo]
+            # Store epoch summary in list
+            epoch_avg_train_elbo = np.mean(epoch_train_elbos)
+            train_avg_epochs += [epoch]
+            train_avg_elbos += [epoch_avg_train_elbo]
+            train_epochs += np.linspace(epoch - 1, epoch, len(epoch_train_elbos)).tolist()
+            train_elbos += epoch_train_elbos
+            if test_data is not None:
+                test_avg_epochs += [epoch]
+                epoch_avg_test_elbo = np.mean(epoch_test_elbos)
+                test_avg_elbos += [epoch_avg_test_elbo]
 
-            # Snapshot best model
-            if epoch_avg_test_elbo > best_avg_test_elbo:
-                best_avg_test_elbo = epoch_avg_test_elbo
-                best_epoch = epoch
+                # Snapshot best model
+                if epoch_avg_test_elbo > best_avg_test_elbo:
+                    best_avg_test_elbo = epoch_avg_test_elbo
+                    best_epoch = epoch
 
-                best_model_state = deepcopy(model.state_dict())
-                best_optim_state = deepcopy(optimizer.state_dict())
+                    best_model_state = deepcopy(model.state_dict())
+                    best_optim_state = deepcopy(optimizer.state_dict())
+        except KeyboardInterrupt:
+            end_of_training_message = f"Training manually interrupted at epoch {epoch} [{batch_idx * len(mbatch)}" \
+                                      f"/{len(train_loader.dataset)}({100. * batch_idx / len(train_loader):.0f}%)]."
+            print(end_of_training_message)
+            early_termination = True
+            break
 
         # Tensorboard tracking
         if tensorboard is not None:
@@ -597,10 +605,15 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
     # Reset gradient computations in the computation graph
     optimizer.zero_grad()
 
+    latest_model_state = None
+    latest_optim_state = None
+
     if best_model_state is not None and best_epoch != args.epochs:
+        latest_model_state = deepcopy(model.state_dict())
         print(f'Loading best model state from epoch {best_epoch}.')
         model.load_state_dict(best_model_state)
     if best_optim_state is not None and best_epoch != args.epochs:
+        latest_optim_state = deepcopy(optimizer.state_dict())
         print(f'Loading best optimizer state from epoch {best_epoch}.')
         optimizer.load_state_dict(best_optim_state)
 
@@ -645,24 +658,37 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                                       tag='test_data_decoded_samples', global_step=0)
             tensorboard.add_images('decoded_test_samples', flip_bits(resize(decoded_samples)), dataformats='NCHW')
 
-    return model, optimizer
+        if not early_termination:
+            end_of_training_message = f"Training completed after {args.epochs} epochs / {len(train_loader) * args.epochs} steps."
+            print(end_of_training_message)
+        tensorboard.add_text('Training status', end_of_training_message)
+
+    return model, optimizer, latest_model_state, latest_optim_state, early_termination
 
 
-def save_state(args, model, optimizer, file):
+def save_state(args, model, optimizer, file, model_states: List, optim_states: List):
     return torch.save({
         'argparser': args,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
+        'additional_model_states': model_states,
+        'additional_optimizer_states': optim_states,
     }, file)
 
 
-def load_state(file, model=None, optimizer=None, model_type=None, optim_type=None, device=None):
+def load_state(file, model=None, optimizer=None, model_type=None, optim_type=None, device=None, load_different_state:int = None):
     checkpoint = torch.load(file, map_location=device)
     parser = checkpoint['argparser']
     if device is not None: parser.device = device
     if model is None:
         model = model_type(parser).to(parser.device)
         optimizer = optim_type(model.parameters(), lr=parser.learning_rate)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    if load_different_state is None:
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    else:
+        if checkpoint['additional_model_states'][load_different_state] is None or checkpoint['additional_optimizer_states'][load_different_state] is None:
+            raise RuntimeError(f"Requested state dicts of index {load_different_state} not present in checkpoint file")
+        model.load_state_dict(checkpoint['additional_model_states'][load_different_state])
+        optimizer.load_state_dict(checkpoint['additional_optimizer_states'][load_different_state])
     return model, optimizer, parser

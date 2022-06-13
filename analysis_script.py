@@ -1,6 +1,7 @@
 import itertools
 from pathlib import Path
 import sys
+import os
 
 import torch
 import torchvision
@@ -9,13 +10,14 @@ from torchvision import datasets, transforms
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import fileinput
 
 from data_loaders import Maze_Dataset
 from util import *
 from models.VAE import *
 from torch.utils.tensorboard import SummaryWriter
 
-CUDA = True
+CUDA = False
 
 base_dir = str(Path(__file__).resolve().parent)
 dataset_dir = base_dir + '/datasets/'
@@ -31,7 +33,9 @@ model_names = [
 #     'VAE_maze10000x27_6cnn_fc_bs50_e250',
 #     'VAE_maze10000x27_enc_6cnn_fc_dec_fc_2dconv_bs50_e250',
 #     'VAE_maze10000x27_6cnn_fc_bs50_e10',
-    'multiroom10000x27_6cnn_z32_b64e2000',
+#     'multiroom10000x27_6cnn_z32_b64e2000',
+#    'multiroom10000x27_6cnn_z12_b64e2000',
+    'test',
 ]
 
 img_size = 27
@@ -66,6 +70,10 @@ data_dims = (1,img_size,img_size)
 
 for model_name in model_names:
     tensorboard = SummaryWriter('runs/' + model_name)
+    # address bug overwritting projector_config when a new embedding is created
+    projector_config_file = Path.cwd() / tensorboard.log_dir / 'projector_config.pbtxt'
+    projector_config_file.rename(str(projector_config_file)+'.bkup')
+
     if not CUDA: device = torch.device('cpu')
     else: device = None
     model_dist_b, optimiser_dist_b, args_dist_b = load_state('checkpoints/'+model_name+'.pt', model_type=VAE, optim_type=optim.Adam, device=device)
@@ -82,14 +90,17 @@ for model_name in model_names:
     with torch.inference_mode():
         #######
 
+        model_dist_b.eval()
+        model_dist_b = model_dist_b.to(args_dist_b.device)
+
         # Compute latent space statistics
         # We don't use labels hence discard them with a _
         all_means = []
         all_stds = []
         for batch_idx, (mbatch, _) in enumerate(train_loader):
-            mean, std = model_dist_b.encoder(mbatch)
+            mean, logvar = model_dist_b.encoder(mbatch)
             all_means.append(mean)
-            all_stds.append(torch.exp(std)**0.5)
+            all_stds.append(torch.exp(logvar/2))
 
         all_means = torch.cat(all_means)
         all_stds = torch.cat(all_stds)
@@ -100,25 +111,29 @@ for model_name in model_names:
         Z_interp, X_interp = latent_interpolation(model=model_dist_b, minibatch=example_data_train, Z_mean=variational_mean, Z_std=variational_std, dim_r_threshold=.2, n_interp=16, interpolation_scheme='polar', device=args_dist_b.device)
         X_interp = X_interp.reshape(X_interp.shape[0]*X_interp.shape[1], *X_interp.shape[2:])
         img_grid = torchvision.utils.make_grid(flip_bits(resize(X_interp)), nrow=Z_interp.shape[-2])
+        #TODO store dimensionality of p(z|x) in TB
         tensorboard.add_image('Interpolated samples, Polar', img_grid)
-        # tensorboard.close()
-        # sys.exit()
-
-        model_dist_b.eval()
-        model_dist_b = model_dist_b.to(args_dist_b.device)
-
-        Z = torch.randn(1024, *model_dist_b.decoder.bottleneck.input_size).to(args_dist_b.device) #M, B, D
-        logits = model_dist_b.decoder(Z)
-        generated_samples = model_dist_b.decoder.param_b(logits, bin_threshold)
-
-        tensorboard.add_embedding(Z,
-                                  label_img=flip_bits(resize(generated_samples)),
-                                  tag='Generated_samples_from_prior', global_step=0)
-
-        tensorboard.add_images('Generated_samples_from_prior', flip_bits(resize(generated_samples[0:64])), dataformats='NCHW')
 
         tensorboard.close()
+        # address bug overwritting projector_config when a new embedding is created
+        with open(str(projector_config_file) + '.temp', 'w') as fout, fileinput.input([str(projector_config_file) + '.bkup', str(projector_config_file)]) as fin:
+            for line in fin:
+                fout.write(line)
+        # cleanup files
+        new_projector_config_file = Path(str(projector_config_file) + '.temp').rename(str(projector_config_file))
+        Path(str(projector_config_file)+'.bkup').unlink()
         sys.exit()
+
+        # #Generate samples from prior - already done during training
+        # Z = torch.randn(1024, *model_dist_b.decoder.bottleneck.input_size).to(args_dist_b.device) #M, B, D
+        # logits = model_dist_b.decoder(Z)
+        # generated_samples = model_dist_b.decoder.param_b(logits, bin_threshold)
+        #
+        # tensorboard.add_embedding(Z,
+        #                           label_img=flip_bits(resize(generated_samples)),
+        #                           tag='Generated_samples_from_prior', global_step=0)
+        #
+        # tensorboard.add_images('Generated_samples_from_prior', flip_bits(resize(generated_samples[0:64])), dataformats='NCHW')
 
         train_loader = DataLoader(dataset=train_data, batch_size=1000, shuffle=False)
         # examples = iter(train_loader)

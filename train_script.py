@@ -15,11 +15,11 @@ from data_loaders import Maze_Dataset
 from util import *
 from models.VAE import *
 
-run_name = 'multiroom10000x27_6cnn_z32_b64e2000' #CHANGE
+run_name = 'test'#'multiroom10000x27_6cnn_z12_b64e1000' #CHANGE
 use_gpu = True
 plot_every = 100
 batch_size = 64
-epochs = 1000
+epochs = 2
 
 writer = SummaryWriter('runs/' + run_name)
 base_dir = str(Path(__file__).resolve().parent)
@@ -31,6 +31,13 @@ mnist_dir = dataset_dir #+ 'MNIST'
 # #Uncomment
 train_data = Maze_Dataset(
           maze_dir, train=True,
+          transform = transforms.Compose([
+              SelectChannelsTransform(0),
+              transforms.ToTensor(),
+          ]))
+
+test_data = Maze_Dataset(
+          maze_dir, train=False,
           transform = transforms.Compose([
               SelectChannelsTransform(0),
               transforms.ToTensor(),
@@ -111,11 +118,11 @@ args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
 # try this: https://indico.cern.ch/event/996880/contributions/4188468/attachments/2193001/3706891/ChiakiYanagisawa_20210219_Conv2d_and_ConvTransposed2d.pdf
 
 
-args_cnn_fc = ['--dec_layer_dims', '32', '1024', '128,13,13', '64,27,27', '32,27,27', '1,27,27',
+args_cnn_fc = ['--dec_layer_dims', '12', '1024', '128,13,13', '64,27,27', '32,27,27', '1,27,27',
             '--dec_architecture', 'dConv',
             '--dec_kernel_size', '3',
              '--enc_architecture', 'CNN',
-             '--enc_layer_dims', '1,27,27', '32,27,27', '64,14,14', '64,14,14', '128,7,7', '128,7,7', '1024', '1024', '256', '32',
+             '--enc_layer_dims', '1,27,27', '32,27,27', '64,14,14', '64,14,14', '128,7,7', '128,7,7', '1024', '1024', '128', '12',
              '--enc_kernel_size', '3',
              '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
@@ -142,12 +149,13 @@ model_dist_b = VAE(args_dist_b).to(args_dist_b.device)
 optimizer_dist_b = optim.Adam(model_dist_b.parameters(), lr=args_dist_b.learning_rate)
 # sys.exit()
 
-model_dist_b, optimizer_dist_b = fit_model(model_dist_b, optimizer_dist_b,
+model_dist_b, optimizer_dist_b, model_state_best_training_elbo, optim_state_best_training_elbo, early_t = fit_model(model_dist_b, optimizer_dist_b,
                                                       train_data, args_dist_b,
-                                                      test_data=None, latent_eval_freq=plot_every, tensorboard=writer)
+                                                      test_data=test_data, latent_eval_freq=plot_every, tensorboard=writer)
+if early_t: run_name = run_name + '_early_t'
 save_file = 'checkpoints/' + run_name + '.pt'
 print(f"Saving to {save_file}")
-save_state(args_dist_b, model_dist_b, optimizer_dist_b, save_file)
+save_state(args_dist_b, model_dist_b, optimizer_dist_b, save_file, [model_state_best_training_elbo], [optim_state_best_training_elbo])
 
 writer.close()
 
