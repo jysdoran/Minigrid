@@ -36,7 +36,7 @@ class Maze_Dataset(VisionDataset):
         "filename": "dataset.meta",
         "md5": "ceb1fb9aaface2c9669a3914ecf7d30a",
         #"label_descriptors": "label", # TODO: figure out the structure of "label"
-        "data_dim": "maze_size",
+        "data_dim": "data_dim",
         "task:": "task_type",
     }
 
