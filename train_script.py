@@ -117,7 +117,77 @@ args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
 # '--dec_layer_dims', '2', '16', '128', '32,6,6', '8,13,13', '1,27,27', #no conv layer, need modification of decoder code
 # try this: https://indico.cern.ch/event/996880/contributions/4188468/attachments/2193001/3706891/ChiakiYanagisawa_20210219_Conv2d_and_ConvTransposed2d.pdf
 
+# graph_cnn_fc:
+# input [10x10x4] (redundant entries) graph/layout obtained with binary(maxpool) or binary(pool) operation.
+# enc:
+# note: could experiment with stride 2 but not too recommended
+# CNN1 k = 3, cin = 4, cout = 16 | weights : 576
+# (max_pool) cout = 8
+# CNN2 k = 3 cout = 64 | weights : 10k
+# (max pool) cout = 32
+# CNN3 k = 3 cout = 262144 (! 150M or 75M weights if we are linking all channels with each other. Do 1 to many channels here, then only 200k weights)
+#            cout = 4096 | weights : 2.36M  (then can afford to do many to many channels)
+# max pool cout = 256 | [weights updated/pass / 16!][divided by 16, works out nicely with option 2, as it seems to me there should be 16 possible symmetries (4mirror * 4 rotations)
+# (CNN4 k = 4 cout = 4096) [! 16M weights + 4M weights for FC] - could consider skipping and going straight to flatten (4*4*256 -> 1024)
+# FC 1024 -> 128 -> 8 (weights 4M, 100k, 1k)
+# with (layers) removed, model works out to ~  6.5M however only <5M updated per pass. [not considering Relu]
+# dec:
+# FC 8 -> (128) -> (1024) -> 4096
+# dconv1 k =4 cout = 256
+# dconv2 k =3 cout = (32 if max pool in enc) / 64
+# dconv3 k=3 cout = (8 if max pool in enc) / 16
+# conv_same OR dconv [k = 3, cout = 4] OR maxpool [cout = 4] (consider cnn instead of dconv3 if maxpool)
 
+# graph_conv1d [nxn] nodes
+# input: [n][n-1][2] [n sequences of n-1 edges. 1 channel for h edge, 1 for v edges] (# using the minimum number of parameters for encoding)
+# enc:
+# CNN1 k = 3, cin = 2, cout = 8 | weights : 24
+# CNN2 k = 3 cout = 64 | weights : 1536
+# CNN3 k = 3 cout = 4096 | weights : 786k
+# maxpool cout = 256
+# flatten : [10x3x256]->[7680]
+# FC 1024, 128, 8 | weights 7M, 100k, 1k
+#total weights ~ 8M
+
+# OR
+# CNN3 k = 5, cout = 4096 [out=10*1*4096] | weights : 1.3M
+# maxpool cout = 256
+# flattent : [10*1*256] -> [2560]
+# FC 1024, 128, 8 | weights 2.6M, 100k, 1k
+# total weights ~ 4M
+
+# dec:
+# FC 8, 128, 7680
+# reshape [10*3*256]
+# dconv k = 3 cout=64 [10*5*64]
+
+# OR
+# FC 8, 128, 2560
+# reshape [10*1*256]
+# dconv k=5 cout = 64 [10*5*64]
+
+# dconv k =3 cout=8 [10*7*8]
+# dconv k = 3 cout = 8 + conv_same k = 3 OR #dconv k = 3 cout = 2 [10*9*2]
+
+# max pool cout = 256 | [weights updated/pass / 16!][divided by 16, works out nicely with option 2, as it seems to me there should be 16 possible symmetries (4mirror * 4 rotations)
+# (CNN4 k = 4 cout = 4096) [! 16M weights + 4M weights for FC] - could consider skipping and going straight to flatten (4*4*256 -> 1024)
+# FC 1024 -> 128 -> 8 (weights 4M, 100k, 1k)
+# with (layers) removed, model works out to ~  6.5M however only <5M updated per pass. [not considering Relu]
+# dec:
+# FC 8 -> (128) -> (1024) -> 4096
+# dconv1 k =4 cout = 256
+# dconv2 k =3 cout = (32 if max pool in enc) / 64
+# dconv3 k=3 cout = (8 if max pool in enc) / 16
+# conv_same OR dconv [k = 3, cout = 4] OR maxpool [cout = 4] (consider cnn instead of dconv3 if maxpool)
+
+
+# graph_fc
+# enc: 256 -> 128 -> 32 -> 8
+# dec: 8 -> 32 -> 128 -> 256
+
+
+
+#Enc: 288 + 18432 + 36864 + 36864 + 73728 + 73728 + 6.4M+ 1M + 1M + 131k + 131k+ 1k ~ 9M
 args_cnn_fc = ['--dec_layer_dims', '12', '1024', '128,13,13', '64,27,27', '32,27,27', '1,27,27',
             '--dec_architecture', 'dConv',
             '--dec_kernel_size', '3',
