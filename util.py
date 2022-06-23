@@ -12,6 +12,40 @@ from tqdm import tqdm
 from copy import deepcopy
 from typing import Tuple, List
 
+from data_generators import Batch
+grid_to_gridworld = Batch.encode_grid_to_gridworld
+
+#WIP section
+
+# TODO: function to check if duplicate tasks
+# train_task = train_data[0][0].numpy()
+# for test in test_data:
+#     test_task = test[0].numpy()
+#     assert not np.array_equal(train_task, test_task)
+
+
+def numIslands(grid, val=0):
+
+    def dfs(grid, i, j, val):
+        if i < 0 or j < 0 or i >= len(grid) or j >= len(grid[0]) or grid[i][j] != val:
+            return
+        grid[i][j] = -1
+        dfs(grid, i + 1, j, val)
+        dfs(grid, i - 1, j, val)
+        dfs(grid, i, j + 1, val)
+        dfs(grid, i, j - 1, val)
+
+    grid = deepcopy(grid)
+
+    count = 0
+    for i in range(len(grid)):
+        for j in range(len(grid[0])):
+            if grid[i][j] == val:
+                dfs(grid, i, j, val)
+                count += 1
+    return count
+
+# ------
 
 def seed_everything(seed=20211201):
     """
@@ -454,15 +488,26 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         tensorboard.add_text('Bottleneck Architecture', str(model.encoder.mean))
         tensorboard.add_text('Decoder Architecture', str(model.decoder.model))
         tensorboard.add_text('Hyperparameters', str(args))
-        tensorboard.add_images('train_samples', flip_bits(resize(example_data_train)), dataformats='NCHW')
+        if train_data.dataset_metadata['data_type'] == 'grid':
+            example_samples_train = grid_to_gridworld(example_data_train, layout_only=True)
+        elif train_data.dataset_metadata['data_type'] == 'gridworld':
+            example_samples_train = example_data_train
+        else:
+            raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
+        tensorboard.add_images('train_samples', flip_bits(resize(example_samples_train)), dataformats='NCHW')
         tensorboard.add_graph(model, example_data_train)
     if test_data is not None:
         test_loader = create_dataloader(test_data, args)
         example_data_test, example_targets_test = next(iter(test_loader))
         target_metadata_test = example_targets_test.tolist()  # TODO: change depending on dataset
         if tensorboard is not None:
-            img_grid = torchvision.utils.make_grid(flip_bits(example_data_test))
-            tensorboard.add_images('test_samples', flip_bits(resize(example_data_test)), dataformats='NCHW')
+            if train_data.dataset_metadata['data_type'] == 'grid':
+                example_samples_test = grid_to_gridworld(example_data_test, layout_only=True)
+            elif train_data.dataset_metadata['data_type'] == 'gridworld':
+                example_samples_test = example_data_test
+            else:
+                raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
+            tensorboard.add_images('test_samples', flip_bits(resize(example_samples_test)), dataformats='NCHW')
 
     train_epochs = []
     train_elbos = []
@@ -565,11 +610,23 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                 # latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets, device=args.device)
                 # tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ train data', latent_space_vis, global_step=epoch)
 
-                tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(example_data)),
+                if train_data.dataset_metadata['data_type'] == 'grid':
+                    example_samples = grid_to_gridworld(example_data, layout_only=True)
+                elif train_data.dataset_metadata['data_type'] == 'gridworld':
+                    example_samples = example_data
+                else:
+                    raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
+                tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(example_samples)),
                                           tag='train_data_encoded_samples', global_step=epoch)
 
                 logits = model.decoder(mean)
-                decoded_samples = model.decoder.param_b(logits)
+                decoded_data = model.decoder.param_b(logits)
+                if train_data.dataset_metadata['data_type'] == 'grid':
+                    decoded_samples = grid_to_gridworld(decoded_data, layout_only=True)
+                elif train_data.dataset_metadata['data_type'] == 'gridworld':
+                    decoded_samples = decoded_data
+                else:
+                    raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
                 tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(decoded_samples)),
                                           tag='train_data_decoded_samples', global_step=epoch)
 
@@ -592,12 +649,20 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                     # tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ test data', latent_space_vis,
                     #                        global_step=epoch)
 
-                    tensorboard.add_embedding(mean, metadata=target_metadata,
-                                              label_img=flip_bits(resize(example_data)),
-                                              tag='test_data_encoded_samples', global_step=epoch)
-
                     logits = model.decoder(mean)
-                    decoded_samples = model.decoder.param_b(logits)
+                    decoded_data = model.decoder.param_b(logits)
+                    if train_data.dataset_metadata['data_type'] == 'grid':
+                        example_samples = grid_to_gridworld(example_data, layout_only=True)
+                        decoded_samples = grid_to_gridworld(decoded_data, layout_only=True)
+                    elif train_data.dataset_metadata['data_type'] == 'gridworld':
+                        example_samples = example_data
+                        decoded_samples = decoded_data
+                    else:
+                        raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
+
+                    tensorboard.add_embedding(mean, metadata=target_metadata,
+                                              label_img=flip_bits(resize(example_samples)),
+                                              tag='test_data_encoded_samples', global_step=epoch)
                     tensorboard.add_embedding(mean, metadata=target_metadata,
                                               label_img=flip_bits(resize(decoded_samples)),
                                               tag='test_data_decoded_samples', global_step=epoch)
@@ -620,7 +685,13 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
     if tensorboard is not None:
         Z = torch.randn(1024, *model.decoder.bottleneck.input_size).to(args.device) #M, B, D
         logits = model.decoder(Z)
-        generated_samples = model.decoder.param_b(logits)
+        generated_data = model.decoder.param_b(logits)
+        if train_data.dataset_metadata['data_type'] == 'grid':
+            generated_samples = grid_to_gridworld(generated_data, layout_only=True)
+        elif train_data.dataset_metadata['data_type'] == 'gridworld':
+            generated_samples = generated_data
+        else:
+            raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
         tensorboard.add_embedding(Z,
                                   label_img=flip_bits(resize(generated_samples)),
                                   tag='Generated_samples_from_prior', global_step=0)
@@ -632,8 +703,16 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
 
         mean, logvar = model.encoder(example_data_train)
         logits = model.decoder(mean)
-        decoded_samples = model.decoder.param_b(logits)
-        tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(example_data)),
+        decoded_data = model.decoder.param_b(logits)
+        if train_data.dataset_metadata['data_type'] == 'grid':
+            example_samples = grid_to_gridworld(example_data, layout_only=True)
+            decoded_samples = grid_to_gridworld(decoded_data, layout_only=True)
+        elif train_data.dataset_metadata['data_type'] == 'gridworld':
+            example_samples = example_data
+            decoded_samples = decoded_data
+        else:
+            raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
+        tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(example_samples)),
                                   tag='train_data_encoded_samples', global_step=0)
         tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(decoded_samples)),
                                   tag='train_data_decoded_samples', global_step=0)
@@ -648,10 +727,19 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
 
             mean, logvar = model.encoder(example_data)
             logits = model.decoder(mean)
-            decoded_samples = model.decoder.param_b(logits)
+            decoded_data = model.decoder.param_b(logits)
+
+            if train_data.dataset_metadata['data_type'] == 'grid':
+                example_samples = grid_to_gridworld(example_data, layout_only=True)
+                decoded_samples = grid_to_gridworld(decoded_data, layout_only=True)
+            elif train_data.dataset_metadata['data_type'] == 'gridworld':
+                example_samples = example_data
+                decoded_samples = decoded_data
+            else:
+                raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
 
             tensorboard.add_embedding(mean, metadata=target_metadata,
-                                      label_img=flip_bits(resize(example_data)),
+                                      label_img=flip_bits(resize(example_samples)),
                                       tag='test_data_encoded_samples', global_step=0)
             tensorboard.add_embedding(mean, metadata=target_metadata,
                                       label_img=flip_bits(resize(decoded_samples)),
