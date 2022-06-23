@@ -15,31 +15,49 @@ from data_loaders import Maze_Dataset
 from util import *
 from models.VAE import *
 
-run_name = 'test'#'multiroom10000x27_6cnn_z12_b64e1000' #CHANGE
+#Select the directory using this
+dataset_size = 20000
+task_structures = {'maze'} #{'maze', 'rooms_unstructured_layout'}
+data_type = 'grid'
+data_dim = 27
+
 use_gpu = True
-plot_every = 100
+plot_every = 25
 batch_size = 64
-epochs = 2
+epochs = 250
+arch = '6cnn'
+latent_dim = 12
+
+task_structures = '-'.join(task_structures)
+dataset_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}"
+run_name = f"{dataset_directory}_arch={arch}-z={latent_dim}_b={batch_size}-e={epochs}"# 'test'#'multiroom10000x27_6cnn_z12_b64e1000' #CHANGE
 
 writer = SummaryWriter('runs/' + run_name)
 base_dir = str(Path(__file__).resolve().parent)
-dataset_dir = base_dir + '/datasets/'
-cifar_dir = dataset_dir + 'cifar10_data'
-maze_dir = dataset_dir + 'multi_room10000x27'#'multi_room128x27'#'only_grid_128x27'
-mnist_dir = dataset_dir #+ 'MNIST'
+datasets_dir = base_dir + '/datasets/'
+
+cifar_dir = datasets_dir + 'cifar10_data'
+mnist_dir = datasets_dir #+ 'MNIST'
+
+nav_dir = datasets_dir + dataset_directory
+
+if data_type == 'grid':
+    layout_channels = (0,1)
+elif data_type == 'gridworld':
+    layout_channels = 0
 
 # #Uncomment
 train_data = Maze_Dataset(
-          maze_dir, train=True,
+          nav_dir, train=True,
           transform = transforms.Compose([
-              SelectChannelsTransform(0),
+              SelectChannelsTransform(*layout_channels),
               transforms.ToTensor(),
           ]))
 
 test_data = Maze_Dataset(
-          maze_dir, train=False,
+          nav_dir, train=False,
           transform = transforms.Compose([
-              SelectChannelsTransform(0),
+              SelectChannelsTransform(*layout_channels),
               transforms.ToTensor(),
           ]))
 
@@ -201,7 +219,26 @@ args_cnn_fc = ['--dec_layer_dims', '12', '1024', '128,13,13', '64,27,27', '32,27
              '--learning_rate', '1e-4',
              '--cuda']
 
-args_dist_b = parser.parse_args(args_cnn_fc)# CHANGE
+args_grid_cnn_fc = ['--dec_layer_dims', '12', '1024', '256,3,3', '64,7,7', '16,13,13', '2,13,13',
+            '--dec_architecture', 'dConv',
+            '--dec_kernel_size', '3',
+             '--enc_architecture', 'CNN',
+             '--enc_layer_dims', '2,13,13', '16,13,13', '64,7,7', '64,7,7', '256,3,3', '2048,1,1', '1024', '1024', '128', '12',
+             '--enc_kernel_size', '3',
+             '--gradient_type', 'pathwise',
+             '--num_variational_samples', '1',
+             '--data_distribution', 'Bernoulli',
+             '--epochs', str(epochs),
+             '--learning_rate', '1e-4',
+             '--cuda']
+
+if arch == '6cnn':
+    if data_type == 'gridworld':
+        args = args_cnn_fc# CHANGE
+    elif data_type == 'grid':
+        args = args_grid_cnn_fc
+
+args_dist_b = parser.parse_args(args)# CHANGE
 args_dist_b.batch_size = batch_size
 #args_dist_b.seed = 10111201
 
