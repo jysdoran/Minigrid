@@ -285,10 +285,7 @@ class Encoder(nn.Module):
 
     @staticmethod
     def add_model_args(parser):
-        """Here we define the arguments for our encoder model."""
-        parser.add_argument('--enc_architecture', type=str,
-                            choices=['FC', 'CNN'],
-                            help='Layer Architecture of Encoder Model')
+
 
         return parser
 
@@ -361,21 +358,20 @@ class FCEncoder(Encoder):
 
     @staticmethod
     def add_extra_args(parser):
-        parser.add_argument('--enc_layer_dims', type=int, nargs='+',
-                            help='Encoder layer dimensions.')
+
         return parser
 
 
 class CNNEncoder(Encoder):
 
     def __init__(self, hparams):
-        self.kernel_sizes = hparams.enc_kernel_size[0] #TODO: handle lists of ints too
         super().__init__(hparams)
 
     def create_model(self, dims):
         cnn_layer_inds = [len(dim)==3 for dim in dims]
         cnn_layer_end = cnn_layer_inds.index(False)
-        self.cnn_net = CNN_ReLU_Network(dims[:cnn_layer_end], kernel_sizes=self.kernel_sizes, output_activation=nn.ReLU)
+        self.cnn_net = CNN_Factory(dims[:cnn_layer_end], self.hparams, output_activation=nn.ReLU)
+        #self.cnn_net = CNN_ReLU_Network(dims[:cnn_layer_end], kernel_sizes=self.kernel_sizes, output_activation=nn.ReLU)
         self.flatten_layer = nn.Flatten()
         self.lin_layer = FC_ReLU_Network(dims[cnn_layer_end-1:], output_activation=nn.ReLU)
 
@@ -411,10 +407,7 @@ class CNNEncoder(Encoder):
     @staticmethod
     def add_extra_args(parser):
         """Here we define the arguments for our encoder model."""
-        parser.add_argument('--enc_layer_dims', type=layer_dim, nargs='+',
-                            help='Encoder layer dimensions.')
-        parser.add_argument('--enc_kernel_size', type=int, nargs='+',
-                            help='Encoder Kernel size.')
+        #TODO: this is getting ridiculous, just add everything at the source
         return parser
 
 
@@ -434,10 +427,7 @@ class Decoder(nn.Module):
 
     @staticmethod
     def add_model_args(parser):
-        """Here we define the arguments for our decoder model."""
-        parser.add_argument('--dec_architecture', type=str,
-                            choices=['FC', 'dConv'],
-                            help='Layer Architecture of Decoder Model')
+
 
         return parser
 
@@ -563,8 +553,7 @@ class FCDecoder(Decoder):
 
     @staticmethod
     def add_extra_args(parser):
-        parser.add_argument('--dec_layer_dims', type=int, nargs='+',
-                            help='Decoder layer dimensions.')
+
         return parser
 
     def forward(self, Z):
@@ -652,11 +641,7 @@ class dConvDecoder(Decoder):
 
     @staticmethod
     def add_extra_args(parser):
-        """Here we define the arguments for our decoder model."""
-        parser.add_argument('--dec_layer_dims', type=layer_dim, nargs='+',
-                            help='Decoder layer dimensions.')
-        parser.add_argument('--dec_kernel_size', type=int, nargs='+',
-                            help='Decoder Kernel size.')
+
         return parser
 
 
@@ -680,22 +665,13 @@ class VAE(nn.Module):
             self.decoder = FCDecoder(hparams)
         elif self.hparams.dec_architecture == 'dConv':
             self.decoder = dConvDecoder(hparams)
+
+    #TODO remove
     @staticmethod
     def add_model_args(parser):
         """Here we define the arguments for our decoder model."""
         parser = Encoder.add_model_args(parser)
         parser = Decoder.add_model_args(parser)
-
-        parser.add_argument('--gradient_type', type=str,
-                            choices=['pathwise', 'score'],
-                            help='Variational model gradient estimation method.')
-        parser.add_argument('--num_variational_samples',
-                            type=int, default=1,
-                            help=('The number of samples from the variational '
-                                  'distribution to approximate the expectation.'))
-        parser.add_argument('--data_distribution',
-                            type=str, choices=['Bernoulli', 'ContinuousBernoulli'],
-                            help='The data distribution family of the Decoder.')
 
         return parser
 

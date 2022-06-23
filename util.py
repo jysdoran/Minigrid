@@ -358,8 +358,8 @@ def cdist_polar(x1, x2, eps=1e-08):
 
 
 
-def create_base_argparser():
-    parser = argparse.ArgumentParser(description='VAE MNIST Example')
+def create_VAE_argparser():
+    parser = argparse.ArgumentParser(description='VAE')
     parser.add_argument('--seed', type=int, default=20211201,
                         help='Random seed for reproducible runs.')
     parser.add_argument('--cuda', action='store_true', default=False,
@@ -372,6 +372,56 @@ def create_base_argparser():
                         help='Learning rate for the Adam optimiser (default: 0.0001)')
     parser.add_argument('--data_dims', type=tuple, default=(1,27,27),
                         help='Input and output data dimensions')
+
+    #VAE specific
+    parser.add_argument('--gradient_type', type=str,
+                        choices=['pathwise', 'score'],
+                        help='Variational model gradient estimation method.')
+    parser.add_argument('--num_variational_samples',
+                        type=int, default=1,
+                        help=('The number of samples from the variational '
+                              'distribution to approximate the expectation.'))
+    parser.add_argument('--data_distribution',
+                        type=str, choices=['Bernoulli', 'ContinuousBernoulli'],
+                        help='The data distribution family of the Decoder.')
+
+    # Decoder
+    """Here we define the arguments for our decoder model."""
+    parser.add_argument('--dec_architecture', type=str,
+                        choices=['FC', 'dConv'],
+                        help='Layer Architecture of Decoder Model')
+    if parser.dec_architecture == 'FC':
+        parser.add_argument('--dec_layer_dims', type=int, nargs='+',
+                            help='Decoder layer dimensions.')
+        """Here we define the arguments for our decoder model."""
+    elif parser.dec_architecture == 'dConv':
+        parser.add_argument('--dec_layer_dims', type=layer_dim, nargs='+',
+                            help='Decoder layer dimensions.')
+    else:
+        raise AttributeError(f'Decoder Architecture {parser.dec_architecture} not recognised')
+    parser.add_argument('--dec_kernel_size', type=int, nargs='+',
+                        help='Decoder Kernel size.')
+
+    #Encoder
+
+    """Here we define the arguments for our encoder model."""
+    parser.add_argument('--enc_architecture', type=str,
+                        choices=['FC', 'CNN'],
+                        help='Layer Architecture of Encoder Model')
+    if parser.enc_architecture == 'FC':
+        parser.add_argument('--enc_layer_dims', type=int, nargs='+',
+                        help='Encoder layer dimensions.')
+    elif parser.enc_architecture == 'CNN':
+        parser.add_argument('--enc_layer_dims', type=layer_dim, nargs='+',
+                        help='Encoder layer dimensions.')
+    else:
+        raise AttributeError(f'Encoder Architecture {parser.enc_architecture} not recognised')
+    #TODO: handle tuples
+    parser.add_argument('--enc_kernel_size', type=int, nargs='+',
+                        help='Encoder Kernel size.')
+
+
+    #Encoder specific
     return parser
 
 

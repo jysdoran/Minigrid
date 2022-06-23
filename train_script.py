@@ -82,7 +82,7 @@ train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=Fal
 
 # VAE setup
 
-parser = create_base_argparser()
+parser = create_VAE_argparser()
 parser = VAE.add_model_args(parser)
 parser = CNNEncoder.add_extra_args(parser)
 parser = dConvDecoder.add_extra_args(parser)
