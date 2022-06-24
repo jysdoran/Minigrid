@@ -359,7 +359,10 @@ def cdist_polar(x1, x2, eps=1e-08):
 
 
 def create_VAE_argparser():
+
     parser = argparse.ArgumentParser(description='VAE')
+
+    # General ML model arguments
     parser.add_argument('--seed', type=int, default=20211201,
                         help='Random seed for reproducible runs.')
     parser.add_argument('--cuda', action='store_true', default=False,
@@ -373,7 +376,7 @@ def create_VAE_argparser():
     parser.add_argument('--data_dims', type=tuple, default=(1,27,27),
                         help='Input and output data dimensions')
 
-    #VAE specific
+    #VAE specific arguments
     parser.add_argument('--gradient_type', type=str,
                         choices=['pathwise', 'score'],
                         help='Variational model gradient estimation method.')
@@ -385,43 +388,35 @@ def create_VAE_argparser():
                         type=str, choices=['Bernoulli', 'ContinuousBernoulli'],
                         help='The data distribution family of the Decoder.')
 
+    # Subparsers: one for each architecture
+    #Architectures [possible at the moment: FC, CNN]
+    subparsers = parser.add_subparsers(dest='architecture')
+    subparsers.required = True  # required since 3.7
+
+    # FC ARCHITECTURE
+    parser_FC = subparsers.add_parser('FC', description='Fully Connected Architecture')
+    #Encoder
+    parser_FC.add_argument('--enc_layer_dims', type=int, nargs='+',
+                           help='Encoder layer dimensions.')
+    #Decoder
+    parser_FC.add_argument('--dec_layer_dims', type=int, nargs='+',
+                        help='Decoder layer dimensions.')
+
+    # CNN ARCHITECTURE
+    # Encoder
+    parser_CNN = subparsers.add_parser('CNN', description='CNN Architecture')
+    parser_CNN.add_argument('--enc_layer_dims', type=layer_dim, nargs='+',
+                            help='Encoder layer dimensions.')
+    #TODO: handle tuples
+    parser_CNN.add_argument('--enc_kernel_size', type=int, nargs='+',
+                        help='Encoder Kernel size.')
     # Decoder
-    """Here we define the arguments for our decoder model."""
-    parser.add_argument('--dec_architecture', type=str,
-                        choices=['FC', 'dConv'],
-                        help='Layer Architecture of Decoder Model')
-    if parser.dec_architecture == 'FC':
-        parser.add_argument('--dec_layer_dims', type=int, nargs='+',
-                            help='Decoder layer dimensions.')
-        """Here we define the arguments for our decoder model."""
-    elif parser.dec_architecture == 'dConv':
-        parser.add_argument('--dec_layer_dims', type=layer_dim, nargs='+',
-                            help='Decoder layer dimensions.')
-    else:
-        raise AttributeError(f'Decoder Architecture {parser.dec_architecture} not recognised')
-    parser.add_argument('--dec_kernel_size', type=int, nargs='+',
+    parser_CNN.add_argument('--dec_layer_dims', type=layer_dim, nargs='+',
+                        help='Decoder layer dimensions.')
+    #TODO: handle tuples
+    parser_CNN.add_argument('--dec_kernel_size', type=int, nargs='+',
                         help='Decoder Kernel size.')
 
-    #Encoder
-
-    """Here we define the arguments for our encoder model."""
-    parser.add_argument('--enc_architecture', type=str,
-                        choices=['FC', 'CNN'],
-                        help='Layer Architecture of Encoder Model')
-    if parser.enc_architecture == 'FC':
-        parser.add_argument('--enc_layer_dims', type=int, nargs='+',
-                        help='Encoder layer dimensions.')
-    elif parser.enc_architecture == 'CNN':
-        parser.add_argument('--enc_layer_dims', type=layer_dim, nargs='+',
-                        help='Encoder layer dimensions.')
-    else:
-        raise AttributeError(f'Encoder Architecture {parser.enc_architecture} not recognised')
-    #TODO: handle tuples
-    parser.add_argument('--enc_kernel_size', type=int, nargs='+',
-                        help='Encoder Kernel size.')
-
-
-    #Encoder specific
     return parser
 
 

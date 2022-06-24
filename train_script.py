@@ -21,7 +21,7 @@ task_structures = {'maze'} #{'maze', 'rooms_unstructured_layout'}
 data_type = 'grid'
 data_dim = 27
 
-use_gpu = True
+use_gpu = False
 plot_every = 25
 batch_size = 64
 epochs = 250
@@ -92,8 +92,6 @@ parser.print_help()
 data_dim = train_data[0][0].numel()
 
 args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
-            '--dec_architecture', 'FC',
-             '--enc_architecture', 'FC',
              '--enc_layer_dims', f'{data_dim}', '128', '32', '2',
              '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
@@ -206,31 +204,30 @@ args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
 
 
 #Enc: 288 + 18432 + 36864 + 36864 + 73728 + 73728 + 6.4M+ 1M + 1M + 131k + 131k+ 1k ~ 9M
-args_cnn_fc = ['--dec_layer_dims', '12', '1024', '128,13,13', '64,27,27', '32,27,27', '1,27,27',
-            '--dec_architecture', 'dConv',
-            '--dec_kernel_size', '3',
-             '--enc_architecture', 'CNN',
-             '--enc_layer_dims', '1,27,27', '32,27,27', '64,14,14', '64,14,14', '128,7,7', '128,7,7', '1024', '1024', '128', '12',
-             '--enc_kernel_size', '3',
-             '--gradient_type', 'pathwise',
-             '--num_variational_samples', '1',
-             '--data_distribution', 'Bernoulli',
-             '--epochs', str(epochs),
-             '--learning_rate', '1e-4',
-             '--cuda']
+args_cnn_fc = ['CNN',
+                '--dec_layer_dims', '12', '1024', '128,13,13', '64,27,27', '32,27,27', '1,27,27',
+                '--dec_kernel_size', '3',
+                 '--enc_layer_dims', '1,27,27', '32,27,27', '64,14,14', '64,14,14', '128,7,7', '128,7,7', '1024', '1024', '128', '12',
+                 '--enc_kernel_size', '3',
+                 '--gradient_type', 'pathwise',
+                 '--num_variational_samples', '1',
+                 '--data_distribution', 'Bernoulli',
+                 '--epochs', str(epochs),
+                 '--learning_rate', '1e-4',
+                 '--cuda']
 
-args_grid_cnn_fc = ['--dec_layer_dims', '12', '1024', '256,3,3', '64,7,7', '16,13,13', '2,13,13',
-            '--dec_architecture', 'dConv',
-            '--dec_kernel_size', '3',
-             '--enc_architecture', 'CNN',
-             '--enc_layer_dims', '2,13,13', '16,13,13', '64,7,7', '64,7,7', '256,3,3', '2048,1,1', '1024', '1024', '128', '12',
-             '--enc_kernel_size', '3',
-             '--gradient_type', 'pathwise',
-             '--num_variational_samples', '1',
-             '--data_distribution', 'Bernoulli',
-             '--epochs', str(epochs),
-             '--learning_rate', '1e-4',
-             '--cuda']
+args_grid_cnn_fc = ['--gradient_type', 'pathwise',
+                    '--num_variational_samples', '1',
+                    '--data_distribution', 'Bernoulli',
+                    '--epochs', str(epochs),
+                    '--learning_rate', '1e-4',
+                    '--cuda',
+                    'CNN',
+                    '--dec_layer_dims', '12', '1024', '256,3,3', '64,7,7', '16,13,13', '2,13,13',
+                    '--dec_kernel_size', '3',
+                    '--enc_layer_dims', '2,13,13', '16,13,13', '64,7,7', '64,7,7', '256,3,3', '2048,1,1', '1024',
+                    '1024', '128', '12',
+                    '--enc_kernel_size', '3',]
 
 if arch == '6cnn':
     if data_type == 'gridworld':
@@ -238,31 +235,31 @@ if arch == '6cnn':
     elif data_type == 'grid':
         args = args_grid_cnn_fc
 
-args_dist_b = parser.parse_args(args)# CHANGE
-args_dist_b.batch_size = batch_size
-#args_dist_b.seed = 10111201
+args = parser.parse_args(args)# CHANGE
+args.batch_size = batch_size
+#args.seed = 10111201
 
 if use_gpu == True:
-    args_dist_b.cuda = args_dist_b.cuda and torch.cuda.is_available()
+    args.cuda = args.cuda and torch.cuda.is_available()
 else:
-    args_dist_b.cuda = False
-args_dist_b.device = torch.device("cuda" if args_dist_b.cuda else "cpu")
+    args.cuda = False
+args.device = torch.device("cuda" if args.cuda else "cpu")
 
 # Seed all random number generators for reproducibility of the runs
-seed_everything(args_dist_b.seed)
+seed_everything(args.seed)
 
 # Initialise the model and the Adam (SGD) optimiser
-model_dist_b = VAE(args_dist_b).to(args_dist_b.device)
-optimizer_dist_b = optim.Adam(model_dist_b.parameters(), lr=args_dist_b.learning_rate)
+model = VAE(args).to(args.device)
+optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 # sys.exit()
 
-model_dist_b, optimizer_dist_b, model_state_best_training_elbo, optim_state_best_training_elbo, early_t = fit_model(model_dist_b, optimizer_dist_b,
-                                                      train_data, args_dist_b,
+model, optimizer, model_state_best_training_elbo, optim_state_best_training_elbo, early_t = fit_model(model, optimizer,
+                                                      train_data, args,
                                                       test_data=test_data, latent_eval_freq=plot_every, tensorboard=writer)
 if early_t: run_name = run_name + '_early_t'
 save_file = 'checkpoints/' + run_name + '.pt'
 print(f"Saving to {save_file}")
-save_state(args_dist_b, model_dist_b, optimizer_dist_b, save_file, [model_state_best_training_elbo], [optim_state_best_training_elbo])
+save_state(args, model, optimizer, save_file, [model_state_best_training_elbo], [optim_state_best_training_elbo])
 
 writer.close()
 
