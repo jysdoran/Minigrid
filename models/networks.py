@@ -82,16 +82,22 @@ class CNN_Factory(Network):
     :attr layers (torch.nn.Module): neural network as sequential network of multiple layers
     """
 
-    def __new__(cls, dims, parser):
+    def __new__(cls, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], strides: Union[Iterable[int], int],
+            arch: str = 'CNN', output_activation: nn.Module = None, same_padding: bool = False):
 
-        if batch_meta['task_structure'] == 'maze':
-            instance = super().__new__(Same_Strided_CNN_ReLU_Network)
-        elif batch_meta['task_structure'] == 'rooms_unstructured_layout':
-            instance = super().__new__(CNN_ReLU_Network)
+        if arch is 'CNN':
+            if same_padding:
+                instance = super().__new__(Same_CNN_ReLU_Network)
+            else:
+                instance = super().__new__(CNN_ReLU_Network)
+        elif arch is 'dConv':
+            instance = super().__new__(dConv_ReLU_Network)
+        elif arch is 'CGNN':
+            raise NotImplementedError
         else:
-            raise KeyError(f"CNN network struture was not recognised. Args: {args}")
+            raise KeyError(f"Architecture {arch} not recognised by CNN Factory.")
 
-        instance.__init__(batch_meta, dataset_meta)
+        instance.__init__(dims=dims, kernel_sizes=kernel_sizes, strides=strides, output_activation=output_activation)
 
         return instance
 
@@ -111,7 +117,8 @@ class CNN_ReLU_Network(Network):
     with Conv2DSame: solve for p such that img_dim_out = img_dim_in
     """
 
-    def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], output_activation: nn.Module = None):
+    def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], strides: Union[Iterable[int], int],
+                 output_activation: nn.Module = None):
 
         if not isinstance(kernel_sizes, int):
             assert len(kernel_sizes) == len(dims) - 1
@@ -147,11 +154,10 @@ class CNN_ReLU_Network(Network):
             mods.append(output_activation())
         return nn.Sequential(*mods)
 
-class Same_Strided_CNN_ReLU_Network(Network):
+class Same_CNN_ReLU_Network(Network):
 
     """CNN neural network Pytorch implementation with Keras style architecture to determine padding (See Conv2DSame
-    class). In addition, this implementation automatically computes strides if input and output image dimensions are
-    different.
+    class).
 
     :attr input_size (int): dimensionality of input tensors
     :attr out_size (int): dimensionality of output tensors
@@ -161,7 +167,8 @@ class Same_Strided_CNN_ReLU_Network(Network):
     with Conv2DSame: solve for p such that img_dim_out = img_dim_in
     """
 
-    def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], output_activation: nn.Module = None):
+    def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], strides: Union[Iterable[int], int],
+                 output_activation: nn.Module = None):
 
         if not isinstance(kernel_sizes, int):
             assert len(kernel_sizes) == len(dims) - 1

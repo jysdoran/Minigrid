@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from util import BinaryTransform, layer_dim
-from models.networks import FC_ReLU_Network, CNN_ReLU_Network, dConv_ReLU_Network
+from models.networks import FC_ReLU_Network, CNN_Factory
 from models.layers import Reshape
 
 from typing import Iterable, Tuple
@@ -283,16 +283,6 @@ class Encoder(nn.Module):
     def create_model(self, dims: Iterable[int]):
         raise NotImplementedError
 
-    @staticmethod
-    def add_model_args(parser):
-
-
-        return parser
-
-    @staticmethod
-    def add_extra_args(parser):
-        raise NotImplementedError
-
     def forward(self, X):
         """
         Predicts the parameters of the variational distribution
@@ -356,11 +346,6 @@ class FCEncoder(Encoder):
 
         return mean, logvar
 
-    @staticmethod
-    def add_extra_args(parser):
-
-        return parser
-
 
 class CNNEncoder(Encoder):
 
@@ -370,7 +355,8 @@ class CNNEncoder(Encoder):
     def create_model(self, dims):
         cnn_layer_inds = [len(dim)==3 for dim in dims]
         cnn_layer_end = cnn_layer_inds.index(False)
-        self.cnn_net = CNN_Factory(dims[:cnn_layer_end], self.hparams, output_activation=nn.ReLU)
+        self.cnn_net = CNN_Factory(dims[:cnn_layer_end], self.hparams.enc_kernel_size, self.hparams.enc_strides,
+                                   output_activation=nn.ReLU, arch='CNN', same_padding=self.hparams.same_padding)
         #self.cnn_net = CNN_ReLU_Network(dims[:cnn_layer_end], kernel_sizes=self.kernel_sizes, output_activation=nn.ReLU)
         self.flatten_layer = nn.Flatten()
         self.lin_layer = FC_ReLU_Network(dims[cnn_layer_end-1:], output_activation=nn.ReLU)
@@ -404,12 +390,6 @@ class CNNEncoder(Encoder):
 
         return mean, logvar
 
-    @staticmethod
-    def add_extra_args(parser):
-        """Here we define the arguments for our encoder model."""
-        #TODO: this is getting ridiculous, just add everything at the source
-        return parser
-
 
 class Decoder(nn.Module):
     """
@@ -423,16 +403,6 @@ class Decoder(nn.Module):
         self.model = self.create_model(self.hparams.dec_layer_dims)
 
     def create_model(self, dims: Iterable):
-        raise NotImplementedError
-
-    @staticmethod
-    def add_model_args(parser):
-
-
-        return parser
-
-    @staticmethod
-    def add_extra_args(parser):
         raise NotImplementedError
 
     def forward(self, Z):
@@ -551,11 +521,6 @@ class FCDecoder(Decoder):
     def create_model(self, dims: Iterable[int]):
         return nn.ModuleList([FC_ReLU_Network(dims, output_activation=None),])
 
-    @staticmethod
-    def add_extra_args(parser):
-
-        return parser
-
     def forward(self, Z):
         """
         Computes the parameters of the generative distribution p(x | z)
@@ -585,6 +550,7 @@ class dConvDecoder(Decoder):
     def create_model(self, dims):
         fc_layer_inds = [len(dim)==1 for dim in dims]
         fc_layer_end = fc_layer_inds.index(False)
+        #TODO: change, have dims_fc dims_dconv dims_cnn
         cnn_layer_inds = list(np.array([(len(dims[i])==3 and dims[i][1]==dims[i+1][1]) for i in range(0,len(dims)-1)]))
         try:
             cnn_layer_start = cnn_layer_inds.index(True)
@@ -595,12 +561,16 @@ class dConvDecoder(Decoder):
         if cnn_layer_start == fc_layer_end:
             self.dconv_layer = None
         else:
-            self.dconv_layer = dConv_ReLU_Network(dims[fc_layer_end:cnn_layer_start+1], kernel_sizes=self.kernel_sizes, output_activation=nn.ReLU)
+            #TODO check self_padding makes sense
+            self.dconv_layer = CNN_Factory(dims[fc_layer_end:cnn_layer_start+1], kernel_sizes=self.kernel_sizes,
+                                           strides=self.strides, output_activation=nn.ReLU, arch='dConv', same_padding=False)
 
         if cnn_layer_start is None:
             self.conv_layer = None
         else:
-            self.conv_layer = CNN_ReLU_Network(dims[cnn_layer_start:], kernel_sizes=self.kernel_sizes, output_activation=None)
+            # TODO check self_padding makes sense, update dims
+            self.conv_layer = CNN_Factory(dims[cnn_layer_start:], kernel_sizes=self.kernel_sizes,
+                                           strides=self.strides, output_activation=nn.ReLU, arch='CNN', same_padding=False)
 
         model = [self.bottleneck, self.lin2deconv, self.dconv_layer, self.conv_layer]
         model = list(filter(None, model))
@@ -639,11 +609,6 @@ class dConvDecoder(Decoder):
 
         return logits
 
-    @staticmethod
-    def add_extra_args(parser):
-
-        return parser
-
 
 class VAE(nn.Module):
     """
@@ -656,24 +621,14 @@ class VAE(nn.Module):
 
         # Use the encoder and decoder implemented above
         # TODO: check again if best way after implementing the CNN arch. Consider moving into Encoder class.
-        if self.hparams.enc_architecture == 'FC':
+        if self.hparams.architecture == 'FC':
             self.encoder = FCEncoder(hparams)
-        elif self.hparams.enc_architecture == 'CNN':
-            self.encoder = CNNEncoder(hparams)
-
-        if self.hparams.dec_architecture == 'FC':
             self.decoder = FCDecoder(hparams)
-        elif self.hparams.dec_architecture == 'dConv':
+        elif self.hparams.architecture == 'CNN':
+            self.encoder = CNNEncoder(hparams)
             self.decoder = dConvDecoder(hparams)
-
-    #TODO remove
-    @staticmethod
-    def add_model_args(parser):
-        """Here we define the arguments for our decoder model."""
-        parser = Encoder.add_model_args(parser)
-        parser = Decoder.add_model_args(parser)
-
-        return parser
+        else:
+            raise KeyError(f"VAE Architecture argument {self.hparams.architecture} not recognised.")
 
     def forward(self, X):
         """

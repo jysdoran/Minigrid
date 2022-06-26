@@ -403,19 +403,29 @@ def create_VAE_argparser():
                         help='Decoder layer dimensions.')
 
     # CNN ARCHITECTURE
-    # Encoder
     parser_CNN = subparsers.add_parser('CNN', description='CNN Architecture')
+
+    parser_CNN.add_argument('--same_padding', action='store_true', default=False,
+                        help='Uses padding on input and output CNN layers to match the specified dimensions (default: False).')
+
+    # Encoder
     parser_CNN.add_argument('--enc_layer_dims', type=layer_dim, nargs='+',
                             help='Encoder layer dimensions.')
     #TODO: handle tuples
     parser_CNN.add_argument('--enc_kernel_size', type=int, nargs='+',
                         help='Encoder Kernel size.')
+    #TODO: handle tuples
+    parser_CNN.add_argument('--enc_strides', type=int, nargs='+',
+                        help='Encoder strides.')
     # Decoder
     parser_CNN.add_argument('--dec_layer_dims', type=layer_dim, nargs='+',
                         help='Decoder layer dimensions.')
     #TODO: handle tuples
     parser_CNN.add_argument('--dec_kernel_size', type=int, nargs='+',
                         help='Decoder Kernel size.')
+    #TODO: handle tuples
+    parser_CNN.add_argument('--dec_strides', type=int, nargs='+',
+                        help='Decoder Kernel strides.')
 
     return parser
 

@@ -83,22 +83,20 @@ train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=Fal
 # VAE setup
 
 parser = create_VAE_argparser()
-parser = VAE.add_model_args(parser)
-parser = CNNEncoder.add_extra_args(parser)
-parser = dConvDecoder.add_extra_args(parser)
 parser.print_help()
 
 # Specify the hyperpameter choices
 data_dim = train_data[0][0].numel()
 
-args_fc = ['--dec_layer_dims', '2', '130', f'{data_dim}',
-             '--enc_layer_dims', f'{data_dim}', '128', '32', '2',
-             '--gradient_type', 'pathwise',
+args_fc = [  '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
              '--data_distribution', 'Bernoulli',
              '--epochs', str(epochs),
              '--learning_rate', '1e-4',
-             '--cuda']
+             '--cuda',
+             'FC',
+             '--dec_layer_dims', '2', '130', f'{data_dim}',
+             '--enc_layer_dims', f'{data_dim}', '128', '32', '2',]
 
 # args_cnn_mnist = ['--dec_layer_dims', '2', '32', '64,13,13', '32,28,28', '1,28,28',
 #             '--dec_architecture', 'dConv',
