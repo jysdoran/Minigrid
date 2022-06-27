@@ -1,7 +1,8 @@
 import torch
+import argparse
 import torch.nn as nn
 import torch.optim as optim
-from util import BinaryTransform, layer_dim
+from util import BinaryTransform
 from models.networks import FC_ReLU_Network, CNN_Factory
 from models.layers import Reshape
 
@@ -628,7 +629,7 @@ class VAE(nn.Module):
             self.encoder = CNNEncoder(hparams)
             self.decoder = dConvDecoder(hparams)
         else:
-            raise KeyError(f"VAE Architecture argument {self.hparams.architecture} not recognised.")
+            raise argparse.ArgumentError(f"VAE Architecture argument {self.hparams.architecture} not recognised.")
 
     def forward(self, X):
         """

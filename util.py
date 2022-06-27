@@ -409,22 +409,18 @@ def create_VAE_argparser():
                         help='Uses padding on input and output CNN layers to match the specified dimensions (default: False).')
 
     # Encoder
-    parser_CNN.add_argument('--enc_layer_dims', type=layer_dim, nargs='+',
+    parser_CNN.add_argument('--enc_layer_dims', type=tuple_string, nargs='+',
                             help='Encoder layer dimensions.')
-    #TODO: handle tuples
-    parser_CNN.add_argument('--enc_kernel_size', type=int, nargs='+',
+    parser_CNN.add_argument('--enc_kernel_size', type=tuple_string, nargs='+',
                         help='Encoder Kernel size.')
-    #TODO: handle tuples
-    parser_CNN.add_argument('--enc_strides', type=int, nargs='+',
+    parser_CNN.add_argument('--enc_strides', type=tuple_string, nargs='+',
                         help='Encoder strides.')
     # Decoder
-    parser_CNN.add_argument('--dec_layer_dims', type=layer_dim, nargs='+',
+    parser_CNN.add_argument('--dec_layer_dims', type=tuple_string, nargs='+',
                         help='Decoder layer dimensions.')
-    #TODO: handle tuples
-    parser_CNN.add_argument('--dec_kernel_size', type=int, nargs='+',
+    parser_CNN.add_argument('--dec_kernel_size', type=tuple_string, nargs='+',
                         help='Decoder Kernel size.')
-    #TODO: handle tuples
-    parser_CNN.add_argument('--dec_strides', type=int, nargs='+',
+    parser_CNN.add_argument('--dec_strides', type=tuple_string, nargs='+',
                         help='Decoder Kernel strides.')
 
     return parser
@@ -496,18 +492,22 @@ class WrappedDataLoader:
     def dataset(self):
         return self.dl.dataset
 
-
-### Kind of VAE specific:
-
-def layer_dim(s):
+def tuple_string(s):
     try:
         x, y, z = map(int, s.split(','))
         return x, y, z
     except:
         try:
-            return (int(s),)
+            x, y = map(int, s.split(','))
+            return x, y
         except:
-            raise argparse.ArgumentTypeError("Each tuple must be x,y,z")
+            try:
+                return (int(s),)
+            except:
+                raise argparse.ArgumentTypeError("Each tuple must be 'x,y,z', 'x,y' or 'x'")
+
+
+### Kind of VAE specific:
 
 def per_datapoint_elbo_to_avgelbo_and_loss(elbos):
     # Compute the average ELBO over the mini-batch

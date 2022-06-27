@@ -85,17 +85,35 @@ class CNN_Factory(Network):
     def __new__(cls, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], strides: Union[Iterable[int], int],
             arch: str = 'CNN', output_activation: nn.Module = None, same_padding: bool = False):
 
-        if arch is 'CNN':
+        if arch == 'CNN':
             if same_padding:
                 instance = super().__new__(Same_CNN_ReLU_Network)
             else:
                 instance = super().__new__(CNN_ReLU_Network)
-        elif arch is 'dConv':
+        elif arch == 'dConv':
             instance = super().__new__(dConv_ReLU_Network)
-        elif arch is 'CGNN':
+        elif arch == 'CGNN':
             raise NotImplementedError
         else:
             raise KeyError(f"Architecture {arch} not recognised by CNN Factory.")
+
+        if isinstance(kernel_sizes, int):
+            pass
+        elif not isinstance(kernel_sizes, np.ndarray):
+            assert len(kernel_sizes) == len(dims) - 1, f"Size mismatch between the kernels and layers. Expected number" \
+                                                       f" of kernels: {len(dims) - 1}, got: {len(kernel_sizes)}"
+            kernel_sizes = np.array(kernel_sizes).astype(int)
+        else:
+            kernel_sizes = kernel_sizes.astype(int)
+
+        if isinstance(strides, int):
+            pass
+        elif not isinstance(strides, np.ndarray):
+            assert len(strides) == len(dims) - 1, f"Size mismatch between the strides and layers. Expected number" \
+                                                  f" of kernels: {len(dims) - 1}, got: {len(strides)}"
+            strides = np.array(strides).astype(int)
+        else:
+            strides = strides.astype(int)
 
         instance.__init__(dims=dims, kernel_sizes=kernel_sizes, strides=strides, output_activation=output_activation)
 
@@ -112,20 +130,18 @@ class CNN_ReLU_Network(Network):
     :attr input_size (int): dimensionality of input tensors
     :attr out_size (int): dimensionality of output tensors
     :attr layers (torch.nn.Module): neural network as sequential network of multiple layers
-
-    img_dim_out = (img_dim_in + 2*p - dil*(k-1) - 1)/s + 1
-    with Conv2DSame: solve for p such that img_dim_out = img_dim_in
     """
 
     def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], strides: Union[Iterable[int], int],
                  output_activation: nn.Module = None):
-
-        if not isinstance(kernel_sizes, int):
-            assert len(kernel_sizes) == len(dims) - 1
-        self.kernel_sizes = kernel_sizes
+            
         self.channels = np.array(dims)[:, 0]
         self.img_dims = np.array(dims)[:, 1:]
-        self.strides = np.ceil(self.img_dims[0:-1]/self.img_dims[1:]).astype(int)
+        self.kernel_sizes = kernel_sizes
+        self.strides = strides
+        img_out = self.img_dims[1:]
+        img_in = self.img_dims[0:-1]
+        self.padding = (0.5 * (self.strides * (img_out - 1) - img_in + (self.kernel_sizes - 1) + 1)).astype(int)
 
         super().__init__(dims, output_activation)
 
@@ -146,13 +162,18 @@ class CNN_ReLU_Network(Network):
                 kernel_size = self.kernel_sizes
             else:
                 kernel_size = self.kernel_sizes[i]
-            mods.append(Conv2dSame(self.channels[i], self.channels[i+1], kernel_size, self.strides[i]))
+            if isinstance(self.strides, int):
+                stride = self.strides
+            else:
+                stride = self.strides[i]
+            mods.append(nn.Conv2d(self.channels[i], self.channels[i+1], kernel_size, stride, self.padding[i]))
             if i != (len(dims) - 2): #do not append ReLU layer on the last one.
                 mods.append(nn.ReLU())
 
         if output_activation:
             mods.append(output_activation())
         return nn.Sequential(*mods)
+
 
 class Same_CNN_ReLU_Network(Network):
 
@@ -170,12 +191,10 @@ class Same_CNN_ReLU_Network(Network):
     def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], strides: Union[Iterable[int], int],
                  output_activation: nn.Module = None):
 
-        if not isinstance(kernel_sizes, int):
-            assert len(kernel_sizes) == len(dims) - 1
-        self.kernel_sizes = kernel_sizes
         self.channels = np.array(dims)[:, 0]
         self.img_dims = np.array(dims)[:, 1:]
-        self.strides = np.ceil(self.img_dims[0:-1]/self.img_dims[1:]).astype(int)
+        self.kernel_sizes = kernel_sizes
+        self.strides = strides
 
         super().__init__(dims, output_activation)
 
@@ -215,22 +234,20 @@ class dConv_ReLU_Network(Network):
     Dout = (Din−1)×stride−2×padding+dilation×(kernel_size−1) + output_padding + 1
     """
 
-    def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], output_activation: nn.Module = None):
+    def __init__(self, dims: Iterable[int], kernel_sizes: Union[Iterable[int], int], strides: Union[Iterable[int], int],
+                 output_activation: nn.Module = None):
 
-        if not isinstance(kernel_sizes, int):
-            assert len(kernel_sizes) == len(dims) - 1
-        self.kernel_sizes = kernel_sizes
         self.channels = np.array(dims)[:, 0]
         self.img_dims = np.array(dims)[:, 1:]
+        self.kernel_sizes = kernel_sizes
+        self.strides = strides
         img_out = self.img_dims[1:]
         img_in = self.img_dims[0:-1]
-        # check dimensions were correctly specified
-        #assert np.all(np.diff(self.img_dims, axis=0) % (self.kernel_sizes - 1) == 0)
-        self.strides = ((img_out - 1 - (self.kernel_sizes - 1)) / (img_in - 1)).astype(int)
-        self.strides = np.clip(self.strides, 2, None) #Enforce a minimum stride of 2
-        self.padding = (0.5 * (-img_out + (img_in - 1) * self.strides + (self.kernel_sizes - 1) + 1)).astype(int)
-        self.out_padding = (img_out + 2*self.padding - 1 - (img_in - 1) * self.strides - (self.kernel_sizes - 1)).astype(int)
-        # (np.diff(self.img_dims,axis=0)/(self.kernel_sizes - 1)).astype(int)
+        padding = 0.5 * (-img_out + (img_in - 1) * self.strides + (self.kernel_sizes - 1) + 1)
+        self.out_padding = (np.mod(padding, 1) != 0).astype(int) #always 1 or 0, to match desired output size
+        self.padding = np.ceil(padding).astype(int)
+        assert img_out.all() == ((img_in - 1) * self.strides - 2 * self.padding + (self.kernel_sizes - 1) + self.out_padding \
+               + 1).all(), "Failed dimensionality consistency check on dConv network"
 
         super().__init__(dims, output_activation)
 
@@ -251,7 +268,11 @@ class dConv_ReLU_Network(Network):
                 kernel_size = self.kernel_sizes
             else:
                 kernel_size = self.kernel_sizes[i]
-            mods.append(nn.ConvTranspose2d(self.channels[i], self.channels[i+1], kernel_size, self.strides[i],
+            if isinstance(self.strides, int):
+                stride = self.strides
+            else:
+                stride = self.strides[i]
+            mods.append(nn.ConvTranspose2d(self.channels[i], self.channels[i+1], kernel_size, stride,
                                            output_padding=self.out_padding[i], padding=self.padding[i]))
             if i != (len(dims) - 2): #do not append ReLU layer on the last one.
                 mods.append(nn.ReLU())
