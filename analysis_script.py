@@ -18,15 +18,15 @@ from models.VAE import *
 from torch.utils.tensorboard import SummaryWriter
 
 #Select the directory using this
-dataset_size = 20000
-task_structures = {'rooms_unstructured_layout'} #{'maze', 'rooms_unstructured_layout'}
-data_type = 'gridworld'
+dataset_size = 120000
+task_structures = ('rooms_unstructured_layout', 'maze') #{'maze', 'rooms_unstructured_layout'}
+data_type = 'grid'
 data_dim = 27
 
 use_gpu = False
 embedding = False
 batch_size = 64
-epochs = 250
+epochs = 100
 arch = 'fc'
 latent_dim = 12
 
@@ -174,9 +174,9 @@ for model_name in model_names:
             example_data_train, example_targets_train = next(iter(train_loader))
 
             Z_interp, X_interp = latent_interpolation(model=model, minibatch=example_data_train,
-                                                      Z_mean=variational_mean, Z_std=variational_std,
+                                                      Z_mean=variational_mean, Z_std=variational_std, labels=example_targets_train,
                                                       dim_r_threshold=.9, n_interp=16, interpolation_scheme='polar',
-                                                      device=args.device)
+                                                      latent_sampling = True, device=args.device)
             X_interp = X_interp.reshape(X_interp.shape[0] * X_interp.shape[1], *X_interp.shape[2:])
             if train_data.dataset_metadata['data_type'] == 'grid':
                 X_interp_gridworld = grid_to_gridworld(X_interp, layout_only=True)
@@ -203,7 +203,7 @@ for model_name in model_names:
         tensorboard.add_text(f'Fraction of impossible layout from Prior sampling: (Mean, Mean standard error). '
                              f'Number of experiments: {np.size(prior_impossible_f)}', f'{prior_impossible_f.mean()} +/-'
                              f' {prior_impossible_f.std(ddof=1) / np.sqrt(np.size(prior_impossible_f))}')
-        tensorboard.add_text(f'Fraction of impossible layout from Polar interpolation: (Mean, Mean standard error). '
+        tensorboard.add_text(f'Fraction of impossible layout from noisy (1std) Polar interpolation: (Mean, Mean standard error). '
                              f'Number of experiments: {np.size(polar_impossible_f)}', f'{polar_impossible_f.mean()} +/-'
                              f' {polar_impossible_f.std(ddof=1) / np.sqrt(np.size(polar_impossible_f))}')
 
@@ -217,7 +217,7 @@ for model_name in model_names:
 
         img_grid = torchvision.utils.make_grid(flip_bits(resize(X_interp_gridworld)), nrow=Z_interp.shape[-2])
         #TODO store dimensionality of p(z|x) in TB
-        tensorboard.add_image('Interpolated samples, Polar', img_grid)
+        tensorboard.add_image('Interpolated samples (noisy sampling), Polar', img_grid)
 
         if embedding:
             # address bug overwritting projector_config when a new embedding is created

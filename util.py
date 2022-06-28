@@ -180,7 +180,7 @@ def plot_latent_visualisation(model, z_max: Tuple[float, float] = (10,10), z_min
     return fig
 
 def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None, n_interp:int = 4, dim_r_threshold=None, interpolation_scheme:str = 'linear', img_dims: Tuple[int, int, int] = None, figsize: Tuple[int, int] = (10, 10),
-                              labels=None, device='cpu', alpha=0.5, title=None):
+                              labels=None, latent_sampling=False, device='cpu', alpha=0.5, title=None):
 
     assert len(minibatch) % 2 == 0
 
@@ -188,7 +188,11 @@ def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None,
     if Z_std is None: Z_std = 1
 
     model.eval()
-    latents, _ = model.encoder(minibatch)
+    latents, logvar = model.encoder(minibatch)
+
+    if latent_sampling:
+        rand = torch.randn(latents.shape)
+        latents = latents + torch.exp(0.5*logvar) * rand
 
     # remove dimensions with average standard deviation of 1 (e.g. uninformative)
     if dim_r_threshold is not None:
@@ -527,11 +531,11 @@ def per_datapoint_elbo_to_avgelbo_and_loss(elbos):
     return elbo, loss
 
 
-def create_dataloader(data, args):
+def create_dataloader(data, args, shuffle=True):
     kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
 
     data_loader = torch.utils.data.DataLoader(
-        data, batch_size=args.batch_size, shuffle=True, **kwargs)
+        data, batch_size=args.batch_size, shuffle=shuffle, **kwargs)
 
     wrapped_data_loader = WrappedDataLoader(data_loader, ToDeviceTransform(args.device))
 
@@ -542,7 +546,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
     flip_bits = FlipBinaryTransform()
     resize = torchvision.transforms.Resize((100, 100), interpolation=torchvision.transforms.InterpolationMode.NEAREST)
     # Create data loaders
-    train_loader = create_dataloader(train_data, args)
+    train_loader = create_dataloader(train_data, args, shuffle=True)
     early_termination = False
     example_data_train, example_targets_train = next(iter(train_loader)) #TODO: make deterministic accross runs
     target_metadata_train = example_targets_train.tolist() #TODO: change depending on dataset
@@ -564,7 +568,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         tensorboard.add_images('train_samples', flip_bits(resize(example_samples_train)), dataformats='NCHW')
         tensorboard.add_graph(model, example_data_train)
     if test_data is not None:
-        test_loader = create_dataloader(test_data, args)
+        test_loader = create_dataloader(test_data, args, shuffle=True)
         example_data_test, example_targets_test = next(iter(test_loader))
         target_metadata_test = example_targets_test.tolist()  # TODO: change depending on dataset
         if tensorboard is not None:

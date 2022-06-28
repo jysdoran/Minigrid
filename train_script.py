@@ -16,14 +16,14 @@ from util import *
 from models.VAE import *
 
 #Select the directory using this
-dataset_size = 20000
-task_structures = {'rooms_unstructured_layout'} #{'maze', 'rooms_unstructured_layout'}
-data_type = 'gridworld'
+dataset_size = 120000
+task_structures = ('rooms_unstructured_layout', 'maze') #{'maze', 'rooms_unstructured_layout'}
+data_type = 'grid'
 data_dim = 27
 
 use_gpu = True
-plot_every = 25
-epochs = 250
+plot_every = 5
+epochs = 100
 batch_size = 64
 arch = 'fc'
 latent_dim = 12
@@ -78,7 +78,7 @@ test_data = Maze_Dataset(
 #         BinaryTransform(0.6),
 #         ]))
 
-train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=False)
+train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
 
 # VAE setup
 
