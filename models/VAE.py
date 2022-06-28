@@ -276,10 +276,18 @@ class Encoder(nn.Module):
 
         # Create separate final layers for each parameter (mean and log-variance)
         # We use log-variance to unconstrain the optimisation of the positive-only variance parameters
-        self.mean = nn.Linear(*enc_layer_dims[-2],
-                              *enc_layer_dims[-1])
-        self.logvar = nn.Linear(*enc_layer_dims[-2],
-                                *enc_layer_dims[-1])
+
+        if isinstance(enc_layer_dims[-2], int):
+            bneck_in = (enc_layer_dims[-2],)
+        else:
+            bneck_in = enc_layer_dims[-2]
+        if isinstance(enc_layer_dims[-1], int):
+            bneck_out = (enc_layer_dims[-1],)
+        else:
+            bneck_out = enc_layer_dims[-1]
+
+        self.mean = nn.Linear(*bneck_in, *bneck_out)
+        self.logvar = nn.Linear(*bneck_in, *bneck_out)
 
     def create_model(self, dims: Iterable[int]):
         raise NotImplementedError
@@ -520,7 +528,9 @@ class FCDecoder(Decoder):
         super().__init__(hparams)
 
     def create_model(self, dims: Iterable[int]):
-        return nn.ModuleList([FC_ReLU_Network(dims, output_activation=None),])
+        self.bottleneck = FC_ReLU_Network(dims[0:2], output_activation=nn.ReLU)
+        self.fc_net = FC_ReLU_Network(dims[1:], output_activation=None)
+        return [self.bottleneck, self.fc_net]
 
     def forward(self, Z):
         """

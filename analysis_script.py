@@ -19,15 +19,15 @@ from torch.utils.tensorboard import SummaryWriter
 
 #Select the directory using this
 dataset_size = 20000
-task_structures = {'maze'} #{'maze', 'rooms_unstructured_layout'}
-data_type = 'grid'
+task_structures = {'rooms_unstructured_layout'} #{'maze', 'rooms_unstructured_layout'}
+data_type = 'gridworld'
 data_dim = 27
 
 use_gpu = False
 embedding = False
 batch_size = 64
 epochs = 250
-arch = '6cnn'
+arch = 'fc'
 latent_dim = 12
 
 task_structures = '-'.join(task_structures)
@@ -60,13 +60,13 @@ model_names = [
 #     'multiroom10000x27_6cnn_z32_b64e2000',
 #    'multiroom10000x27_6cnn_z12_b64e2000',
     run_name,
-    'test',
+#    'test',
 ]
 
 if data_type == 'grid':
     layout_channels = (0,1)
 elif data_type == 'gridworld':
-    layout_channels = 0
+    layout_channels = (0,)
 
 # #Uncomment
 train_data = Maze_Dataset(
@@ -120,6 +120,11 @@ for model_name in model_names:
 
         model.eval()
         model = model.to(args.device)
+        # mean, logvar = model.encoder(example_data_train)
+        # latent_space_vis = plot_latent_visualisation(model, Z_points=mean, device=args.device, convert_from=train_data.dataset_metadata['data_type'])
+        # tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ train data', latent_space_vis)
+        # tensorboard.close()
+        # sys.exit()
 
         # Compute latent space statistics
         # We don't use labels hence discard them with a _
@@ -139,7 +144,11 @@ for model_name in model_names:
         prior_impossible_f = []
         polar_impossible_f = []
         for i in range(5):
-            Z = torch.randn(50, *model.decoder.bottleneck.input_size).to(args.device) #M, B, D
+            if isinstance(model.decoder.bottleneck.input_size, int):
+                latent_dim = (model.decoder.bottleneck.input_size,)
+            else:
+                latent_dim = model.decoder.bottleneck.input_size
+            Z = torch.randn(50, *latent_dim).to(args.device)  # M, B, D
             logits = model.decoder(Z)
             generated_data = model.decoder.param_b(logits)
             if train_data.dataset_metadata['data_type'] == 'grid':
@@ -191,10 +200,12 @@ for model_name in model_names:
 
         prior_impossible_f = np.array(prior_impossible_f)
         polar_impossible_f = np.array(polar_impossible_f)
-        tensorboard.add_text(f'Fraction of impossible layout from Prior sampling: Mean = {prior_impossible_f.mean()}, '
-                             f'Mean standard error = {prior_impossible_f.std(ddof=1) / np.sqrt(np.size(prior_impossible_f))} ', str(np.size(prior_impossible_f)))
-        tensorboard.add_text(f'Fraction of impossible layout from Polar Interpolation: Mean = {polar_impossible_f.mean()}, '
-                             f'Mean standard error = {polar_impossible_f.std(ddof=1) / np.sqrt(np.size(polar_impossible_f))} ', str(np.size(polar_impossible_f)))
+        tensorboard.add_text(f'Fraction of impossible layout from Prior sampling: (Mean, Mean standard error). '
+                             f'Number of experiments: {np.size(prior_impossible_f)}', f'{prior_impossible_f.mean()} +/-'
+                             f' {prior_impossible_f.std(ddof=1) / np.sqrt(np.size(prior_impossible_f))}')
+        tensorboard.add_text(f'Fraction of impossible layout from Polar interpolation: (Mean, Mean standard error). '
+                             f'Number of experiments: {np.size(polar_impossible_f)}', f'{polar_impossible_f.mean()} +/-'
+                             f' {polar_impossible_f.std(ddof=1) / np.sqrt(np.size(polar_impossible_f))}')
 
         # impossible_layouts = np.array(impossible_layouts).reshape(*Z_interp.shape[0:2])
         # ind = [str(i) for i in range(impossible_layouts.shape[-1])]

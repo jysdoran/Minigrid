@@ -18,14 +18,14 @@ from models.VAE import *
 #Select the directory using this
 dataset_size = 20000
 task_structures = {'rooms_unstructured_layout'} #{'maze', 'rooms_unstructured_layout'}
-data_type = 'grid'
+data_type = 'gridworld'
 data_dim = 27
 
 use_gpu = True
 plot_every = 25
-batch_size = 64
 epochs = 250
-arch = '5cnn'
+batch_size = 64
+arch = 'fc'
 latent_dim = 12
 
 task_structures = '-'.join(task_structures)
@@ -44,7 +44,7 @@ nav_dir = datasets_dir + dataset_directory
 if data_type == 'grid':
     layout_channels = (0,1)
 elif data_type == 'gridworld':
-    layout_channels = 0
+    layout_channels = (0,)
 
 # #Uncomment
 train_data = Maze_Dataset(
@@ -86,17 +86,19 @@ parser = create_VAE_argparser()
 parser.print_help()
 
 # Specify the hyperpameter choices
-data_dim = train_data[0][0].numel()
+input_dim_flat = train_data[0][0].numel()
+input_dim = tuple(train_data[0][0].shape)
 
 args_fc = [  '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
              '--data_distribution', 'Bernoulli',
+             '--data_dims', str(input_dim),
              '--epochs', str(epochs),
              '--learning_rate', '1e-4',
              '--cuda',
              'FC',
-             '--dec_layer_dims', '12', '128', '256', f'{data_dim}',
-             '--enc_layer_dims', f'{data_dim}', '256', '128', '12',]
+             '--dec_layer_dims', f'{latent_dim}', '128', '256', f'{input_dim_flat}',
+             '--enc_layer_dims', f'{input_dim_flat}', '256', '128', f'{latent_dim}',]
 
 # args_cnn_mnist = ['--dec_layer_dims', '2', '32', '64,13,13', '32,28,28', '1,28,28',
 #             '--dec_architecture', 'dConv',
@@ -232,6 +234,8 @@ if arch == '6cnn' or arch == '5cnn':
         args = args_cnn_fc# CHANGE
     elif data_type == 'grid':
         args = args_grid_cnn_fc
+if arch == 'fc':
+    args = args_fc
 
 args = parser.parse_args(args)# CHANGE
 args.batch_size = batch_size

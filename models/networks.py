@@ -63,11 +63,19 @@ class FC_ReLU_Network(Network):
         """
         mods = []
 
-        for i in range(len(dims) - 2):
-            mods.append(nn.Linear(prod(dims[i]), prod(dims[i + 1])))
-            mods.append(nn.ReLU())
+        for i in range(len(dims) - 1):
+            if isinstance(dims[i], int):
+                dim_in = dims[i]
+            else:
+                dim_in = prod(dims[i])
+            if isinstance(dims[i+1], int):
+                dim_out = dims[i+1]
+            else:
+                dim_out = prod(dims[i+1])
+            mods.append(nn.Linear(dim_in, dim_out))
+            if i != (len(dims) - 2):
+                mods.append(nn.ReLU())
 
-        mods.append(nn.Linear(prod(dims[-2]), prod(dims[-1])))
         if output_activation:
             mods.append(output_activation())
         return nn.Sequential(*mods)

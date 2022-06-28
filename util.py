@@ -108,7 +108,7 @@ def plot_grid_of_samples(samples, grid=None, figsize=(8, 8)):
 # only for dim 2 at the moment
 def plot_latent_visualisation(model, z_max: Tuple[float, float] = (10,10), z_min: Tuple[float, float] = (-10,-10), grid: Tuple[int, int] = (12,12),
                               img_dims: Tuple[int, int, int] = None, figsize: Tuple[int, int] = (10, 10), Z_points=None,
-                              labels=None, device='cpu', alpha=0.5, title=None):
+                              labels=None, device='cpu', alpha=0.5, title=None, convert_from='grid'):
     #TODO: finish implementation with labels
     #TODO: profiling to figure out why so slow for larger grids
 
@@ -125,6 +125,11 @@ def plot_latent_visualisation(model, z_max: Tuple[float, float] = (10,10), z_min
     model.eval()
     logits = model.decoder(torch.tensor(Z_grid, dtype=torch.float, device=device))
     samples = model.decoder.param_b(logits).detach().cpu()
+
+    if convert_from == 'grid':
+        samples = samples.reshape((samples.shape[0]*samples.shape[1], *samples.shape[2:]))
+        samples = grid_to_gridworld(samples, layout_only=True)
+        samples = samples.reshape((*Z_grid.shape[0:2], *samples.shape[1:]))
     if img_dims is not None:
         samples = samples.reshape(*samples.shape[:2], *img_dims)
     samples = samples.squeeze() #TODO: check if you can remove.
@@ -373,7 +378,7 @@ def create_VAE_argparser():
                         help='Number of epochs to train (default: 3000)')
     parser.add_argument('--learning_rate', type=float, default=1e-4,
                         help='Learning rate for the Adam optimiser (default: 0.0001)')
-    parser.add_argument('--data_dims', type=tuple, default=(1,27,27),
+    parser.add_argument('--data_dims', type=tuple_string, default='1,27,27',
                         help='Input and output data dimensions')
 
     #VAE specific arguments
@@ -495,6 +500,7 @@ class WrappedDataLoader:
         return self.dl.dataset
 
 def tuple_string(s):
+    s = s.replace("(", "").replace(")", "")
     try:
         x, y, z = map(int, s.split(','))
         return x, y, z
@@ -506,7 +512,7 @@ def tuple_string(s):
             try:
                 return (int(s),)
             except:
-                raise argparse.ArgumentTypeError("Each tuple must be 'x,y,z', 'x,y' or 'x'")
+                raise argparse.ArgumentTypeError("Each tuple must be '(x,y,z)' or 'x,y,z', up to 3 elements")
 
 
 ### Kind of VAE specific:
@@ -552,6 +558,9 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
             example_samples_train = example_data_train
         else:
             raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
+        assert example_data_train.shape[1:] == args.data_dims, f'mismatch between data loader dims ' \
+                                                               f'{example_data_train.shape[1:]} and dims specified by ' \
+                                                               f'model arguments {args.data_dims}'
         tensorboard.add_images('train_samples', flip_bits(resize(example_samples_train)), dataformats='NCHW')
         tensorboard.add_graph(model, example_data_train)
     if test_data is not None:
@@ -596,6 +605,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
 
                 # Compute the loss for the mini-batch
                 elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
+                elbo /= example_data_train[0].numel() #divide by number of dimensions to have a consistent ELBO metric across models
 
                 # Compute the gradients using backpropagation
                 loss.backward()
@@ -618,6 +628,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
 
                         # Compute the loss for the test mini-batch
                         elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
+                        elbo /= example_data_train[0].numel()
 
                         epoch_test_elbos += [elbo.detach().item()]
                         pbar.set_description((f'Test Epoch: {epoch} [{batch_idx * len(mbatch)}/{len(test_loader.dataset)} '
@@ -741,7 +752,11 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         optimizer.load_state_dict(best_optim_state)
 
     if tensorboard is not None:
-        Z = torch.randn(1024, *model.decoder.bottleneck.input_size).to(args.device) #M, B, D
+        if isinstance(model.decoder.bottleneck.input_size, int):
+            latent_dim = (model.decoder.bottleneck.input_size,)
+        else:
+            latent_dim = model.decoder.bottleneck.input_size
+        Z = torch.randn(1024, *latent_dim).to(args.device) #M, B, D
         logits = model.decoder(Z)
         generated_data = model.decoder.param_b(logits)
         if train_data.dataset_metadata['data_type'] == 'grid':
