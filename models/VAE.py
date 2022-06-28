@@ -388,8 +388,6 @@ class CNNEncoder(Encoder):
         """
 
         X = X.reshape(X.shape[0], *self.hparams.enc_layer_dims[0]) #(B, D) -> (B, C, H, W) #however already handled by default
-        #X = torch.permute(X, (0, 3, 1, 2)) #(B, H, W, C) -> (B, C, H, W) TODO: work out how to permute for mazes
-
         features = X
         for net in self.model:
             features = net(features)
@@ -661,7 +659,6 @@ class VAE(nn.Module):
         self.hparams = hparams
 
         # Use the encoder and decoder implemented above
-        # TODO: check again if best way after implementing the CNN arch. Consider moving into Encoder class.
         if self.hparams.architecture == 'FC':
             self.encoder = FCEncoder(hparams)
             self.decoder = FCDecoder(hparams)

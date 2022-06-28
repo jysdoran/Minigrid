@@ -261,10 +261,6 @@ def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None,
     interpolated_logits = model.decoder(interpolated_latents_grid_r)
     interpolated_samples = model.decoder.param_b(interpolated_logits)
 
-
-    #TODO decode back before plotting
-    # use the plot samples function
-
     return interpolated_latents_grid, interpolated_samples
 
 
