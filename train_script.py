@@ -17,15 +17,15 @@ from models.VAE import *
 
 #Select the directory using this
 dataset_size = 20000
-task_structures = {'maze'} #{'maze', 'rooms_unstructured_layout'}
+task_structures = {'rooms_unstructured_layout'} #{'maze', 'rooms_unstructured_layout'}
 data_type = 'grid'
 data_dim = 27
 
-use_gpu = False
+use_gpu = True
 plot_every = 25
 batch_size = 64
 epochs = 250
-arch = '6cnn'
+arch = '5cnn'
 latent_dim = 12
 
 task_structures = '-'.join(task_structures)
@@ -95,8 +95,8 @@ args_fc = [  '--gradient_type', 'pathwise',
              '--learning_rate', '1e-4',
              '--cuda',
              'FC',
-             '--dec_layer_dims', '2', '130', f'{data_dim}',
-             '--enc_layer_dims', f'{data_dim}', '128', '32', '2',]
+             '--dec_layer_dims', '12', '128', '256', f'{data_dim}',
+             '--enc_layer_dims', f'{data_dim}', '256', '128', '12',]
 
 # args_cnn_mnist = ['--dec_layer_dims', '2', '32', '64,13,13', '32,28,28', '1,28,28',
 #             '--dec_architecture', 'dConv',
@@ -221,13 +221,13 @@ args_grid_cnn_fc = ['--gradient_type', 'pathwise',
                     '--learning_rate', '1e-4',
                     '--cuda',
                     'CNN',
-                    '--dec_layer_dims', '12', '1024', '256,3,3', '64,7,7', '16,13,13', '2,13,13',
+                    '--dec_layer_dims', '12', '1024', '256,5,5', '256,7,7', '64,9,9', '64,11,11', '16,13,13', '2,13,13',
                     '--dec_kernel_size', '3',
-                    '--enc_layer_dims', '2,13,13', '16,13,13', '64,7,7', '64,7,7', '256,3,3', '2048,1,1', '1024',
+                    '--enc_layer_dims', '2,13,13', '16,13,13', '64,11,11', '64,9,9', '256,7,7', '256,5,5', '1024',
                     '1024', '128', '12',
                     '--enc_kernel_size', '3',]
 
-if arch == '6cnn':
+if arch == '6cnn' or arch == '5cnn':
     if data_type == 'gridworld':
         args = args_cnn_fc# CHANGE
     elif data_type == 'grid':

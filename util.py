@@ -411,17 +411,19 @@ def create_VAE_argparser():
     # Encoder
     parser_CNN.add_argument('--enc_layer_dims', type=tuple_string, nargs='+',
                             help='Encoder layer dimensions.')
-    parser_CNN.add_argument('--enc_kernel_size', type=tuple_string, nargs='+',
+    parser_CNN.add_argument('--enc_kernel_size', type=tuple_string, nargs='+', default='3',
                         help='Encoder Kernel size.')
-    parser_CNN.add_argument('--enc_strides', type=tuple_string, nargs='+',
+    parser_CNN.add_argument('--enc_strides', type=tuple_string, nargs='+', default='1',
                         help='Encoder strides.')
     # Decoder
     parser_CNN.add_argument('--dec_layer_dims', type=tuple_string, nargs='+',
                         help='Decoder layer dimensions.')
-    parser_CNN.add_argument('--dec_kernel_size', type=tuple_string, nargs='+',
+    parser_CNN.add_argument('--dec_kernel_size', type=tuple_string, nargs='+', default='3',
                         help='Decoder Kernel size.')
-    parser_CNN.add_argument('--dec_strides', type=tuple_string, nargs='+',
+    parser_CNN.add_argument('--dec_stride', type=tuple_string, nargs='+', default='1',
                         help='Decoder Kernel strides.')
+    parser_CNN.add_argument('--dec_cnn_last_layer', action='store_false', default=True,
+                        help='Use a CNN layer as the last layer of the decoder [recommended] (default: True).')
 
     return parser
 
@@ -539,6 +541,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
     example_data_train, example_targets_train = next(iter(train_loader)) #TODO: make deterministic accross runs
     target_metadata_train = example_targets_train.tolist() #TODO: change depending on dataset
     if tensorboard is not None:
+        tensorboard.add_text('Number of model parameters', str(model.num_parameters))
         tensorboard.add_text('Encoder Architecture', str(model.encoder.model))
         tensorboard.add_text('Bottleneck Architecture', str(model.encoder.mean))
         tensorboard.add_text('Decoder Architecture', str(model.decoder.model))

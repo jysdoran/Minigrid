@@ -545,33 +545,63 @@ class FCDecoder(Decoder):
 class dConvDecoder(Decoder):
 
     def __init__(self, hparams):
-        self.kernel_sizes = hparams.dec_kernel_size[0] #TODO: handle lists of ints too
         super().__init__(hparams)
 
     def create_model(self, dims):
         fc_layer_inds = [len(dim)==1 for dim in dims]
         fc_layer_end = fc_layer_inds.index(False)
-        #TODO: change, have dims_fc dims_dconv dims_cnn
-        cnn_layer_inds = list(np.array([(len(dims[i])==3 and dims[i][1]==dims[i+1][1]) for i in range(0,len(dims)-1)]))
-        try:
-            cnn_layer_start = cnn_layer_inds.index(True)
-        except ValueError:
-            cnn_layer_start = None
-        self.bottleneck = FC_ReLU_Network(dims[:fc_layer_end+1], output_activation=nn.ReLU)
-        self.lin2deconv = Reshape(-1, *dims[fc_layer_end])
-        if cnn_layer_start == fc_layer_end:
-            self.dconv_layer = None
+        dims_fc = dims[0:fc_layer_end+1]
+        if isinstance(self.hparams.dec_kernel_size, int):
+            self.kernel_size = conv_kernel_size = dconv_kernel_size = self.hparams.dec_kernel_size
+        elif isinstance(self.hparams.dec_kernel_size, tuple) and len(self.hparams.dec_kernel_size) == 1:
+            self.kernel_size = conv_kernel_size = dconv_kernel_size = self.hparams.dec_kernel_size[0]
+        elif isinstance(self.hparams.dec_kernel_size, list) and len(self.hparams.dec_kernel_size) == 1:
+            self.kernel_size = conv_kernel_size = dconv_kernel_size = self.hparams.dec_kernel_size[0][0]
         else:
-            #TODO check self_padding makes sense
-            self.dconv_layer = CNN_Factory(dims[fc_layer_end:cnn_layer_start+1], kernel_sizes=self.kernel_sizes,
-                                           strides=self.strides, output_activation=nn.ReLU, arch='dConv', same_padding=False)
+            self.kernel_size, conv_kernel_size, dconv_kernel_size = None, None, None
 
-        if cnn_layer_start is None:
+        if isinstance(self.hparams.dec_stride, int):
+            self.stride = conv_stride = dconv_stride = self.hparams.dec_stride
+        elif isinstance(self.hparams.dec_stride, tuple) and len(self.hparams.dec_stride) == 1:
+            self.stride = conv_stride = dconv_stride = self.hparams.dec_stride[0]
+        elif isinstance(self.hparams.dec_stride, list) and len(self.hparams.dec_stride) == 1:
+            self.stride = conv_stride = dconv_stride = self.hparams.dec_stride[0][0]
+        else:
+            self.stride, conv_stride, dconv_stride = None, None, None
+        if self.hparams.dec_cnn_last_layer:
+            dims_dconv = dims[fc_layer_end:-1]
+            dims_conv = dims[-2:]
+            output_activation_dconv = nn.ReLU
+            if self.kernel_size is None:
+                self.kernel_size = self.hparams.dec_kernel_size
+                dconv_kernel_size = self.hparams.dec_kernel_size[:-1]
+                conv_kernel_size = self.hparams.dec_kernel_size[-1]
+            if self.stride is None:
+                self.stride = self.hparams.dec_stride
+                dconv_stride = self.hparams.dec_stride[:-1]
+                conv_stride = self.hparams.dec_stride[-1]
+        else:
+            dims_dconv = dims[fc_layer_end:]
+            if self.kernel_size is None:
+                self.kernel_size = dconv_kernel_size = self.hparams.dec_kernel_size
+            if self.stride is None:
+                self.stride = dconv_stride = self.hparams.dec_stride
+            dims_conv = None
+            output_activation_dconv = None
+        #cnn_layer_inds = list(np.array([(len(dims[i])==3 and dims[i][1]==dims[i+1][1]) for i in range(0,len(dims)-1)]))
+        # try:
+        #     cnn_layer_start = cnn_layer_inds.index(True)
+        # except ValueError:
+        #     cnn_layer_start = None
+        self.bottleneck = FC_ReLU_Network(dims_fc, output_activation=nn.ReLU)
+        self.lin2deconv = Reshape(-1, *dims[fc_layer_end])
+        self.dconv_layer = CNN_Factory(dims_dconv, kernel_sizes=dconv_kernel_size,
+                                       strides=dconv_stride, output_activation=output_activation_dconv, arch='dConv', same_padding=False)
+        if dims_conv is None:
             self.conv_layer = None
         else:
-            # TODO check self_padding makes sense, update dims
-            self.conv_layer = CNN_Factory(dims[cnn_layer_start:], kernel_sizes=self.kernel_sizes,
-                                           strides=self.strides, output_activation=nn.ReLU, arch='CNN', same_padding=False)
+            self.conv_layer = CNN_Factory(dims_conv, kernel_sizes=conv_kernel_size,
+                                           strides=conv_stride, output_activation=None, arch='CNN', same_padding=False)
 
         model = [self.bottleneck, self.lin2deconv, self.dconv_layer, self.conv_layer]
         model = list(filter(None, model))
@@ -659,3 +689,15 @@ class VAE(nn.Module):
         return elbo_with_score_function_gradients(X, encoder=self.encoder, decoder=self.decoder,
                                                   num_samples=self.hparams.num_variational_samples,
                                                   data_dist=self.hparams.data_distribution)
+
+    @property
+    def num_parameters(self):
+        total_params = 0
+        for parameters_blocks in self.parameters():
+            for parameter_array in parameters_blocks:
+                array_shape = [*parameter_array.shape]
+                if array_shape:
+                    num_params = np.prod(array_shape)
+                    total_params += num_params
+
+        return total_params

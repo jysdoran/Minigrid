@@ -97,25 +97,32 @@ class CNN_Factory(Network):
         else:
             raise KeyError(f"Architecture {arch} not recognised by CNN Factory.")
 
-        if isinstance(kernel_sizes, int):
-            pass
-        elif not isinstance(kernel_sizes, np.ndarray):
-            assert len(kernel_sizes) == len(dims) - 1, f"Size mismatch between the kernels and layers. Expected number" \
-                                                       f" of kernels: {len(dims) - 1}, got: {len(kernel_sizes)}"
-            kernel_sizes = np.array(kernel_sizes).astype(int)
-        else:
-            kernel_sizes = kernel_sizes.astype(int)
+        params = []
+        for (param_name, param) in [('kernel_sizes', kernel_sizes), ('strides', strides)]:
+            try:
+                if isinstance(param, int):
+                    pass
+                elif isinstance(param, list):
+                    if not isinstance(param, np.ndarray):
+                        if len(param) == len(dims) - 1:
+                            param = np.array(param).astype(int)
+                        elif len(param) == 1:
+                            param = int(param[0][0])
+                        else:
+                            raise IndexError()
+                elif isinstance(param, tuple):
+                    if len(param) == 1:
+                        param = int(param[0])
+                    else:
+                        raise IndexError()
+                else:
+                    raise TypeError()
+            except (TypeError, IndexError) as error:
+                raise error(f"Size mismatch between the {param_name} and layers. Expected number" \
+                                                               f" of {param_name}: {len(dims) - 1}, got: {len(param)}")
+            params.append(param)
 
-        if isinstance(strides, int):
-            pass
-        elif not isinstance(strides, np.ndarray):
-            assert len(strides) == len(dims) - 1, f"Size mismatch between the strides and layers. Expected number" \
-                                                  f" of kernels: {len(dims) - 1}, got: {len(strides)}"
-            strides = np.array(strides).astype(int)
-        else:
-            strides = strides.astype(int)
-
-        instance.__init__(dims=dims, kernel_sizes=kernel_sizes, strides=strides, output_activation=output_activation)
+        instance.__init__(dims=dims, kernel_sizes=params[0], strides=params[1], output_activation=output_activation)
 
         return instance
 
@@ -141,8 +148,16 @@ class CNN_ReLU_Network(Network):
         self.strides = strides
         img_out = self.img_dims[1:]
         img_in = self.img_dims[0:-1]
-        self.padding = (0.5 * (self.strides * (img_out - 1) - img_in + (self.kernel_sizes - 1) + 1)).astype(int)
-
+        padding = np.ceil((0.5 * (self.strides * (img_out - 1) - img_in + (self.kernel_sizes - 1) + 1)))
+        self.padding = np.clip(padding, 0, None).astype(int)
+        img_out_check = (img_in + 2 * self.padding - (self.kernel_sizes - 1) - 1) / self.strides + 1
+        assert (img_out_check % 1 == 0).all(), f"Incompatible even/odd status of parameters. \\ " \
+                                               f"img_out odd for (k odd, s even) or (k even, s odd, img_in even) \\" \
+                                               f" img_out even for (k even, s even) or (k odd, s odd, img_in even) \\" \
+                                               f" check: {img_out_check} "
+        assert (img_out == img_out_check).all(), f"Failed dimensionality consistency check on CNN network. " \
+                                                 f"Check value:{img_out_check}. If check_value > img_out, " \
+                                                 f"img_out is impossible to reach with current (k,s)"
         super().__init__(dims, output_activation)
 
     def make_seq(self, dims: Iterable[Tuple[int, int, int]], output_activation: nn.Module) -> nn.Module:
@@ -246,8 +261,8 @@ class dConv_ReLU_Network(Network):
         padding = 0.5 * (-img_out + (img_in - 1) * self.strides + (self.kernel_sizes - 1) + 1)
         self.out_padding = (np.mod(padding, 1) != 0).astype(int) #always 1 or 0, to match desired output size
         self.padding = np.ceil(padding).astype(int)
-        assert img_out.all() == ((img_in - 1) * self.strides - 2 * self.padding + (self.kernel_sizes - 1) + self.out_padding \
-               + 1).all(), "Failed dimensionality consistency check on dConv network"
+        assert (img_out == (img_in - 1) * self.strides - 2 * self.padding + (self.kernel_sizes - 1)
+                + self.out_padding + 1).all(), "Failed dimensionality consistency check on dConv network"
 
         super().__init__(dims, output_activation)
 
