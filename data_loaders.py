@@ -27,10 +27,21 @@ class Maze_Dataset(VisionDataset):
     base_folder = ""
     train_list = [
         ["batch_0.data", "TODO"],
+        ["batch_1.data", "TODO"],
+        ["batch_2.data", "TODO"],
+        ["batch_3.data", "TODO"],
+        ["batch_4.data", "TODO"],
+        ["batch_5.data", "TODO"],
+        ["batch_6.data", "TODO"],
+        ["batch_7.data", "TODO"],
+        ["batch_8.data", "TODO"],
+        ["batch_9.data", "TODO"],
     ]
 
     test_list = [
         ["test_batch.data", "TODO"],
+        ["test_batch_0.data", "TODO"],
+        ["test_batch_1.data", "TODO"],
     ]
     meta = {
         "filename": "dataset.meta",
@@ -68,14 +79,20 @@ class Maze_Dataset(VisionDataset):
         # now load the picked numpy arrays
         for file_name, checksum in pickled_data:
             file_path = os.path.join(self.root, self.base_folder, file_name)
-            with open(file_path, "rb") as f:
-                entry = pickle.load(f, encoding="latin1")
-                self.data.append(entry["data"])
-                self.batches_metadata.append(entry["batch_meta"])
-                if "labels" in entry:
-                    self.targets.extend(entry["labels"])
-                if "label_contents" in entry:
-                    self.target_contents.append(entry["label_contents"])
+            try:
+                with open(file_path, "rb") as f:
+                    entry = pickle.load(f, encoding="latin1")
+                    self.data.append(entry["data"])
+                    self.batches_metadata.append(entry["batch_meta"])
+                    if "labels" in entry:
+                        self.targets.extend(entry["labels"])
+                    if "label_contents" in entry:
+                        self.target_contents.append(entry["label_contents"])
+            except FileNotFoundError as e:
+                pass
+
+        if not self.data:
+            raise FileNotFoundError("Dataset not found at specified location.")
 
         self.data = np.vstack(self.data)
 
