@@ -1,5 +1,7 @@
 import torch
 import torchvision
+import networkx as nx
+import dgl
 import os
 import numpy as np
 import random
@@ -22,6 +24,19 @@ grid_to_gridworld = Batch.encode_grid_to_gridworld
 # for test in test_data:
 #     test_task = test[0].numpy()
 #     assert not np.array_equal(train_task, test_task)
+
+# TODO: graphviz
+
+# g = graphs[0]
+# options = {
+#     'node_color': 'black',
+#     'node_size': 80,
+#     'width': 1,
+# }
+# G = dgl.to_networkx(g)
+# plt.figure(figsize=[15, 7])
+# nx.draw(G, **options)
+# plt.show()
 
 
 def numIslands(grid, val=0):
