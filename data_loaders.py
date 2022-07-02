@@ -82,7 +82,7 @@ class Maze_Dataset(VisionDataset):
             try:
                 with open(file_path, "rb") as f:
                     entry = pickle.load(f, encoding="latin1")
-                    self.data.append(entry["data"])
+                    self.data.extend(entry["data"])
                     self.batches_metadata.append(entry["batch_meta"])
                     if "labels" in entry:
                         self.targets.extend(entry["labels"])
@@ -93,8 +93,6 @@ class Maze_Dataset(VisionDataset):
 
         if not self.data:
             raise FileNotFoundError("Dataset not found at specified location.")
-
-        self.data = np.vstack(self.data)
 
         self._load_meta()
 

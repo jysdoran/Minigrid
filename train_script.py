@@ -3,8 +3,10 @@ import sys
 from pathlib import Path
 
 import torch
+import dgl
 import torchvision
 from torch.utils.data import Dataset, DataLoader
+from dgl.dataloading import GraphDataLoader
 from torchvision import datasets, transforms
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
@@ -16,12 +18,12 @@ from util import *
 from models.VAE import *
 
 #Select the directory using this
-dataset_size = 120000
+dataset_size = 12000
 task_structures = ('rooms_unstructured_layout', 'maze') #{'maze', 'rooms_unstructured_layout'}
-data_type = 'grid'
+data_type = 'graph'
 data_dim = 27
 
-use_gpu = True
+use_gpu = False
 plot_every = 5
 epochs = 100
 batch_size = 64
@@ -41,25 +43,30 @@ mnist_dir = datasets_dir #+ 'MNIST'
 
 nav_dir = datasets_dir + dataset_directory
 
+transform_data = True
 if data_type == 'grid':
     layout_channels = (0,1)
 elif data_type == 'gridworld':
     layout_channels = (0,)
+elif data_type == 'graph':
+    layout_channels = None
+    transform_data = False
+
+if transform_data is True:
+    t = transforms.Compose([
+        SelectChannelsTransform(*layout_channels),
+        transforms.ToTensor(),])
+else:
+    t = None
 
 # #Uncomment
 train_data = Maze_Dataset(
           nav_dir, train=True,
-          transform = transforms.Compose([
-              SelectChannelsTransform(*layout_channels),
-              transforms.ToTensor(),
-          ]))
+          transform = t)
 
 test_data = Maze_Dataset(
           nav_dir, train=False,
-          transform = transforms.Compose([
-              SelectChannelsTransform(*layout_channels),
-              transforms.ToTensor(),
-          ]))
+          transform = t)
 
 # train_data = torchvision.datasets.MNIST(
 #     mnist_dir, train=True, download=False,
@@ -78,7 +85,10 @@ test_data = Maze_Dataset(
 #         BinaryTransform(0.6),
 #         ]))
 
-train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+if data_type == 'graph':
+    train_loader = GraphDataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+else:
+    train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
 
 # VAE setup
 
