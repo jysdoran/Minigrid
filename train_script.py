@@ -18,9 +18,9 @@ from util import *
 from models.VAE import *
 
 #Select the directory using this
-dataset_size = 12000
-task_structures = ('rooms_unstructured_layout', 'maze') #{'maze', 'rooms_unstructured_layout'}
-data_type = 'graph'
+dataset_size = 30
+task_structures = ('rooms_unstructured_layout','maze') #{'maze', 'rooms_unstructured_layout'}
+data_type = 'graph' #'graph'
 data_dim = 27
 
 use_gpu = False

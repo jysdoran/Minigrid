@@ -1,4 +1,6 @@
 import os.path
+
+import dgl
 import pickle
 from typing import Any, Callable, Optional, Tuple
 
@@ -61,6 +63,8 @@ class Maze_Dataset(VisionDataset):
 
         super().__init__(root, transform=transform, target_transform=target_transform)
 
+        self._load_meta()
+
         self.train = train  # training set or test set
 
         if not self._check_integrity():
@@ -80,21 +84,28 @@ class Maze_Dataset(VisionDataset):
         for file_name, checksum in pickled_data:
             file_path = os.path.join(self.root, self.base_folder, file_name)
             try:
+                if self.data_type == 'graph':
+                    if not os.path.exists(file_path): raise FileNotFoundError()
+                    graphs, labels = dgl.load_graphs(file_path)
+                    self.data.extend(graphs)
+                    self.targets.extend(labels['labels'])
+                    file_path += '.meta'
                 with open(file_path, "rb") as f:
                     entry = pickle.load(f, encoding="latin1")
-                    self.data.extend(entry["data"])
-                    self.batches_metadata.append(entry["batch_meta"])
-                    if "labels" in entry:
-                        self.targets.extend(entry["labels"])
-                    if "label_contents" in entry:
+                    # note: will end loop prematurely if exeption is thrown, not sure this is the best pattern
+                    # as behavior is order dependent
+                    try:
+                        self.batches_metadata.append(entry["batch_meta"])
                         self.target_contents.append(entry["label_contents"])
+                        self.data.extend(entry["data"])
+                        self.targets.extend(entry["labels"])
+                    except KeyError as e:
+                        pass
             except FileNotFoundError as e:
                 pass
 
         if not self.data:
             raise FileNotFoundError("Dataset not found at specified location.")
-
-        self._load_meta()
 
     def _load_meta(self) -> None:
         path = os.path.join(self.root, self.base_folder, self.meta["filename"])
@@ -103,6 +114,7 @@ class Maze_Dataset(VisionDataset):
         with open(path, "rb") as infile:
             self.dataset_metadata = pickle.load(infile, encoding="latin1")
             self.label_descriptors = self.dataset_metadata["label_descriptors"]
+            self.data_type = self.dataset_metadata["data_type"]
         self.label_to_idx = {_class: i for i, _class in enumerate(self.label_descriptors)} #TODO: decide if we replace by self.label_to_idx
 
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
