@@ -377,6 +377,8 @@ def create_VAE_argparser():
     #Encoder
     parser_GNN.add_argument('--enc_layer_dims', type=int, nargs='+',
                            help='Encoder layer dimensions.')
+    parser_GNN.add_argument('--enc_convolutions', type=int,
+                           help='Number of GIN convolutions in Encoder.')
     #Decoder
     parser_GNN.add_argument('--dec_layer_dims', type=int, nargs='+',
                         help='Decoder layer dimensions.')

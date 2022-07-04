@@ -7,6 +7,7 @@ Author's implementation: https://github.com/weihua916/powerful-gnns
 
 
 import torch
+import dgl
 import torch.nn as nn
 import torch.nn.functional as F
 from dgl.nn.pytorch.conv import GINConv
@@ -82,7 +83,7 @@ class GIN(nn.Module):
     """GIN model"""
     def __init__(self, num_layers, num_mlp_layers, input_dim, hidden_dim,
                  output_dim, final_dropout, learn_eps, graph_pooling_type,
-                 neighbor_pooling_type):
+                 neighbor_pooling_type, n_nodes):
         """model parameters setting
         Paramters
         ---------
@@ -112,7 +113,7 @@ class GIN(nn.Module):
 
         # real output dim #TODO: remove linear predictor
         self.input_dim = input_dim
-        self.output_dim = (num_layers - 1) * hidden_dim + input_dim
+        self.output_dim = ((num_layers - 1) * hidden_dim + input_dim)*n_nodes
         self.hidden_dim = hidden_dim
 
         # List of MLPs
@@ -177,9 +178,7 @@ class GIN(nn.Module):
         output = []
         # perform pooling over all nodes in each graph in every layer
         for i, h in enumerate(hidden_rep):
-            pooled_h = self.pool(g, h)
-            #output.append(self.drop(self.linears_prediction[i](pooled_h)))
-            output.append(pooled_h)
+            output.append(h.reshape(g.batch_size, -1, h.shape[-1]))
         output = torch.cat(output, -1)
         #output /= output.shape[-1]  # normalise for numerical stability
         #output = F.relu(output)

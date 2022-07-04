@@ -452,11 +452,12 @@ class GNNEncoder(Encoder):
 
     def create_model(self, dims): #TODO: actually use dims
         #try dropout 0, #TODO: fix input dim
-        self.gnn_net = GIN(num_layers=8, num_mlp_layers=2, input_dim=dims[0], hidden_dim=dims[1],
+        self.gnn_net = GIN(num_layers=self.hparams.enc_convolutions, num_mlp_layers=2, input_dim=dims[0], hidden_dim=dims[1],
                  output_dim=dims[1], final_dropout=0, learn_eps=False, graph_pooling_type='mean',
-                 neighbor_pooling_type='sum')
+                 neighbor_pooling_type='sum', n_nodes=169)
+        self.flatten_layer = nn.Flatten()
         self.linear = FC_ReLU_Network([self.gnn_net.output_dim, *dims[2:]], output_activation=nn.ReLU)
-        model = [self.gnn_net, self.linear]
+        model = [self.gnn_net, self.flatten_layer, self.linear]
         model = list(filter(None, model))
 
         return model
