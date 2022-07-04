@@ -1,10 +1,13 @@
+import dgl
 import torch
 import argparse
 import torch.nn as nn
 import torch.optim as optim
 from util import BinaryTransform
 from models.networks import FC_ReLU_Network, CNN_Factory
+from models.gnn_networks import GIN
 from models.layers import Reshape
+from data_generators import Batch
 
 from typing import Iterable, Tuple
 from math import prod
@@ -177,6 +180,49 @@ def elbo_with_pathwise_gradients(X, *, encoder, decoder, num_samples, data_dist=
 
     return elbos
 
+def elbo_with_pathwise_gradients_gnn(X, *, encoder, decoder, num_samples, data_dist=None):
+
+    mean, logvar = encoder(X)  # (B, H), (B, H)
+
+    # Sample the latents using the reparametrisation trick
+    Z = sample_gaussian_with_reparametrisation(
+        mean, logvar, num_samples=num_samples)  # (M, B, H)
+
+    # Evaluate the decoder network to obtain the parameters of the
+    # generative model p(x|z)
+
+    # logits = torch.randn(num_samples, *X.shape) for testing
+    logits = decoder(Z)  # (M, B, n_nodes-1, 2)
+
+    graphs = dgl.unbatch(X)
+    #TODO: find a way to do this efficiently on GPU, maybe convert logits to sparse tensor
+    n_nodes = graphs[0].num_nodes()
+    A_in = torch.empty((len(graphs), n_nodes, n_nodes)).to(logits.device)
+    for m in range(len(graphs)):
+        A_in[m] = graphs[m].adj().to_dense()
+    A_in = Batch.encode_adj_to_reduced_adj(A_in) #(M, n_nodes - 1, 2)
+
+    # Compute KLD( q(z|x) || p(z) )
+    kld = compute_kld_with_standard_gaussian(mean, logvar)  # (B,)
+
+    # Compute ~E_{q(z|x)}[ p(x | z) ]
+    # Important: the samples are "propagated" all the way to the decoder output,
+    # indeed we are interested in the mean of p(X|z)
+
+    A_in = A_in.reshape(A_in.shape[0], -1) # (B, d1, d2, ..., dn) -> (B, D=2*(n_nodes - 1))
+    logits = logits.reshape(*logits.shape[0:2], -1) # (M, B, n_nodes-1, 2) -> (M, B, D=2*(n_nodes - 1))
+
+    if data_dist == 'Bernoulli':
+        neg_cross_entropy = evaluate_logprob_bernoulli(A_in, logits=logits).mean(dim=0)  # (B,)
+    elif data_dist == 'ContinuousBernoulli':
+        neg_cross_entropy = evaluate_logprob_continuous_bernoulli(A_in, logits=logits).mean(dim=0)  # (B,)
+    else:
+        raise NotImplementedError(f"Specified Data Distribution {data_dist} Invalid or Not Currently Implemented")
+
+    # ELBO for each data-point
+    elbos = neg_cross_entropy - kld  # (B,)
+
+    return elbos
 
 def sample_gaussian_without_reparametrisation(mean, logvar, *, num_samples=1):
     """
@@ -277,6 +323,7 @@ class Encoder(nn.Module):
         # Create separate final layers for each parameter (mean and log-variance)
         # We use log-variance to unconstrain the optimisation of the positive-only variance parameters
 
+        #TODO: handle GNN more graciously
         if isinstance(enc_layer_dims[-2], int):
             bneck_in = (enc_layer_dims[-2],)
         else:
@@ -396,6 +443,48 @@ class CNNEncoder(Encoder):
         logvar = self.logvar(features)
 
         return mean, logvar
+
+
+class GNNEncoder(Encoder):
+
+    def __init__(self, hparams):
+        super().__init__(hparams)
+
+    def create_model(self, dims): #TODO: actually use dims
+        #try dropout 0, #TODO: fix input dim
+        self.gnn_net = GIN(num_layers=8, num_mlp_layers=2, input_dim=dims[0], hidden_dim=dims[1],
+                 output_dim=dims[1], final_dropout=0, learn_eps=False, graph_pooling_type='mean',
+                 neighbor_pooling_type='sum')
+        self.linear = FC_ReLU_Network([self.gnn_net.output_dim, *dims[2:]], output_activation=nn.ReLU)
+        model = [self.gnn_net, self.linear]
+        model = list(filter(None, model))
+
+        return model
+
+    def forward(self, X):
+        """
+        Predicts the parameters of the variational distribution
+
+        Args:
+            X (Tensor):      data, a batch of shape (B, D)
+
+        Returns:
+            mean (Tensor):   means of the variational distributions, shape (B, K)
+            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
+        """
+
+        graph = X
+        features = graph.ndata['feat'].float()
+        features = self.gnn_net(graph, features)
+
+        for net in self.model[1:]:
+            features = net(features)
+
+        mean = self.mean(features)
+        logvar = self.logvar(features)
+
+        return mean, logvar
+
 
 
 class Decoder(nn.Module):
@@ -665,6 +754,9 @@ class VAE(nn.Module):
         elif self.hparams.architecture == 'CNN':
             self.encoder = CNNEncoder(hparams)
             self.decoder = dConvDecoder(hparams)
+        elif self.hparams.architecture == 'GNN':
+            self.encoder = GNNEncoder(hparams)
+            self.decoder = FCDecoder(hparams)
         else:
             raise argparse.ArgumentError(f"VAE Architecture argument {self.hparams.architecture} not recognised.")
 
@@ -678,16 +770,29 @@ class VAE(nn.Module):
         Returns:
             elbos (Tensor): per data-point elbos, shape (B, D)
         """
-        if self.hparams.gradient_type == 'pathwise':
-            return self.elbo_with_pathwise_gradients(X)
-        elif self.hparams.gradient_type == 'score':
-            return self.elbo_with_score_function_gradients(X)
+        if self.hparams.architecture == 'GNN':
+            if self.hparams.gradient_type == 'pathwise':
+                return self.elbo_with_pathwise_gradients_gnn(X)
+            else:
+                raise ValueError(f'gradient_type={self.hparams.gradient_type} is invalid')
         else:
-            raise ValueError(f'gradient_type={self.hparams.gradient_type} is invalid')
+            if self.hparams.gradient_type == 'pathwise':
+                return self.elbo_with_pathwise_gradients(X)
+            elif self.hparams.gradient_type == 'score':
+                return self.elbo_with_score_function_gradients(X)
+            else:
+                raise ValueError(f'gradient_type={self.hparams.gradient_type} is invalid')
+
 
     def elbo_with_pathwise_gradients(self, X):
         # Reuse the implemented code
         return elbo_with_pathwise_gradients(X, encoder=self.encoder, decoder=self.decoder,
+                                            num_samples=self.hparams.num_variational_samples,
+                                            data_dist=self.hparams.data_distribution)
+
+    def elbo_with_pathwise_gradients_gnn(self, X):
+        # Reuse the implemented code
+        return elbo_with_pathwise_gradients_gnn(X, encoder=self.encoder, decoder=self.decoder,
                                             num_samples=self.hparams.num_variational_samples,
                                             data_dist=self.hparams.data_distribution)
 

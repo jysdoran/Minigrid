@@ -18,16 +18,16 @@ from util import *
 from models.VAE import *
 
 #Select the directory using this
-dataset_size = 30
-task_structures = ('rooms_unstructured_layout','maze') #{'maze', 'rooms_unstructured_layout'}
+dataset_size = 120000
+task_structures = ('rooms_unstructured_layout','maze') #('rooms_unstructured_layout','maze')
 data_type = 'graph' #'graph'
 data_dim = 27
 
-use_gpu = False
-plot_every = 5
-epochs = 100
+use_gpu = True
+plot_every = 1
+epochs = 10
 batch_size = 64
-arch = 'fc'
+arch = 'gnn'#'fc'
 latent_dim = 12
 
 task_structures = '-'.join(task_structures)
@@ -96,13 +96,30 @@ parser = create_VAE_argparser()
 parser.print_help()
 
 # Specify the hyperpameter choices
-input_dim_flat = train_data[0][0].numel()
-input_dim = tuple(train_data[0][0].shape)
+if data_type == 'graph':
+    n_nodes = train_data[0][0].num_nodes()
+    input_dim_flat = 1
+    output_dim = (n_nodes - 1, 2)
+    output_dim_flat = output_dim[0] * output_dim[1]
+else:
+    input_dim_flat = output_dim_flat = train_data[0][0].numel()
+    output_dim = tuple(train_data[0][0].shape)
+
+args_gnn = [  '--gradient_type', 'pathwise',
+             '--num_variational_samples', '1',
+             '--data_distribution', 'Bernoulli',
+             '--data_dims', str(output_dim),
+             '--epochs', str(epochs),
+             '--learning_rate', '1e-4',
+             '--cuda',
+             'GNN',
+             '--dec_layer_dims', f'{latent_dim}', '128', '256', f'{output_dim_flat}',
+             '--enc_layer_dims', f'{input_dim_flat}', '32', '256', '128', f'{latent_dim}',]
 
 args_fc = [  '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
              '--data_distribution', 'Bernoulli',
-             '--data_dims', str(input_dim),
+             '--data_dims', str(output_dim),
              '--epochs', str(epochs),
              '--learning_rate', '1e-4',
              '--cuda',
@@ -244,8 +261,10 @@ if arch == '6cnn' or arch == '5cnn':
         args = args_cnn_fc# CHANGE
     elif data_type == 'grid':
         args = args_grid_cnn_fc
-if arch == 'fc':
+elif arch == 'fc':
     args = args_fc
+elif arch == 'gnn':
+    args = args_gnn
 
 args = parser.parse_args(args)# CHANGE
 args.batch_size = batch_size

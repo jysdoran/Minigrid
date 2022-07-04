@@ -2,6 +2,7 @@ import torch
 import torchvision
 import networkx as nx
 import dgl
+from dgl.dataloading import GraphDataLoader
 import os
 import numpy as np
 import random
@@ -13,9 +14,12 @@ import itertools
 from tqdm import tqdm
 from copy import deepcopy
 from typing import Tuple, List
+import math
 
 from data_generators import Batch
 grid_to_gridworld = Batch.encode_grid_to_gridworld
+graph_to_gridworld = Batch.encode_graph_to_gridworld
+reduced_adj_to_gridworld_layout = Batch.encode_reduced_adj_to_gridworld_layout
 
 #WIP section
 
@@ -197,7 +201,7 @@ def plot_latent_visualisation(model, z_max: Tuple[float, float] = (10,10), z_min
 def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None, n_interp:int = 4, dim_r_threshold=None, interpolation_scheme:str = 'linear', img_dims: Tuple[int, int, int] = None, figsize: Tuple[int, int] = (10, 10),
                               labels=None, latent_sampling=False, device='cpu', alpha=0.5, title=None):
 
-    assert len(minibatch) % 2 == 0
+    #assert len(minibatch) % 2 == 0
 
     if Z_mean is None: Z_mean = 0
     if Z_std is None: Z_std = 1
@@ -228,7 +232,7 @@ def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None,
         latents_dist = torch.cdist(latents, latents, p=2)
         eps = 5e-3
     if interpolation_scheme == 'polar':
-        eps = 0.
+        eps = 5e-3
         latents_dist = cdist_polar(latents, latents)
 
     latents_dist[latents_dist<=eps] = float('inf')
@@ -277,60 +281,6 @@ def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None,
     interpolated_samples = model.decoder.param_b(interpolated_logits)
 
     return interpolated_latents_grid, interpolated_samples
-
-
-
-
-    logits = model.decoder(torch.tensor(Z_grid, dtype=torch.float, device=device))
-    samples = model.decoder.param_b(logits).detach().cpu()
-    if img_dims is not None:
-        samples = samples.reshape(*samples.shape[:2], *img_dims)
-    samples = samples.squeeze() #TODO: check if you can remove.
-
-    fig, axes = plot_grid_of_samples(samples, grid=None, figsize=figsize)
-
-    for i, j in itertools.product(range(grid[0]), range(grid[1])):
-        if j == 0:
-            axes[j, i].set_title(f'{x[i]:.2f}', fontsize=13)
-        if i == 0:
-            axes[j, i].set_ylabel(f'{y[grid[0] - j - 1]:.2f}', fontsize=13)
-
-    if Z_points is not None:
-        if isinstance(Z_points, torch.Tensor):
-            Z_points = Z_points.detach().cpu().numpy()
-        # Overlay another axes
-        rect = [axes[0][0].get_position().get_points()[0, 0], axes[-1][-1].get_position().get_points()[0, 1],
-                axes[-1][-1].get_position().get_points()[1, 0] - axes[0][0].get_position().get_points()[0, 0],
-                axes[0][0].get_position().get_points()[1, 1] - axes[-1][-1].get_position().get_points()[0, 1]
-                ]
-        ax = fig.add_axes(rect)
-
-        if labels is not None:
-            if isinstance(labels, torch.Tensor):
-                labels = labels.cpu().numpy()
-            # Create legend
-            colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-            c = np.array(colors)[0]  # TODO: Y.numpy()
-            legend_elements = [mpl.patches.Patch(facecolor=colors[i], label=i) for i in range(10)]
-            ax.legend(handles=legend_elements, ncol=10,
-                      bbox_to_anchor=(0.5, 0.92),
-                      bbox_transform=fig.transFigure,
-                      loc='center',
-                      prop={'size': 14},
-                      frameon=False)
-        else:
-            c = 'g'
-        # Plot projections
-        ax.scatter(Z_points[:, 0], Z_points[:, 1], color=c, alpha=alpha)
-        ax.patch.set_alpha(0.)
-        ax.set_xlim(z_min[0], z_max[0])
-        ax.set_ylim(z_min[1], z_max[1])
-        ax.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
-
-    if title is not None:
-        fig.suptitle(title, size=13)
-
-    return fig
 
 def lerp(val, low, high):
     return (1.0-val) * low + val * high
@@ -420,6 +370,15 @@ def create_VAE_argparser():
                            help='Encoder layer dimensions.')
     #Decoder
     parser_FC.add_argument('--dec_layer_dims', type=int, nargs='+',
+                        help='Decoder layer dimensions.')
+
+    # GNN ARCHITECTURE
+    parser_GNN = subparsers.add_parser('GNN', description='Fully Connected Architecture')
+    #Encoder
+    parser_GNN.add_argument('--enc_layer_dims', type=int, nargs='+',
+                           help='Encoder layer dimensions.')
+    #Decoder
+    parser_GNN.add_argument('--dec_layer_dims', type=int, nargs='+',
                         help='Decoder layer dimensions.')
 
     # CNN ARCHITECTURE
@@ -545,12 +504,14 @@ def per_datapoint_elbo_to_avgelbo_and_loss(elbos):
 def create_dataloader(data, args, shuffle=True):
     kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
 
-    data_loader = torch.utils.data.DataLoader(
-        data, batch_size=args.batch_size, shuffle=shuffle, **kwargs)
+    if args.architecture == 'GNN':
+        data_loader = GraphDataLoader(dataset=data, batch_size=args.batch_size, shuffle=shuffle)
+    else:
+        data_loader = torch.utils.data.DataLoader(
+            data, batch_size=args.batch_size, shuffle=shuffle, **kwargs)
+        data_loader = WrappedDataLoader(data_loader, ToDeviceTransform(args.device))
 
-    wrapped_data_loader = WrappedDataLoader(data_loader, ToDeviceTransform(args.device))
-
-    return wrapped_data_loader
+    return data_loader
 
 
 def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard=None, latent_eval_freq=10):
@@ -560,6 +521,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
     train_loader = create_dataloader(train_data, args, shuffle=True)
     early_termination = False
     example_data_train, example_targets_train = next(iter(train_loader)) #TODO: make deterministic accross runs
+    example_data_train = example_data_train.to(args.device)
     target_metadata_train = example_targets_train.tolist() #TODO: change depending on dataset
     if tensorboard is not None:
         tensorboard.add_text('Number of model parameters', str(model.num_parameters))
@@ -571,22 +533,30 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
             example_samples_train = grid_to_gridworld(example_data_train, layout_only=True)
         elif train_data.dataset_metadata['data_type'] == 'gridworld':
             example_samples_train = example_data_train
+        elif train_data.dataset_metadata['data_type'] == 'graph':
+            graphs = dgl.unbatch(example_data_train)
+            example_samples_train = graph_to_gridworld(graphs)
         else:
             raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
-        assert example_data_train.shape[1:] == args.data_dims, f'mismatch between data loader dims ' \
-                                                               f'{example_data_train.shape[1:]} and dims specified by ' \
-                                                               f'model arguments {args.data_dims}'
+        if train_data.dataset_metadata['data_type'] != 'graph':
+            assert example_data_train.shape[1:] == args.data_dims, f'mismatch between data loader dims ' \
+                                                                   f'{example_data_train.shape[1:]} and dims specified by ' \
+                                                                   f'model arguments {args.data_dims}'
         tensorboard.add_images('train_samples', flip_bits(resize(example_samples_train)), dataformats='NCHW')
-        tensorboard.add_graph(model, example_data_train)
+        #tensorboard.add_graph(model, example_data_train) #TODO: fix for GNNarch
     if test_data is not None:
         test_loader = create_dataloader(test_data, args, shuffle=True)
         example_data_test, example_targets_test = next(iter(test_loader))
+        example_data_test = example_data_test.to(args.device)
         target_metadata_test = example_targets_test.tolist()  # TODO: change depending on dataset
         if tensorboard is not None:
             if train_data.dataset_metadata['data_type'] == 'grid':
                 example_samples_test = grid_to_gridworld(example_data_test, layout_only=True)
             elif train_data.dataset_metadata['data_type'] == 'gridworld':
                 example_samples_test = example_data_test
+            elif train_data.dataset_metadata['data_type'] == 'graph':
+                graphs = dgl.unbatch(example_data_test)
+                example_samples_test = graph_to_gridworld(graphs)
             else:
                 raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
             tensorboard.add_images('test_samples', flip_bits(resize(example_samples_test)), dataformats='NCHW')
@@ -616,11 +586,12 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
             # We don't use labels hence discard them with a _
             for batch_idx, (mbatch, _) in enumerate(train_loader):
                 # Reset gradient computations in the computation graph
+                mbatch = mbatch.to(args.device)
                 optimizer.zero_grad()
 
                 # Compute the loss for the mini-batch
                 elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
-                elbo /= example_data_train[0].numel() #divide by number of dimensions to have a consistent ELBO metric across models
+                elbo /= math.prod(list(args.data_dims)) #divide by number of dimensions to have a consistent ELBO metric across models
 
                 # Compute the gradients using backpropagation
                 loss.backward()
@@ -628,7 +599,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                 optimizer.step()
 
                 epoch_train_elbos += [elbo.detach().item()]
-                pbar.set_description((f'Train Epoch: {epoch} [{batch_idx * len(mbatch)}/{len(train_loader.dataset)}'
+                pbar.set_description((f'Train Epoch: {epoch} [{batch_idx * args.batch_size}/{len(train_loader.dataset)}'
                                       f'({100. * batch_idx / len(train_loader):.0f}%)] ELBO: {elbo:.6f}'))
 
             # Test
@@ -637,16 +608,14 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                     model.eval()
                     epoch_test_elbos = []
                     for batch_idx, (mbatch, _) in enumerate(test_loader):
-                        #mbatch = mbatch.to(args.device)
-                        # Flatten the images
-                        #mbatch = mbatch.view([-1] + [mbatch.shape[-2] * mbatch.shape[-1]])
+                        mbatch = mbatch.to(args.device)
 
                         # Compute the loss for the test mini-batch
                         elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
-                        elbo /= example_data_train[0].numel()
+                        elbo /= math.prod(list(args.data_dims))
 
                         epoch_test_elbos += [elbo.detach().item()]
-                        pbar.set_description((f'Test Epoch: {epoch} [{batch_idx * len(mbatch)}/{len(test_loader.dataset)} '
+                        pbar.set_description((f'Test Epoch: {epoch} [{batch_idx * args.batch_size}/{len(test_loader.dataset)} '
                                               f'({100. * batch_idx / len(test_loader):.0f}%)] ELBO: {elbo:.6f}'))
 
             # Store epoch summary in list
@@ -668,7 +637,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                     best_model_state = deepcopy(model.state_dict())
                     best_optim_state = deepcopy(optimizer.state_dict())
         except KeyboardInterrupt:
-            end_of_training_message = f"Training manually interrupted at epoch {epoch} [{batch_idx * len(mbatch)}" \
+            end_of_training_message = f"Training manually interrupted at epoch {epoch} [{batch_idx * args.batch_size}" \
                                       f"/{len(train_loader.dataset)}({100. * batch_idx / len(train_loader):.0f}%)]."
             print(end_of_training_message)
             early_termination = True
@@ -678,6 +647,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         if tensorboard is not None:
             example_data = example_data_train
             example_targets = example_targets_train
+            example_samples = example_samples_train
             target_metadata = target_metadata_train
             loader = train_loader
             epoch_avg_elbo = epoch_avg_train_elbo
@@ -694,12 +664,6 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                 # latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets, device=args.device)
                 # tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ train data', latent_space_vis, global_step=epoch)
 
-                if train_data.dataset_metadata['data_type'] == 'grid':
-                    example_samples = grid_to_gridworld(example_data, layout_only=True)
-                elif train_data.dataset_metadata['data_type'] == 'gridworld':
-                    example_samples = example_data
-                else:
-                    raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
                 tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(example_samples)),
                                           tag='train_data_encoded_samples', global_step=epoch)
 
@@ -709,6 +673,11 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                     decoded_samples = grid_to_gridworld(decoded_data, layout_only=True)
                 elif train_data.dataset_metadata['data_type'] == 'gridworld':
                     decoded_samples = decoded_data
+                elif train_data.dataset_metadata['data_type'] == 'graph':
+                    #TODO: update when adding the start and goal positions
+                    decoded_samples = reduced_adj_to_gridworld_layout(decoded_data)
+                    decoded_samples = decoded_samples.reshape(*decoded_samples.shape, 1)
+                    decoded_samples = torch.permute(decoded_samples, (0, 3, 1, 2))
                 else:
                     raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
                 tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(decoded_samples)),
@@ -717,6 +686,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
             if test_data is not None:
                 example_data = example_data_test
                 example_targets = example_targets_test
+                example_samples = example_samples_test
                 target_metadata = target_metadata_test
                 epoch_avg_elbo = epoch_avg_test_elbo
                 tensorboard.add_scalar('test ELBO', epoch_avg_elbo, epoch * len(loader))
@@ -736,11 +706,14 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
                     logits = model.decoder(mean)
                     decoded_data = model.decoder.param_b(logits)
                     if train_data.dataset_metadata['data_type'] == 'grid':
-                        example_samples = grid_to_gridworld(example_data, layout_only=True)
                         decoded_samples = grid_to_gridworld(decoded_data, layout_only=True)
                     elif train_data.dataset_metadata['data_type'] == 'gridworld':
-                        example_samples = example_data
                         decoded_samples = decoded_data
+                    elif train_data.dataset_metadata['data_type'] == 'graph':
+                        # TODO: update when adding the start and goal positions
+                        decoded_samples = reduced_adj_to_gridworld_layout(decoded_data)
+                        decoded_samples = decoded_samples.reshape(*decoded_samples.shape, 1)
+                        decoded_samples = torch.permute(decoded_samples, (0, 3, 1, 2))
                     else:
                         raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
 
@@ -767,6 +740,7 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         optimizer.load_state_dict(best_optim_state)
 
     if tensorboard is not None:
+        model.eval()
         if isinstance(model.decoder.bottleneck.input_size, int):
             latent_dim = (model.decoder.bottleneck.input_size,)
         else:
@@ -778,6 +752,11 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
             generated_samples = grid_to_gridworld(generated_data, layout_only=True)
         elif train_data.dataset_metadata['data_type'] == 'gridworld':
             generated_samples = generated_data
+        elif train_data.dataset_metadata['data_type'] == 'graph':
+            # TODO: update when adding the start and goal positions
+            generated_samples = reduced_adj_to_gridworld_layout(generated_data)
+            generated_samples = generated_samples.reshape(*generated_samples.shape, 1)
+            generated_samples = torch.permute(generated_samples, (0, 3, 1, 2))
         else:
             raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
         tensorboard.add_embedding(Z,
@@ -788,16 +767,20 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
         example_data = example_data_train
         example_targets = example_targets_train
         target_metadata = target_metadata_train
+        example_samples = example_samples_train
 
-        mean, logvar = model.encoder(example_data_train)
+        mean, logvar = model.encoder(example_data)
         logits = model.decoder(mean)
         decoded_data = model.decoder.param_b(logits)
         if train_data.dataset_metadata['data_type'] == 'grid':
-            example_samples = grid_to_gridworld(example_data, layout_only=True)
             decoded_samples = grid_to_gridworld(decoded_data, layout_only=True)
         elif train_data.dataset_metadata['data_type'] == 'gridworld':
-            example_samples = example_data
             decoded_samples = decoded_data
+        elif train_data.dataset_metadata['data_type'] == 'graph':
+            # TODO: update when adding the start and goal positions
+            decoded_samples = reduced_adj_to_gridworld_layout(decoded_data)
+            decoded_samples = decoded_samples.reshape(*decoded_samples.shape, 1)
+            decoded_samples = torch.permute(decoded_samples, (0, 3, 1, 2))
         else:
             raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
         tensorboard.add_embedding(mean, metadata=target_metadata, label_img=flip_bits(resize(example_samples)),
@@ -812,17 +795,21 @@ def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard
             example_targets = example_targets_test
             target_metadata = target_metadata_test
             epoch_avg_elbo = epoch_avg_test_elbo
+            example_samples = example_samples_test
 
             mean, logvar = model.encoder(example_data)
             logits = model.decoder(mean)
             decoded_data = model.decoder.param_b(logits)
 
             if train_data.dataset_metadata['data_type'] == 'grid':
-                example_samples = grid_to_gridworld(example_data, layout_only=True)
                 decoded_samples = grid_to_gridworld(decoded_data, layout_only=True)
             elif train_data.dataset_metadata['data_type'] == 'gridworld':
-                example_samples = example_data
                 decoded_samples = decoded_data
+            elif train_data.dataset_metadata['data_type'] == 'graph':
+                # TODO: update when adding the start and goal positions
+                decoded_samples = reduced_adj_to_gridworld_layout(decoded_data)
+                decoded_samples = decoded_samples.reshape(*decoded_samples.shape, 1)
+                decoded_samples = torch.permute(decoded_samples, (0, 3, 1, 2))
             else:
                 raise RuntimeError(f"Data type {train_data.dataset_metadata['data_type']} not recognised.")
 
