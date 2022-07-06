@@ -24,10 +24,10 @@ data_type = 'graph' #'graph'
 data_dim = 27
 
 use_gpu = True
-plot_every = 1
+plot_every = 10
 epochs = 100
 batch_size = 64
-arch = 'big_gnn_noreadout'#'fc'
+arch = 'big_gnn_sym'#'fc'
 latent_dim = 64
 
 task_structures = '-'.join(task_structures)
@@ -115,7 +115,9 @@ args_gnn = [  '--gradient_type', 'pathwise',
              'GNN',
              '--dec_layer_dims', f'{latent_dim}', '256', '1024', f'{output_dim_flat}',
              '--enc_layer_dims', f'{input_dim_flat}', '8', '1024', '256', f'{latent_dim}',
-             '--enc_convolutions', '8']
+             '--enc_convolutions', '8',
+             '--augmented_inputs',
+              '--num_nodes', str(n_nodes),]
 
 args_fc = [  '--gradient_type', 'pathwise',
              '--num_variational_samples', '1',
@@ -264,7 +266,7 @@ if arch == '6cnn' or arch == '5cnn':
         args = args_grid_cnn_fc
 elif arch == 'fc':
     args = args_fc
-elif arch == 'gnn' or arch == 'gnn_noreadout' or arch == 'big_gnn_noreadout':
+elif arch == 'gnn' or arch == 'gnn_noreadout' or arch == 'big_gnn_noreadout' or arch == 'big_gnn_sym':
     args = args_gnn
 
 args = parser.parse_args(args)# CHANGE

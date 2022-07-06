@@ -382,6 +382,10 @@ def create_VAE_argparser():
     #Decoder
     parser_GNN.add_argument('--dec_layer_dims', type=int, nargs='+',
                         help='Decoder layer dimensions.')
+    parser_GNN.add_argument('--augmented_inputs', action='store_true', default=False,
+                        help='Augments inputs with allowed permutations when minimising ELBO')
+    parser_GNN.add_argument('--num_nodes', type=int, default=169,
+                           help='Maximum number of nodes in each graph.')
 
     # CNN ARCHITECTURE
     parser_CNN = subparsers.add_parser('CNN', description='CNN Architecture')

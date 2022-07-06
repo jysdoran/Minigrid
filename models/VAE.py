@@ -180,7 +180,7 @@ def elbo_with_pathwise_gradients(X, *, encoder, decoder, num_samples, data_dist=
 
     return elbos
 
-def elbo_with_pathwise_gradients_gnn(X, *, encoder, decoder, num_samples, data_dist=None):
+def elbo_with_pathwise_gradients_gnn(X, *, encoder, decoder, num_samples, data_dist=None, permutations=None):
 
     mean, logvar = encoder(X)  # (B, H), (B, H)
 
@@ -200,7 +200,13 @@ def elbo_with_pathwise_gradients_gnn(X, *, encoder, decoder, num_samples, data_d
     A_in = torch.empty((len(graphs), n_nodes, n_nodes)).to(logits.device)
     for m in range(len(graphs)):
         A_in[m] = graphs[m].adj().to_dense()
-    A_in = Batch.encode_adj_to_reduced_adj(A_in) #(M, n_nodes - 1, 2)
+    if permutations is not None:
+        permutations = permutations.to(logits.device)
+        A_in = [A_in[:,permutations[i]][:,:, permutations[i]] for i in range(permutations.shape[0])]
+        A_in = torch.stack(A_in, dim=1).to(logits.device)  # B, P, N, N
+        A_in = A_in.reshape(A_in.shape[0]*A_in.shape[1],*A_in.shape[2:]) #B*P, N, N
+        A_in = Batch.encode_adj_to_reduced_adj(A_in) #B*P, n_nodes - 1, 2
+        logits = logits.repeat_interleave(permutations.shape[0], dim=1) # (M, B, n_nodes-1, 2) -> (M, B*P, n_nodes-1, 2)
 
     # Compute KLD( q(z|x) || p(z) )
     kld = compute_kld_with_standard_gaussian(mean, logvar)  # (B,)
@@ -209,16 +215,19 @@ def elbo_with_pathwise_gradients_gnn(X, *, encoder, decoder, num_samples, data_d
     # Important: the samples are "propagated" all the way to the decoder output,
     # indeed we are interested in the mean of p(X|z)
 
-    A_in = A_in.reshape(A_in.shape[0], -1) # (B, d1, d2, ..., dn) -> (B, D=2*(n_nodes - 1))
+    A_in = A_in.reshape(A_in.shape[0], -1) # (B | B * P, d1, d2, ..., dn) -> (B | B*P, D=2*(n_nodes - 1))
     logits = logits.reshape(*logits.shape[0:2], -1) # (M, B, n_nodes-1, 2) -> (M, B, D=2*(n_nodes - 1))
 
     if data_dist == 'Bernoulli':
-        neg_cross_entropy = evaluate_logprob_bernoulli(A_in, logits=logits).mean(dim=0)  # (B,)
+        neg_cross_entropy = evaluate_logprob_bernoulli(A_in, logits=logits).mean(dim=0)  # (B,) | (B*P,)
     elif data_dist == 'ContinuousBernoulli':
-        neg_cross_entropy = evaluate_logprob_continuous_bernoulli(A_in, logits=logits).mean(dim=0)  # (B,)
+        neg_cross_entropy = evaluate_logprob_continuous_bernoulli(A_in, logits=logits).mean(dim=0)  # (B,) | (B*P,)
     else:
         raise NotImplementedError(f"Specified Data Distribution {data_dist} Invalid or Not Currently Implemented")
 
+    if permutations is not None:
+        neg_cross_entropy = neg_cross_entropy.reshape(-1, permutations.shape[0]) # (B*P,) -> (B,P)
+        neg_cross_entropy, _ = torch.max(neg_cross_entropy, dim=1) # (B,P,) -> (B,)
     # ELBO for each data-point
     elbos = neg_cross_entropy - kld  # (B,)
 
@@ -758,6 +767,17 @@ class VAE(nn.Module):
         elif self.hparams.architecture == 'GNN':
             self.encoder = GNNEncoder(hparams)
             self.decoder = FCDecoder(hparams)
+            if self.hparams.augmented_inputs:
+                transforms = torch.tensor([[[1, 0], [0, 1]],
+                                               [[1, 0], [0, -1]],
+                                               [[0, 1], [1, 0]],
+                                               [[0, 1], [-1, 0]],
+                                               [[-1, 0], [0, 1]],
+                                               [[-1, 0], [0, -1]],
+                                               [[0, -1], [1, 0]],
+                                               [[0, -1], [-1, 0]]], dtype=torch.int)
+                self.permutations = Batch.augment_adj(self.hparams.num_nodes, transforms).long()
+
         else:
             raise argparse.ArgumentError(f"VAE Architecture argument {self.hparams.architecture} not recognised.")
 
@@ -795,7 +815,7 @@ class VAE(nn.Module):
         # Reuse the implemented code
         return elbo_with_pathwise_gradients_gnn(X, encoder=self.encoder, decoder=self.decoder,
                                             num_samples=self.hparams.num_variational_samples,
-                                            data_dist=self.hparams.data_distribution)
+                                            data_dist=self.hparams.data_distribution, permutations=self.permutations)
 
     def elbo_with_score_function_gradients(self, X):
         # Reuse the implemented code
