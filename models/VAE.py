@@ -4,7 +4,7 @@ import argparse
 import torch.nn as nn
 import torch.optim as optim
 from util import BinaryTransform
-from models.networks import FC_ReLU_Network, CNN_Factory
+from models.networks import FC_ReLU_Network, CNN_Factory, Network
 from models.gnn_networks import GIN
 from models.layers import Reshape
 from data_generators import Batch
@@ -747,6 +747,198 @@ class dConvDecoder(Decoder):
 
         return logits
 
+class GraphMLPDecoder(Decoder):
+
+    def __init__(self, config, hyperparameters):
+        super().__init__()
+        self.config = config
+        self.hparams = hyperparameters
+        self.distributions = self.config.distributions
+        self.model = self.create_model(*self.hparams.latent_dim, *self.hparams.decoder.layer_dim)
+        if self.config.adjacency is not None:
+            self.adjacency = Network((*self.hparams.decoder.layer_dim[-1], self.config.output_dim.adjacency),
+                                     output_activation=nn.Sigmoid)
+        else:
+            self.adjacency = None
+        if self.config.attributes:
+            self.attribute_heads = []
+            for i in range(len(self.config.attributes_names)):
+                self.attribute_heads.append(Network((*self.hparams.decoder.layer_dim[-1],
+                                                    *self.config.output_dim.attributes[i]),
+                                                    output_activation=nn.Softmax))
+            else:
+                self.attribute_heads = None
+
+    def forward(self, Z):
+        """
+        Computes the parameters of the generative distribution p(x | z)
+
+        Args:
+            Z (Tensor):  latent vectors, a batch of shape (M, B, K)
+
+        Returns:
+            adj_out, f_out (Tensors):
+        """
+        logits = Z
+        for net in self.model:
+            logits = net(logits)
+
+        if self.adjacency is not None:
+            adj_out = self.adjacency(logits)
+        else:
+            adj_out = None
+
+        if self.attribute_heads is not None:
+            f_out = []
+            for net in self.attribute_heads:
+                f_out.append(net(logits))
+            torch.stack(f_out)
+        else:
+            f_out = None
+
+        return adj_out, f_out
+
+    # def forward_adjacency(self, Z):
+    #     logits = self._forward_model(Z)
+    #     return self.adjacency(logits)
+    #
+    # def forward_attributes(self, Z):
+    #     logits = self._forward_model(Z)
+    #     f_out = []
+    #     for net in self.attribute_heads:
+    #         f_out.append(net(logits))
+    #     f_out = torch.stack(f_out)
+    #     return f_out
+    #
+    # def _forward_model(self, Z):
+    #     """
+    #     """
+    #     logits = Z
+    #     for net in self.model:
+    #         logits = net(logits)
+    #
+    #     return logits
+
+    #TODO: pickup from here. Rearrange the functions above into a distributions file?
+    def log_prob(self, logits, X):
+        """
+        Evaluates the log_probability of X given the parameters of the continuous Bernoulli
+
+        Args:
+            logits (Tensor): parameters of the continuous Bernoulli, shape (*, B, D)
+            X (Tensor):      data, shape (*, B, D)
+
+        Returns:
+            logpx (Tensor):  log-probability of X, a batch of shape (*, B)
+        """
+        # Reuse the implemented code
+        if self.data_dist == 'Bernoulli':
+            return evaluate_logprob_bernoulli(X, logits=logits)
+        elif self.data_dist == 'ContinuousBernoulli':
+            return evaluate_logprob_continuous_bernoulli(X, logits=logits)
+        else:
+            raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
+
+    # Some extra methods for analysis
+
+    def sample(self, logits, *, num_samples=1):
+        """
+        Samples the continuous Bernoulli
+
+        Args:
+            logits (Tensor):   parameters of the continuous Bernoulli, shape (*, B, D)
+            num_samples (int): number of samples
+
+        Returns:
+            X (Tensor):  samples from the distribution, shape (num_samples, *, B, D)
+        """
+        if self.data_dist == 'Bernoulli':
+            dist = torch.distributions.Bernoulli(logits=logits)
+        elif self.data_dist == 'ContinuousBernoulli':
+            dist = torch.distributions.ContinuousBernoulli(logits=logits)
+        else:
+            raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
+        return dist.sample((num_samples,))
+
+    def mean(self, logits):
+        """
+        Returns the mean of the continuous Bernoulli
+
+        Args:
+            logits (Tensor):   parameters of the continuous Bernoulli, shape (*, B, D)
+
+        Returns:
+            mean (Tensor):  means of the continuous Bernoulli, shape (*, B, D)
+        """
+        if self.data_dist == 'Bernoulli':
+            dist = torch.distributions.Bernoulli(logits=logits)
+        elif self.data_dist == 'ContinuousBernoulli':
+            dist = torch.distributions.ContinuousBernoulli(logits=logits)
+        else:
+            raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
+        return dist.mean
+
+    def param_p(self, logits):
+        """
+        Returns the distribution parameters
+
+        Args:
+            logits (Tensor): decoder output (non-normalised log probabilities), shape (*, B, D)
+
+        Returns:
+            p (Tensor): parameters of the distribution, shape (*, B, D)
+        """
+        if self.data_dist == 'Bernoulli':
+            dist = torch.distributions.Bernoulli(logits=logits)
+        elif self.data_dist == 'ContinuousBernoulli':
+            dist = torch.distributions.ContinuousBernoulli(logits=logits)
+        else:
+            raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
+        return dist.probs
+
+    def param_b(self, logits, threshold: float = 0.5):
+        """
+        Returns a binary transformation of the distribution parameters
+
+        Args:
+            logits (Tensor): decoder output (non-normalised log probabilities), shape (*, B, D)
+            :param threshold (float): Threshold for binary transformation, [0,1]
+
+        Returns:
+            b (Tensor):  Binary transformation of the distribution parameters, shape (*, B, D)
+        """
+
+        binary_transform = BinaryTransform(threshold)
+        return binary_transform(self.param_p(logits))
+
+    def __init__(self, config):
+        super().__init__(config)
+
+    def create_model(self, dims: Iterable[int]):
+        self.bottleneck = FC_ReLU_Network(dims[0:2], output_activation=nn.ReLU)
+        self.fc_net = FC_ReLU_Network(dims[1:], output_activation=None)
+        return [self.bottleneck, self.fc_net]
+
+    def forward(self, Z):
+        """
+        Computes the parameters of the generative distribution p(x | z)
+
+        Args:
+            Z (Tensor):  latent vectors, a batch of shape (M, B, K) / (B, K)
+
+        Returns:
+            logits (Tensor):   parameters of the continuous Bernoulli, shape (M, B, D) / (B, D)
+        """
+
+        base_shape = Z.shape[:-1] # (M, B) or (B)
+
+        logits = Z
+        for net in self.model:
+            logits = net(logits)
+
+        logits = logits.reshape(*base_shape, *self.config.data_dims)
+        return logits
+
 
 class VAE(nn.Module):
     """
@@ -834,3 +1026,56 @@ class VAE(nn.Module):
                     total_params += num_params
 
         return total_params
+
+
+class GraphVAE(nn.Module):
+    """
+    A wrapper for the VAE model
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.encoder = GNNEncoder(config.configuration.encoder, config.hyperparameters)
+        self.decoder = GraphMLPDecoder(config.configuration.decoder, config.hyperparameters)
+
+        if self.config.model_config.configuration.model.augmented_inputs:
+            transforms = torch.tensor(self.config.configuration.model.transforms, dtype=torch.int)
+            self.permutations = Batch.augment_adj(self.config.configuration.data.graph_max_nodes, transforms).long()
+        else: self.permutations = None
+
+    def forward(self, X):
+        """
+        Computes the variational ELBO
+
+        Args:
+            X (Tensor):  data, a batch of shape (B, K)
+
+        Returns:
+            elbos (Tensor): per data-point elbos, shape (B, D)
+        """
+        if self.config.configuration.model.gradient_type == 'pathwise':
+            return self.elbo_with_pathwise_gradients(X)
+        else:
+            raise ValueError(f'gradient_type={self.hparams.gradient_type} is invalid')
+
+    def elbo_with_pathwise_gradients(self, X):
+        # Reuse the implemented code
+        return elbo_with_pathwise_gradients_gnn(X, encoder=self.encoder, decoder=self.decoder,
+                                            num_samples=self.config.configuration.model.num_variational_samples,
+                                            data_dist=self.config.configuration.decoder.distributions,
+                                            permutations=self.permutations)
+
+    @property
+    def num_parameters(self):
+        total_params = 0
+        for parameters_blocks in self.parameters():
+            for parameter_array in parameters_blocks:
+                array_shape = [*parameter_array.shape]
+                if array_shape:
+                    num_params = np.prod(array_shape)
+                    total_params += num_params
+
+        return total_params
+
