@@ -1,0 +1,60 @@
+project: DC-UED
+model: GraphVAE
+domain: Minigrid
+run_name: change_me
+
+# these parameters should not change
+configuration:
+  data:
+    gridworld_data_dim: [3,27,27]
+    encoding: "reduced_graph"
+    graph_max_nodes: 169
+    node_attributes_dim: 4
+    node_attributes: [ "empty", "wall", "start", "goal" ]
+
+  model:
+    cuda: True
+    gradient_type: pathwise
+    num_variational_samples: 1
+    augmented_inputs: False
+    augmented_transforms: [[[1, 0], [0, 1]],
+                           [[1, 0], [0, -1]],
+                           [[0, 1], [1, 0]],
+                           [[0, 1], [-1, 0]],
+                           [[-1, 0], [0, 1]],
+                           [[-1, 0], [0, -1]],
+                           [[0, -1], [1, 0]],
+                           [[0, -1], [-1, 0]]]
+
+  decoder:
+    adjacency: reduced #[full, reduced, None]
+    attributes: True #[True, False]
+    attributes_names: ["layout", "start", "goal"]
+    attributes_mapping: [[0], [2], [3]] #predict empty, start, goal
+    distributions: ["bernoulli", "categorical", "categorical"]
+    distributions_domains: ["feats", "nodes", "nodes"]
+    output_dim: #this should be computed according to adjacency, data.graph_max_nodes
+      adjacency: None
+      attributes: None
+
+# these parameters will change between runs
+hyperparameters:
+  seed: 20211201
+  latent_dim: 64
+
+  encoder:
+    gnn:
+      num_layers: 8
+      layer_dim: 8
+    mlp:
+      num_layers: 2
+      layer_dim: [ 1024, 256 ]
+
+  decoder:
+    num_layers: 2 #not counting the final multihead layer
+    layer_dim: [ 256, 1024 ]
+
+  optimiser:
+    batch_size: 50
+    epochs: 3000
+    learning_rate: 1e-4

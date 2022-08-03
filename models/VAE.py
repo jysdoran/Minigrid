@@ -43,6 +43,21 @@ def evaluate_logprob_bernoulli(X, *, logits):
     cb = torch.distributions.Bernoulli(logits=logits)
     return cb.log_prob(X).sum(dim=-1)
 
+def evaluate_logprob_categorical(X, *, logits):
+    """
+    Evaluates log-probability of the continuous Bernoulli distribution
+
+    Args:
+        X (Tensor):      data, a batch of shape (B,), entries are int representing category labels
+        logits (Tensor): parameters of the C-categories Categorical distribution,
+                         a batch of shape (B, C)
+
+    Returns:
+        logpx (Tensor): log-probabilities of the inputs X, a batch of shape (B,)
+    """
+    cb = torch.distributions.Categorical(logits=logits)
+    return cb.log_prob(X)
+
 def evaluate_logprob_diagonal_gaussian(Z, *, mean, logvar):
     """
     Evaluates log-probability of the diagonal Gaussian distribution
@@ -753,7 +768,7 @@ class GraphMLPDecoder(Decoder):
         super().__init__()
         self.config = config
         self.hparams = hyperparameters
-        self.distributions = self.config.distributions
+        self.attribute_distributions = self.config.distributions
         self.model = self.create_model(*self.hparams.latent_dim, *self.hparams.decoder.layer_dim)
         if self.config.adjacency is not None:
             self.adjacency = Network((*self.hparams.decoder.layer_dim[-1], self.config.output_dim.adjacency),
@@ -822,43 +837,88 @@ class GraphMLPDecoder(Decoder):
     #TODO: pickup from here. Rearrange the functions above into a distributions file?
     def log_prob(self, logits, X):
         """
-        Evaluates the log_probability of X given the parameters of the continuous Bernoulli
+        Evaluates the log_probability of X given the distributions parameters
 
         Args:
-            logits (Tensor): parameters of the continuous Bernoulli, shape (*, B, D)
-            X (Tensor):      data, shape (*, B, D)
+            logits (Tensor): probabilistic graph representation, tuple (A_red, Fx)
+                A_prob_red (Tensor): shape (*, B, max_nodes, reduced_edges)
+                Fx (Tensor): shape (*, B, max_nodes, D)
+            X (Tensor):     Batch of Graphs, tuple (A, Fx)
+                A (Tensor): shape (*, B, max_nodes, max_nodes) #TODO: decide if we reduce in this function or outside
+                Fx (Tensor): shape (*, B, max_nodes, D)
 
         Returns:
             logpx (Tensor):  log-probability of X, a batch of shape (*, B)
         """
-        # Reuse the implemented code
-        if self.data_dist == 'Bernoulli':
-            return evaluate_logprob_bernoulli(X, logits=logits)
-        elif self.data_dist == 'ContinuousBernoulli':
-            return evaluate_logprob_continuous_bernoulli(X, logits=logits)
-        else:
-            raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
+
+        A, Fx = X
+        A_prob_red, Fx_prob = logits
+
+        # A: always Bernoulli
+        log_prob_A = evaluate_logprob_bernoulli(A, logits=A_prob_red)
+
+        # Fx #TODO: figure how to explicitly include the distributions_domains property.
+        log_prob_Fx = []
+        for i in range(len(self.attribute_distributions)):
+            Fx_dim = self.config.attributes_mapping[i]
+            if self.attribute_distributions[i] == "bernoulli":
+                log_prob_Fx.append(evaluate_logprob_bernoulli(Fx[..., Fx_dim], Fx_prob[..., i]))
+            # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. B,D),
+            # but requires modifying evaluate_logprob_categorical()
+            elif self.attribute_distributions[i] == "categorical":
+                Fx_labels = Fx[..., Fx_dim].argmax(dim=-1)
+                log_prob_Fx.append(evaluate_logprob_categorical(Fx_labels, Fx_prob[..., i]))
+            else:
+                raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
+
+        log_prob_Fx = torch.stack(log_prob_Fx, dim=-1)
+
+        return log_prob_A, log_prob_Fx
 
     # Some extra methods for analysis
 
-    def sample(self, logits, *, num_samples=1):
+    def sample(self, logits:tuple, *, num_samples=1):
         """
-        Samples the continuous Bernoulli
+        Samples a graph representation from the probabilistic graph tuple
 
         Args:
-            logits (Tensor):   parameters of the continuous Bernoulli, shape (*, B, D)
+            logits (tuple):   parameters of the probablistic graph (A_prob, Fx_prob)
+                A_prob_red (Tensor): shape (*, B, max_nodes, reduced_edges)
+                Fx_prob (Tensor): shape (*, B, max_nodes, D)
             num_samples (int): number of samples
 
         Returns:
-            X (Tensor):  samples from the distribution, shape (num_samples, *, B, D)
+            A (Tensor):  adjacency matrix, shape (num_samples, *, B, max_nodes, reduced_edges)
+            Fx (Tensor): attribute matrix, shape (num_samples, *, B, max_nodes, D)
         """
-        if self.data_dist == 'Bernoulli':
-            dist = torch.distributions.Bernoulli(logits=logits)
-        elif self.data_dist == 'ContinuousBernoulli':
-            dist = torch.distributions.ContinuousBernoulli(logits=logits)
-        else:
-            raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
-        return dist.sample((num_samples,))
+
+        A = self.sample_adj(logits[0], num_samples=num_samples)
+        Fx = self.sample_attributes(logits[1], num_samples=num_samples)
+
+        return A, Fx
+
+    def sample_adj(self, logits:torch.tensor, *, num_samples=1):
+
+        return torch.distributions.Bernoulli(logits=logits).sample((num_samples,))
+
+    def sample_attributes(self, logits:torch.tensor, *, num_samples=1):
+
+        Fx = []
+        for i in range(len(self.attribute_distributions)):
+            Fx_dim = self.config.attributes_mapping[i]
+            if self.attribute_distributions[i] == "bernoulli":
+                Fx.append(torch.distributions.Bernoulli(logits=logits[..., i]).sample((num_samples,)))
+            elif self.attribute_distributions[i] == "categorical":
+                node_inds = torch.distributions.Categorical(logits=logits[..., i]).sample((num_samples,))
+                node_attr = node_inds.one_hot(node_inds, num_classes=logits[..., i].shape[-1])
+                Fx.append(node_attr)
+            else:
+                raise NotImplementedError("Specified Data Distribution Invalid or Not Currently Implemented")
+
+        Fx = torch.stack(Fx, dim=-1)
+
+        return Fx
+
 
     def mean(self, logits):
         """
