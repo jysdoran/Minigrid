@@ -3,6 +3,7 @@ import json
 import yaml
 from pathlib import Path
 
+from torch import optim
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter

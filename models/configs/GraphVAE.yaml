@@ -13,8 +13,12 @@ configuration:
     node_attributes_dim: 4
 
   data:
+    dataset_name: change_me
+    dataset_size: 120000
+    task_structures: ['rooms_unstructured_layout','maze']
+    data_type: 'graph'
     gridworld_data_dim: [3,27,27]
-    encoding: "reduced_graph"
+    encoding: reduced_graph
     node_attributes: [ "empty", "wall", "start", "goal" ]
 
   model:
@@ -33,14 +37,14 @@ configuration:
 
   encoder:
     gnn:
-      architecture: "GIN"
+      architecture: GIN
       num_layers: 8
       layer_dim: 8
       num_mlp_layers: 2
       final_dropout: 0
       learn_eps: False
-      graph_pooling: "mean"
-      neighbor_pooling: "sum"
+      graph_pooling: mean
+      neighbor_pooling: sum
 
     mlp:
       num_layers: 2
@@ -56,11 +60,11 @@ configuration:
     output_dim: #this should be computed according to adjacency, data.graph_max_nodes
       adjacency: None
       attributes: None
-    architecture: "MLP"
+    architecture: MLP
     num_layers: 2 #not counting the final multihead layer
     layer_dim: [ 256, 1024 ]
 
-# these parameters are shared or can change between runs
+# these can change between runs
 hyperparameters:
   optimiser:
     batch_size: 50
@@ -71,3 +75,6 @@ hyperparameters:
       A: 1
       Fx: [1, 1, 1]
       beta: 1
+
+metrics:
+  plot_every: 10
