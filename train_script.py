@@ -1,23 +1,15 @@
 import sys
-
-from pathlib import Path
-
-import torch
-import dgl
-import torchvision
-from torch.utils.data import Dataset, DataLoader
-from dgl.dataloading import GraphDataLoader
-from torchvision import datasets, transforms
-from torch.utils.tensorboard import SummaryWriter
-import numpy as np
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-
-from data_loaders import Maze_Dataset
-from util import *
-from models.VAE import *
 import json
 import yaml
+from pathlib import Path
+
+from torch.utils.data import DataLoader
+from torchvision import transforms
+from torch.utils.tensorboard import SummaryWriter
+
+from data_loaders import Maze_Dataset
+from util.util import *
+from models.VAE import *
 
 #Select the directory using this
 dataset_size = 120000

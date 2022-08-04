@@ -50,7 +50,7 @@ configuration:
     adjacency: reduced #[full, reduced, None]
     attributes: True #[True, False]
     attributes_names: ["empty", "start", "goal"]
-    attributes_mapping: [[0], [2], [3]] #predict empty, start, goal
+    attributes_mapping: [0, 2, 3] #predict empty, start, goal
     distributions: ["bernoulli", "one_hot_categorical", "one_hot_categorical"]
     distributions_domains: ["feats", "nodes", "nodes"]
     output_dim: #this should be computed according to adjacency, data.graph_max_nodes
@@ -66,3 +66,8 @@ hyperparameters:
     batch_size: 50
     epochs: 3000
     learning_rate: 1e-4
+  loss:
+    elbo_coeffs:
+      A: 1
+      Fx: [1, 1, 1]
+      beta: 1
