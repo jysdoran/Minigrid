@@ -420,7 +420,7 @@ class BinaryTransform(object):
         self.thr = thr
 
     def __call__(self, x):
-        return (x > self.thr).to(x.dtype)  # do not change the data type
+        return (x >= self.thr).to(x)  # do not change the data type or device
 
 
 class FlipBinaryTransform(object):

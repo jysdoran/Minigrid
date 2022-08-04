@@ -5,11 +5,16 @@ run_name: change_me
 
 # these parameters should not change
 configuration:
+
+  shared_parameters:
+    seed: 20211201
+    latent_dim: 64
+    graph_max_nodes: 169
+    node_attributes_dim: 4
+
   data:
     gridworld_data_dim: [3,27,27]
     encoding: "reduced_graph"
-    graph_max_nodes: 169
-    node_attributes_dim: 4
     node_attributes: [ "empty", "wall", "start", "goal" ]
 
   model:
@@ -26,34 +31,37 @@ configuration:
                            [[0, -1], [1, 0]],
                            [[0, -1], [-1, 0]]]
 
-  decoder:
-    adjacency: reduced #[full, reduced, None]
-    attributes: True #[True, False]
-    attributes_names: ["layout", "start", "goal"]
-    attributes_mapping: [[0], [2], [3]] #predict empty, start, goal
-    distributions: ["bernoulli", "categorical", "categorical"]
-    distributions_domains: ["feats", "nodes", "nodes"]
-    output_dim: #this should be computed according to adjacency, data.graph_max_nodes
-      adjacency: None
-      attributes: None
-
-# these parameters will change between runs
-hyperparameters:
-  seed: 20211201
-  latent_dim: 64
-
   encoder:
     gnn:
+      architecture: "GIN"
       num_layers: 8
       layer_dim: 8
+      num_mlp_layers: 2
+      final_dropout: 0
+      learn_eps: False
+      graph_pooling: "mean"
+      neighbor_pooling: "sum"
+
     mlp:
       num_layers: 2
       layer_dim: [ 1024, 256 ]
 
   decoder:
+    adjacency: reduced #[full, reduced, None]
+    attributes: True #[True, False]
+    attributes_names: ["empty", "start", "goal"]
+    attributes_mapping: [[0], [2], [3]] #predict empty, start, goal
+    distributions: ["bernoulli", "one_hot_categorical", "one_hot_categorical"]
+    distributions_domains: ["feats", "nodes", "nodes"]
+    output_dim: #this should be computed according to adjacency, data.graph_max_nodes
+      adjacency: None
+      attributes: None
+    architecture: "MLP"
     num_layers: 2 #not counting the final multihead layer
     layer_dim: [ 256, 1024 ]
 
+# these parameters are shared or can change between runs
+hyperparameters:
   optimiser:
     batch_size: 50
     epochs: 3000
