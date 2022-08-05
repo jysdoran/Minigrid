@@ -104,7 +104,7 @@ class GraphGCNEncoder(nn.Module):
         self.logvar = nn.Linear(self.config.mlp.layer_dim[-1], self.shared_params.latent_dim)
 
     def create_model(self):
-        if self.config.architecture == "GIN":
+        if self.config.gnn.architecture == "GIN":
             self.gcn = GIN(num_layers=self.config.gnn.num_layers, num_mlp_layers=self.config.gnn.num_mlp_layers,
                                input_dim=self.shared_params.node_attributes_dim, hidden_dim=self.config.gnn.layer_dim,
                                output_dim=self.config.mlp.layer_dim[0], final_dropout=self.config.gnn.final_dropout,
@@ -172,20 +172,17 @@ class GraphMLPDecoder(nn.Module):
         self.config = config
         self.shared_params = shared_params
         self.attribute_distributions = self.config.distributions
-        self.model = self.create_model(*self.shared_params.latent_dim, *self.config.layer_dim)
+        self.model = self.create_model([self.shared_params.latent_dim, *self.config.layer_dim])
         if self.config.adjacency is not None:
-            self.adjacency = Network((*self.config.layer_dim[-1], self.config.output_dim.adjacency),
-                                     output_activation=None)
+            self.adjacency = nn.Linear(self.config.layer_dim[-1], self.config.output_dim.adjacency)
         else:
             self.adjacency = None
         if self.config.attributes:
-            self.attribute_heads = []
+            self.attribute_heads = nn.ModuleList()
             for i in range(len(self.config.attributes_names)):
-                self.attribute_heads.append(Network((*self.config.layer_dim[-1],
-                                                     *self.config.output_dim.attributes[i]),
-                                                    output_activation=None))
-            else:
-                self.attribute_heads = None
+                self.attribute_heads.append(nn.Linear(self.config.layer_dim[-1], self.config.output_dim.attributes))
+        else:
+            self.attribute_heads = None
 
     def create_model(self, dims: Iterable[int]):
         self.bottleneck = FC_ReLU_Network(dims[0:2], output_activation=nn.ReLU)
@@ -218,6 +215,8 @@ class GraphMLPDecoder(nn.Module):
             torch.stack(f_out)
         else:
             f_out = None
+
+        #TODO: TAKE FROM HERE
 
         return adj_out, f_out
 
@@ -493,18 +492,22 @@ class GraphVAE(nn.Module):
     A wrapper for the VAE model
     """
 
-    def __init__(self, config):
+    def __init__(self, configuration, hyperparameters, **kwargs):
         super().__init__()
-        self.config = config
+        self.configuration = configuration
+        self.hyperparameters = hyperparameters
 
-        self.encoder = GraphGCNEncoder(config.configuration.encoder, config.configuration.shared_parameters)
-        self.decoder = GraphMLPDecoder(config.configuration.decoder, config.configuration.shared_parameters)
+        self.encoder = GraphGCNEncoder(self.configuration.encoder, self.configuration.shared_parameters)
+        self.decoder = GraphMLPDecoder(self.configuration.decoder, self.configuration.shared_parameters)
 
-        if self.config.model_config.configuration.model.augmented_inputs:
-            transforms = torch.tensor(self.config.configuration.model.transforms, dtype=torch.int)
-            self.permutations = Batch.augment_adj(self.config.configuration.shared_parameters.graph_max_nodes,
+        if self.configuration.model.augmented_inputs:
+            transforms = torch.tensor(self.configuration.model.transforms, dtype=torch.int)
+            self.permutations = Batch.augment_adj(self.configuration.shared_parameters.graph_max_nodes,
                                                   transforms).long()
         else: self.permutations = None
+        self.device = torch.device("cuda" if configuration.model.cuda else "cpu")
+        self.to(self.device)
+
 
     def forward(self, X):
         """
@@ -516,15 +519,15 @@ class GraphVAE(nn.Module):
         Returns:
             elbos (Tensor): per data-point elbos, shape (B, D)
         """
-        if self.config.configuration.model.gradient_type == 'pathwise':
+        if self.configuration.model.gradient_type == 'pathwise':
             return self.elbo(X)
         else:
             raise ValueError(f'gradient_type={self.hparams.gradient_type} is invalid')
 
     def elbo(self, X):
         return graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
-                                      num_samples=self.config.configuration.model.num_variational_samples,
-                                      elbo_coeffs=self.config.hyperparameters.loss.elbo_coeffs,
+                                      num_samples=self.configuration.model.num_variational_samples,
+                                      elbo_coeffs=self.hyperparameters.loss.elbo_coeffs,
                                       permutations=self.permutations)
 
     @property

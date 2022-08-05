@@ -37,10 +37,10 @@ cifar_dir = datasets_dir + 'cifar10_data'
 mnist_dir = datasets_dir #+ 'MNIST'
 
 nav_dir = datasets_dir + dataset_directory
-model_config_filepath = base_dir + '/models/configs/GraphVAE.yaml'
-with open(model_config_filepath) as f:
-    model_config = yaml.safe_load(f)
-    model_config = dict2obj(model_config)
+# model_config_filepath = base_dir + '/models/configs/GraphVAE.yaml'
+# with open(model_config_filepath) as f:
+#     model_config = yaml.safe_load(f)
+#     model_config = dict2obj(model_config)
 
 transform_data = True
 if data_type == 'grid':

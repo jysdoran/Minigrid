@@ -1,28 +1,16 @@
-project: DC-UED
-model: GraphVAE
-domain: Minigrid
-run_name: change_me
+name: GraphVAE
+_target_: models.graphVAE.GraphVAE
 
 # these parameters should not change
 configuration:
 
   shared_parameters:
-    seed: 20211201
     latent_dim: 64
     graph_max_nodes: 169
     node_attributes_dim: 4
 
-  data:
-    dataset_name: change_me
-    dataset_size: 120000
-    task_structures: ['rooms_unstructured_layout','maze']
-    data_type: 'graph'
-    gridworld_data_dim: [3,27,27]
-    encoding: reduced_graph
-    node_attributes: [ "empty", "wall", "start", "goal" ]
-
   model:
-    cuda: True
+    cuda: False
     gradient_type: pathwise
     num_variational_samples: 1
     augmented_inputs: False
@@ -51,15 +39,15 @@ configuration:
       layer_dim: [ 1024, 256 ]
 
   decoder:
-    adjacency: reduced #[full, reduced, None]
+    adjacency: reduced #[full, reduced, null]
     attributes: True #[True, False]
     attributes_names: ["empty", "start", "goal"]
     attributes_mapping: [0, 2, 3] #predict empty, start, goal
     distributions: ["bernoulli", "one_hot_categorical", "one_hot_categorical"]
     distributions_domains: ["feats", "nodes", "nodes"]
     output_dim: #this should be computed according to adjacency, data.graph_max_nodes
-      adjacency: None
-      attributes: None
+      adjacency: 336 #(max_node-1)*2 #TODO: remove hardcoding, replace by a keyword in init
+      attributes: 169
     architecture: MLP
     num_layers: 2 #not counting the final multihead layer
     layer_dim: [ 256, 1024 ]
@@ -76,5 +64,5 @@ hyperparameters:
       Fx: [1, 1, 1]
       beta: 1
 
-metrics:
+metrics: #TODO change name and loc
   plot_every: 10

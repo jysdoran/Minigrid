@@ -16,6 +16,7 @@ from copy import deepcopy
 from typing import Tuple, List
 import math
 import json
+from omegaconf import DictConfig, OmegaConf
 
 from data_generators import Batch
 grid_to_gridworld = Batch.encode_grid_to_gridworld
@@ -538,15 +539,15 @@ def per_datapoint_elbo_to_avgelbo_and_loss(elbos):
     return elbo, loss
 
 
-def create_dataloader(data, args, shuffle=True):
-    kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
-
-    if args.architecture == 'GNN':
-        data_loader = GraphDataLoader(dataset=data, batch_size=args.batch_size, shuffle=shuffle)
+def create_dataloader(data, batch_size, device, shuffle=True):
+    data_type = data.dataset_metadata['data_type']
+    if data_type == 'graph':
+        data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
     else:
+        kwargs = {'num_workers': 1, 'pin_memory': True} if device else {}  # Bug here but whatever should be arg.cuda
         data_loader = torch.utils.data.DataLoader(
-            data, batch_size=args.batch_size, shuffle=shuffle, **kwargs)
-        data_loader = WrappedDataLoader(data_loader, ToDeviceTransform(args.device))
+            data, batch_size=batch_size, shuffle=shuffle, **kwargs)
+        data_loader = WrappedDataLoader(data_loader, ToDeviceTransform(device))
 
     return data_loader
 
@@ -843,3 +844,248 @@ def encode_to_img(data, data_type:str):
 # decoded_gw = reduced_adj_to_gridworld_layout(decoded_data)
 # decoded_gw = decoded_gw.reshape(*decoded_gw.shape, 1)
 # decoded_gw = torch.permute(decoded_gw, (0, 3, 1, 2))
+
+def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboard=None, latent_eval_freq=10):
+    batch_size = cfg.models.hyperparameters.optimiser.batch_size
+    epochs = cfg.models.hyperparameters.optimiser.epochs
+    gridworld_data_dim = cfg.datasets.gridworld_data_dim
+    # Create data loaders
+    train_loader = create_dataloader(train_data, batch_size, model.device, shuffle=True)
+    data_type = train_data.dataset_metadata['data_type']
+    data_type_dec = 'graph_dec_output' #TODO: work this out within the parameters
+    early_termination = False
+    example_data_train, example_targets_train = next(iter(train_loader)) #TODO: make deterministic accross runs
+    example_data_train = example_data_train.to(model.device)
+    target_metadata_train = example_targets_train.tolist() #TODO: change depending on dataset
+    if tensorboard is not None:
+        tensorboard.add_text('Number of model parameters', str(model.num_parameters))
+        tensorboard.add_text('Encoder Architecture', str(model.encoder.model))
+        tensorboard.add_text('Bottleneck Architecture', str(model.encoder.mean))
+        tensorboard.add_text('Decoder Architecture', str(model.decoder.model))
+        tensorboard.add_text('Config', OmegaConf.to_yaml(cfg))
+        if data_type != 'graph':
+            assert example_data_train.shape[1:] == gridworld_data_dim, f'mismatch between data loader dims ' \
+                                                                   f'{example_data_train.shape[1:]} and dims specified by ' \
+                                                                   f'model arguments {gridworld_data_dim}'
+
+        imgs_train = encode_to_img(example_data_train, data_type)
+        tensorboard.add_images('train_samples', imgs_train, dataformats='NCHW')
+        #tensorboard.add_graph(model, example_data_train) #TODO: fix for GNNarch
+    if test_data is not None:
+        test_loader = create_dataloader(test_data, batch_size, model.device, shuffle=True)
+        example_data_test, example_targets_test = next(iter(test_loader))
+        example_data_test = example_data_test.to(model.device)
+        target_metadata_test = example_targets_test.tolist()  # TODO: change depending on dataset
+        if tensorboard is not None:
+            imgs_test = encode_to_img(example_data_test, data_type)
+            tensorboard.add_images('test_samples', imgs_test, dataformats='NCHW')
+
+    train_epochs = []
+    train_elbos = []
+    train_avg_epochs = []
+    train_avg_elbos = []
+    test_avg_epochs = []
+    test_avg_elbos = []
+    epoch_avg_test_elbo = float('-inf')
+    epoch_avg_train_elbo = float('-inf')
+
+    # We will use these to track the best performing model on test data
+    best_avg_test_elbo = float('-inf')
+    best_epoch = None
+    best_model_state = None
+    best_optim_state = None
+
+    pbar = tqdm(range(1, epochs + 1))
+    for epoch in pbar:
+        try:
+            # Train
+            model.train()
+            epoch_train_elbos = []
+            # We don't use labels hence discard them with a _
+            for batch_idx, (mbatch, _) in enumerate(train_loader):
+                # Reset gradient computations in the computation graph
+                mbatch = mbatch.to(model.device)
+                optimizer.zero_grad()
+
+                # Compute the loss for the mini-batch
+                elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
+                elbo /= math.prod(list(gridworld_data_dim)) #divide by number of dimensions to have a consistent ELBO metric across models
+
+                # Compute the gradients using backpropagation
+                loss.backward()
+                # Perform an SGD update
+                optimizer.step()
+
+                epoch_train_elbos += [elbo.detach().item()]
+                pbar.set_description((f'Train Epoch: {epoch} [{batch_idx * batch_size}/{len(train_loader.dataset)}'
+                                      f'({100. * batch_idx / len(train_loader):.0f}%)] ELBO: {elbo:.6f}'))
+
+            # Test
+            if test_data is not None:
+                with torch.inference_mode():
+                    model.eval()
+                    epoch_test_elbos = []
+                    for batch_idx, (mbatch, _) in enumerate(test_loader):
+                        mbatch = mbatch.to(model.device)
+
+                        # Compute the loss for the test mini-batch
+                        elbo, loss = per_datapoint_elbo_to_avgelbo_and_loss(model(mbatch))
+                        elbo /= math.prod(list(gridworld_data_dim))
+
+                        epoch_test_elbos += [elbo.detach().item()]
+                        pbar.set_description((f'Test Epoch: {epoch} [{batch_idx * batch_size}/{len(test_loader.dataset)} '
+                                              f'({100. * batch_idx / len(test_loader):.0f}%)] ELBO: {elbo:.6f}'))
+
+            # Store epoch summary in list
+            epoch_avg_train_elbo = np.mean(epoch_train_elbos)
+            train_avg_epochs += [epoch]
+            train_avg_elbos += [epoch_avg_train_elbo]
+            train_epochs += np.linspace(epoch - 1, epoch, len(epoch_train_elbos)).tolist()
+            train_elbos += epoch_train_elbos
+            if test_data is not None:
+                test_avg_epochs += [epoch]
+                epoch_avg_test_elbo = np.mean(epoch_test_elbos)
+                test_avg_elbos += [epoch_avg_test_elbo]
+
+                # Snapshot best model
+                if epoch_avg_test_elbo > best_avg_test_elbo:
+                    best_avg_test_elbo = epoch_avg_test_elbo
+                    best_epoch = epoch
+
+                    best_model_state = deepcopy(model.state_dict())
+                    best_optim_state = deepcopy(optimizer.state_dict())
+        except KeyboardInterrupt:
+            end_of_training_message = f"Training manually interrupted at epoch {epoch} [{batch_idx * batch_size}" \
+                                      f"/{len(train_loader.dataset)}({100. * batch_idx / len(train_loader):.0f}%)]."
+            print(end_of_training_message)
+            early_termination = True
+            break
+
+        # Tensorboard tracking
+        if tensorboard is not None:
+            example_data = example_data_train
+            example_targets = example_targets_train
+            example_imgs = imgs_train
+            target_metadata = target_metadata_train
+            loader = train_loader
+            epoch_avg_elbo = epoch_avg_train_elbo
+
+            tensorboard.add_scalar('train ELBO', epoch_avg_elbo, epoch * len(loader))
+
+            mean, logvar = model.encoder(example_data)
+            std_of_abs_mean = torch.linalg.norm(mean, dim=1).std().item()
+            mean_of_abs_std = logvar.exp().sum(axis=1).sqrt().mean().item()
+            tensorboard.add_scalars('Train data Encoder stats vs steps', {'std(||mean(z)||), z~q(z|x)': std_of_abs_mean,
+                                                                  'E[std(z)], z~q(z|x)': mean_of_abs_std,}, epoch * len(loader))
+
+            if epoch % latent_eval_freq == 0:
+                # latent_space_vis = plot_latent_visualisation(model, Z_points=mean, labels=example_targets, device=model.device)
+                # tensorboard.add_figure('Latent space visualisation, Z ~ q(z|x), x ~ train data', latent_space_vis, global_step=epoch)
+
+                tensorboard.add_embedding(mean, metadata=target_metadata, label_img=example_imgs,
+                                          tag='train_data_encoded_samples', global_step=epoch)
+
+                logits = model.decoder(mean)
+                decoded_data = model.decoder.param_b(logits)
+                decoded_imgs = encode_to_img(decoded_data, data_type_dec)
+                tensorboard.add_embedding(mean, metadata=target_metadata, label_img=decoded_imgs,
+                                          tag='train_data_decoded_samples', global_step=epoch)
+
+            if test_data is not None:
+                example_data = example_data_test
+                example_targets = example_targets_test
+                example_imgs = imgs_test
+                target_metadata = target_metadata_test
+                epoch_avg_elbo = epoch_avg_test_elbo
+                tensorboard.add_scalar('test ELBO', epoch_avg_elbo, epoch * len(loader))
+
+                mean, logvar = model.encoder(example_data)
+                std_of_abs_mean = torch.linalg.norm(mean, dim=1).std().item()
+                mean_of_abs_std = logvar.exp().sum(axis=1).sqrt().mean().item()
+                tensorboard.add_scalars('Test data Encoder stats vs steps', {'std(||mean(z)||), z~q(z|x)': std_of_abs_mean,
+                                                                     'E[std(z)], z~q(z|x)': mean_of_abs_std, }, epoch * len(loader))
+
+                if epoch % latent_eval_freq == 0:
+                    logits = model.decoder(mean)
+                    decoded_data = model.decoder.param_b(logits)
+                    decoded_imgs = encode_to_img(decoded_data, data_type_dec)
+
+                    tensorboard.add_embedding(mean, metadata=target_metadata,
+                                              label_img=example_imgs,
+                                              tag='test_data_encoded_samples', global_step=epoch)
+                    tensorboard.add_embedding(mean, metadata=target_metadata,
+                                              label_img=decoded_imgs,
+                                              tag='test_data_decoded_samples', global_step=epoch)
+
+    # Reset gradient computations in the computation graph
+    optimizer.zero_grad()
+
+    latest_model_state = None
+    latest_optim_state = None
+
+    if best_model_state is not None and best_epoch != epochs:
+        latest_model_state = deepcopy(model.state_dict())
+        print(f'Loading best model state from epoch {best_epoch}.')
+        model.load_state_dict(best_model_state)
+    if best_optim_state is not None and best_epoch != epochs:
+        latest_optim_state = deepcopy(optimizer.state_dict())
+        print(f'Loading best optimizer state from epoch {best_epoch}.')
+        optimizer.load_state_dict(best_optim_state)
+
+    if tensorboard is not None:
+        model.eval()
+        if isinstance(model.decoder.bottleneck.input_size, int):
+            latent_dim = (model.decoder.bottleneck.input_size,)
+        else:
+            latent_dim = model.decoder.bottleneck.input_size
+        Z = torch.randn(1024, *latent_dim).to(model.device) #M, B, D
+        logits = model.decoder(Z)
+        generated_data = model.decoder.param_b(logits)
+        generated_imgs = encode_to_img(generated_data, data_type_dec)
+        tensorboard.add_embedding(Z,
+                                  label_img=generated_imgs,
+                                  tag='Generated_samples_from_prior', global_step=0)
+        tensorboard.add_images('Generated_samples_from_prior', generated_imgs, dataformats='NCHW')
+
+        example_data = example_data_train
+        example_targets = example_targets_train
+        target_metadata = target_metadata_train
+        example_imgs = imgs_train
+
+        mean, logvar = model.encoder(example_data)
+        logits = model.decoder(mean)
+        decoded_data = model.decoder.param_b(logits)
+        decoded_imgs = encode_to_img(decoded_data, data_type_dec)
+        tensorboard.add_embedding(mean, metadata=target_metadata, label_img=example_imgs,
+                                  tag='train_data_encoded_samples', global_step=0)
+        tensorboard.add_embedding(mean, metadata=target_metadata, label_img=decoded_imgs,
+                                  tag='train_data_decoded_samples', global_step=0)
+
+        tensorboard.add_images('decoded_train_samples', decoded_imgs, dataformats='NCHW')
+
+        if test_data is not None:
+            example_data = example_data_test
+            example_targets = example_targets_test
+            target_metadata = target_metadata_test
+            epoch_avg_elbo = epoch_avg_test_elbo
+            example_imgs = imgs_test
+
+            mean, logvar = model.encoder(example_data)
+            logits = model.decoder(mean)
+            decoded_data = model.decoder.param_b(logits)
+            decoded_imgs = encode_to_img(decoded_data, data_type_dec)
+
+            tensorboard.add_embedding(mean, metadata=target_metadata,
+                                      label_img=example_imgs,
+                                      tag='test_data_encoded_samples', global_step=0)
+            tensorboard.add_embedding(mean, metadata=target_metadata,
+                                      label_img=decoded_imgs,
+                                      tag='test_data_decoded_samples', global_step=0)
+            tensorboard.add_images('decoded_test_samples', decoded_imgs, dataformats='NCHW')
+
+        if not early_termination:
+            end_of_training_message = f"Training completed after {epochs} epochs / {len(train_loader) * epochs} steps."
+            print(end_of_training_message)
+        tensorboard.add_text('Training status', end_of_training_message)
+
+    return model, optimizer, latest_model_state, latest_optim_state, early_termination

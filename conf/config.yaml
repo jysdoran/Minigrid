@@ -1,0 +1,16 @@
+hydra:
+  run:
+    # Configure output dir of each experiment programmatically from the arguments
+    # Example "outputs/mnist/classifier/baseline/2021-03-10-141516"
+    dir: outputs/${datasets.name}/${models.name}/${run_name}/${now:%Y-%m-%d_%H%M%S}
+
+# Global configurations shared between different modules
+run_name: change_me
+seed: 20211201
+
+defaults:
+  - datasets: gridworlds
+  - models: graphVAE
+
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
