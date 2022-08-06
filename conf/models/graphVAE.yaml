@@ -24,6 +24,7 @@ configuration:
                            [[0, -1], [-1, 0]]]
 
   encoder:
+    attributes_names: ["empty", "start", "goal"]
     gnn:
       architecture: GIN
       num_layers: 8
@@ -56,7 +57,7 @@ configuration:
 hyperparameters:
   optimiser:
     batch_size: 50
-    epochs: 3000
+    epochs: 2
     learning_rate: 1e-4
   loss:
     elbo_coeffs:
@@ -65,4 +66,4 @@ hyperparameters:
       beta: 1
 
 metrics: #TODO change name and loc
-  plot_every: 10
+  plot_every: 1

@@ -826,16 +826,23 @@ def load_state(file, model=None, optimizer=None, model_type=None, optim_type=Non
 
 # data processing stuff
 
-def encode_to_img(data, data_type:str):
+def encode_to_img(data, data_type:str, attributes:Tuple[str]=( "empty", "wall", "start", "goal" ),
+                                  used_attributes:Tuple[str]=("start", "goal" )):
     if data_type == 'grid':
         gw = grid_to_gridworld(data, layout_only=True)
     elif data_type == 'gridworld':
         gw = data
-    elif data_type == 'graph':
-        graphs = dgl.unbatch(data)
-        gw = graph_to_gridworld(graphs)
+    elif data_type in ['graph',]:
+        if isinstance(data, dgl.DGLGraph):
+            if data.batch_size > 1:
+                data = dgl.unbatch(data)
+        else:
+            assert isinstance(data, tuple), f"data type {type(data)} not supported to represent graphs, use tuple or" \
+                                            f"DGLGraph"
+        gw = graph_to_gridworld(data, tuple(attributes), tuple(used_attributes))
     else:
         raise RuntimeError(f"Data type {data_type} not recognised.")
+
     return gridworld_to_img(gw)
 
 # # TODO work this out
@@ -849,10 +856,13 @@ def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboa
     batch_size = cfg.models.hyperparameters.optimiser.batch_size
     epochs = cfg.models.hyperparameters.optimiser.epochs
     gridworld_data_dim = cfg.datasets.gridworld_data_dim
+    attributes_data = tuple(cfg.datasets.node_attributes)
+    attributes_dec = tuple(cfg.models.configuration.decoder.attributes_names)
+    attributes_enc = tuple(cfg.models.configuration.encoder.attributes_names)
+    attribute_reconstruction = tuple(cfg.datasets.attribute_reconstruction)
     # Create data loaders
     train_loader = create_dataloader(train_data, batch_size, model.device, shuffle=True)
     data_type = train_data.dataset_metadata['data_type']
-    data_type_dec = 'graph_dec_output' #TODO: work this out within the parameters
     early_termination = False
     example_data_train, example_targets_train = next(iter(train_loader)) #TODO: make deterministic accross runs
     example_data_train = example_data_train.to(model.device)
@@ -868,7 +878,7 @@ def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboa
                                                                    f'{example_data_train.shape[1:]} and dims specified by ' \
                                                                    f'model arguments {gridworld_data_dim}'
 
-        imgs_train = encode_to_img(example_data_train, data_type)
+        imgs_train = encode_to_img(example_data_train, data_type, attributes=attributes_data, used_attributes=attribute_reconstruction)
         tensorboard.add_images('train_samples', imgs_train, dataformats='NCHW')
         #tensorboard.add_graph(model, example_data_train) #TODO: fix for GNNarch
     if test_data is not None:
@@ -877,7 +887,7 @@ def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboa
         example_data_test = example_data_test.to(model.device)
         target_metadata_test = example_targets_test.tolist()  # TODO: change depending on dataset
         if tensorboard is not None:
-            imgs_test = encode_to_img(example_data_test, data_type)
+            imgs_test = encode_to_img(example_data_test, data_type, attributes=attributes_data, used_attributes=attribute_reconstruction)
             tensorboard.add_images('test_samples', imgs_test, dataformats='NCHW')
 
     train_epochs = []
@@ -986,8 +996,8 @@ def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboa
                                           tag='train_data_encoded_samples', global_step=epoch)
 
                 logits = model.decoder(mean)
-                decoded_data = model.decoder.param_b(logits)
-                decoded_imgs = encode_to_img(decoded_data, data_type_dec)
+                decoded_data = model.decoder.param_m(logits)
+                decoded_imgs = encode_to_img(decoded_data, data_type, attributes=attributes_dec, used_attributes=attribute_reconstruction)
                 tensorboard.add_embedding(mean, metadata=target_metadata, label_img=decoded_imgs,
                                           tag='train_data_decoded_samples', global_step=epoch)
 
@@ -1007,8 +1017,8 @@ def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboa
 
                 if epoch % latent_eval_freq == 0:
                     logits = model.decoder(mean)
-                    decoded_data = model.decoder.param_b(logits)
-                    decoded_imgs = encode_to_img(decoded_data, data_type_dec)
+                    decoded_data = model.decoder.param_m(logits)
+                    decoded_imgs = encode_to_img(decoded_data, data_type, attributes=attributes_dec, used_attributes=attribute_reconstruction)
 
                     tensorboard.add_embedding(mean, metadata=target_metadata,
                                               label_img=example_imgs,
@@ -1040,8 +1050,8 @@ def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboa
             latent_dim = model.decoder.bottleneck.input_size
         Z = torch.randn(1024, *latent_dim).to(model.device) #M, B, D
         logits = model.decoder(Z)
-        generated_data = model.decoder.param_b(logits)
-        generated_imgs = encode_to_img(generated_data, data_type_dec)
+        generated_data = model.decoder.param_m(logits)
+        generated_imgs = encode_to_img(generated_data, data_type, attributes=attributes_dec, used_attributes=attribute_reconstruction)
         tensorboard.add_embedding(Z,
                                   label_img=generated_imgs,
                                   tag='Generated_samples_from_prior', global_step=0)
@@ -1054,8 +1064,8 @@ def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboa
 
         mean, logvar = model.encoder(example_data)
         logits = model.decoder(mean)
-        decoded_data = model.decoder.param_b(logits)
-        decoded_imgs = encode_to_img(decoded_data, data_type_dec)
+        decoded_data = model.decoder.param_m(logits)
+        decoded_imgs = encode_to_img(decoded_data, data_type, attributes=attributes_dec, used_attributes=attribute_reconstruction)
         tensorboard.add_embedding(mean, metadata=target_metadata, label_img=example_imgs,
                                   tag='train_data_encoded_samples', global_step=0)
         tensorboard.add_embedding(mean, metadata=target_metadata, label_img=decoded_imgs,
@@ -1072,8 +1082,8 @@ def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboa
 
             mean, logvar = model.encoder(example_data)
             logits = model.decoder(mean)
-            decoded_data = model.decoder.param_b(logits)
-            decoded_imgs = encode_to_img(decoded_data, data_type_dec)
+            decoded_data = model.decoder.param_m(logits)
+            decoded_imgs = encode_to_img(decoded_data, data_type, attributes=attributes_dec, used_attributes=attribute_reconstruction)
 
             tensorboard.add_embedding(mean, metadata=target_metadata,
                                       label_img=example_imgs,

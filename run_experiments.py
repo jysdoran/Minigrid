@@ -27,13 +27,10 @@ def run_experiment(cfg: DictConfig) -> None:
     run_name = 'test' #get_run_name(cfg.run_name, cfg.models, cfg.datasets.path)
     writer = SummaryWriter('runs/' + run_name)
 
-    model, optimizer, model_state_best_training_elbo, optim_state_best_training_elbo, early_t = fit_model_rw(model,
-                                                                                                          optimizer,
-                                                                                                          train_data,
-                                                                                                          cfg,
-                                                                                                          test_data=test_data,
-                                                                                                          latent_eval_freq=cfg.models.metrics,
-                                                                                                          tensorboard=writer)
+    model, optimizer, model_state_best_training_elbo, \
+    optim_state_best_training_elbo, early_t = fit_model_rw(model, optimizer, train_data, cfg, test_data=test_data,
+                                                           latent_eval_freq=cfg.models.metrics.plot_every,
+                                                           tensorboard=writer)
 
     pass
 

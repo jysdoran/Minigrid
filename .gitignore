@@ -2,7 +2,7 @@
 
 runs/
 figures/
-datasets/
+/datasets/
 checkpoints/
 
 # Byte-compiled / optimized / DLL files

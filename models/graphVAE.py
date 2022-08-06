@@ -4,6 +4,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from typing import Iterable
+import einops
 
 from data_generators import Batch
 from models.gnn_networks import GIN
@@ -22,6 +23,9 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
     Z = sample_gaussian_with_reparametrisation(
         mean, logvar, num_samples=num_samples)  # (M, B, H)
 
+    # Compute KLD( q(z|x) || p(z) )
+    kld = compute_kld_with_standard_gaussian(mean, logvar)  # (B,)
+
     # Evaluate the decoder network to obtain the parameters of the
     # generative model p(x|z)
 
@@ -36,22 +40,19 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
     Fx = torch.empty((len(graphs), n_nodes, f_dim)).to(logits_Fx)
 
     #TODO: find a way to do this efficiently on GPU, maybe convert logits to sparse tensor
-    Fx = []
+    # is list comprehension plus torch.stack more efficient?
     for m in range(len(graphs)):
         A_in[m] = graphs[m].adj().to_dense()
-        Fx.append(graphs[m].ndata['feat'][..., reconstructed_features].to(logits_Fx))
-    Fx = torch.stack(Fx, dim=0).to(logits_Fx)
+        Fx[m] = graphs[m].ndata['feat'][..., reconstructed_features].to(logits_Fx)
 
     if permutations is not None:
         permutations = permutations.to(logits_A.device)
         A_in = [A_in[:,permutations[i]][:,:, permutations[i]] for i in range(permutations.shape[0])]
         A_in = torch.stack(A_in, dim=1).to(logits_A.device)  # B, P, N, N
         A_in = A_in.reshape(A_in.shape[0]*A_in.shape[1],*A_in.shape[2:]) #B*P, N, N
-        A_in = Batch.encode_adj_to_reduced_adj(A_in) #B*P, n_nodes - 1, 2
         logits_A = logits_A.repeat_interleave(permutations.shape[0], dim=1) # (M, B, n_nodes-1, 2) -> (M, B*P, n_nodes-1, 2)
 
-    # Compute KLD( q(z|x) || p(z) )
-    kld = compute_kld_with_standard_gaussian(mean, logvar)  # (B,)
+    A_in = Batch.encode_adj_to_reduced_adj(A_in) #B*P, n_nodes - 1, 2
 
     # Compute ~E_{q(z|x)}[ p(x | z) ]
     # Important: the samples are "propagated" all the way to the decoder output,
@@ -80,7 +81,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
 
     # ELBO for adjacency matrix
     elbos = elbo_coeffs.A * neg_cross_entropy_A \
-            + torch.tensor(elbo_coeffs.Fx).to(logits_Fx) @ neg_cross_entropy_Fx \
+            + torch.einsum('i, b i -> b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx) \
             - elbo_coeffs.beta * kld  # (B,)
 
     return elbos
@@ -212,11 +213,9 @@ class GraphMLPDecoder(nn.Module):
             f_out = []
             for net in self.attribute_heads:
                 f_out.append(net(logits))
-            torch.stack(f_out)
+            f_out = torch.stack(f_out, dim=-1)
         else:
             f_out = None
-
-        #TODO: TAKE FROM HERE
 
         return adj_out, f_out
 

@@ -1,0 +1,10 @@
+name: gridworlds
+path: change_me
+size: 120000
+task_structures: ['rooms_unstructured_layout','maze']
+data_type: 'graph'
+transforms: null
+gridworld_data_dim: [3,27,27]
+encoding: reduced_graph
+node_attributes: [ "empty", "wall", "start", "goal" ]
+attribute_reconstruction: ["start", "goal"]
