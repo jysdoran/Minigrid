@@ -1,16 +1,16 @@
-name: GraphVAE
+name: GraphVAE_small
 _target_: models.graphVAE.GraphVAE
 
 # these parameters should not change
 configuration:
 
   shared_parameters:
-    latent_dim: 64
+    latent_dim: 12
     graph_max_nodes: 169
-    node_attributes_dim: 4
+    node_attributes_dim: 4 #useless
 
   model:
-    cuda: False
+    cuda: True
     gradient_type: pathwise
     num_variational_samples: 1
     augmented_inputs: False
@@ -25,10 +25,10 @@ configuration:
 
   encoder:
     attributes_names: ["empty", "start", "goal"]
-    attributes_mapping: [0, 2, 3] #TODO could automate this one
+    attributes_mapping: [0, 2, 3]
     gnn:
       architecture: GIN
-      num_layers: 8
+      num_layers: 5
       layer_dim: 8
       num_mlp_layers: 2
       final_dropout: 0
@@ -38,32 +38,32 @@ configuration:
 
     mlp:
       num_layers: 2
-      layer_dim: [ 1024, 256 ]
+      layer_dim: [ 1024, 128 ]
 
   decoder:
     adjacency: reduced #[full, reduced, null]
     attributes: True #[True, False]
-    attributes_names: ["empty", "start", "goal"]
-    attributes_mapping: [0, 2, 3] #predict empty, start, goal #TODO could automate this one
-    distributions: ["bernoulli", "one_hot_categorical", "one_hot_categorical"]
-    distributions_domains: ["feats", "nodes", "nodes"]
+    attributes_names: ["start", "goal"]#["empty", "start", "goal"]
+    attributes_mapping: [2, 3] #predict start, goal
+    distributions: ["one_hot_categorical", "one_hot_categorical"]
+    distributions_domains: ["nodes", "nodes"]
     output_dim: #this should be computed according to adjacency, data.graph_max_nodes
       adjacency: 336 #(max_node-1)*2 #TODO: remove hardcoding, replace by a keyword in init
       attributes: 169
     architecture: MLP
     num_layers: 2 #not counting the final multihead layer
-    layer_dim: [ 256, 1024 ]
+    layer_dim: [ 128, 256 ]
 
 # these can change between runs
 hyperparameters:
   optimiser:
     batch_size: 50
-    epochs: 2
+    epochs: 10
     learning_rate: 1e-4
   loss:
     elbo_coeffs:
       A: 1
-      Fx: [1, 1, 1]
+      Fx: [1, 1]
       beta: 1
 
 metrics: #TODO change name and loc

@@ -37,13 +37,17 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
     reconstructed_features = tuple(decoder.config.attributes_mapping)
     f_dim = len(reconstructed_features) #only the reconstructed dimensions [empty, start, goal]
     A_in = torch.empty((len(graphs), n_nodes, n_nodes)).to(logits_A)
-    Fx = torch.empty((len(graphs), n_nodes, f_dim)).to(logits_Fx)
+    if logits_Fx is not None:
+        Fx = torch.empty((len(graphs), n_nodes, f_dim)).to(logits_Fx)
+    else:
+        Fx = None
 
     #TODO: find a way to do this efficiently on GPU, maybe convert logits to sparse tensor
     # is list comprehension plus torch.stack more efficient?
     for m in range(len(graphs)):
         A_in[m] = graphs[m].adj().to_dense()
-        Fx[m] = graphs[m].ndata['feat'][..., reconstructed_features].to(logits_Fx)
+        if Fx is not None:
+            Fx[m] = graphs[m].ndata['feat'][..., reconstructed_features].to(logits_Fx)
 
     if permutations is not None:
         permutations = permutations.to(logits_A.device)
@@ -62,30 +66,36 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
     logits_A = logits_A.reshape(*logits_A.shape[0:2], -1) # (M, B, n_nodes-1, 2) -> (M, B, D=2*(n_nodes - 1))
     neg_cross_entropy_A = evaluate_logprob_bernoulli(A_in, logits=logits_A).mean(dim=0)  # (B,) | (B*P,)
 
-    neg_cross_entropy_Fx = []
-    for i in range(len(decoder.attribute_distributions)):
-        if decoder.attribute_distributions[i] == "bernoulli":
-            neg_cross_entropy_Fx.append(evaluate_logprob_bernoulli(Fx[..., i], logits=logits_Fx[..., i]).mean(dim=0)) # (B,)
-        # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. B,D),
-        # but requires modifying evaluate_logprob_one_hot_categorical()
-        elif decoder.attribute_distributions[i] == "one_hot_categorical":
-            neg_cross_entropy_Fx.append(evaluate_logprob_one_hot_categorical(Fx[..., i], logits=logits_Fx[..., i]).mean(dim=0))
-        else:
-            raise NotImplementedError(f"Specified Data Distribution '{decoder.attribute_distributions[i]}'"
-                                      f" Invalid or Not Currently Implemented")
-    neg_cross_entropy_Fx = torch.stack(neg_cross_entropy_Fx, dim=-1).to(logits_Fx) # (B, D)
+    if logits_Fx is not None:
+        neg_cross_entropy_Fx = []
+        for i in range(len(decoder.attribute_distributions)):
+            if decoder.attribute_distributions[i] == "bernoulli":
+                neg_cross_entropy_Fx.append(evaluate_logprob_bernoulli(Fx[..., i], logits=logits_Fx[..., i]).mean(dim=0)) # (B,)
+            # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. B,D),
+            # but requires modifying evaluate_logprob_one_hot_categorical()
+            elif decoder.attribute_distributions[i] == "one_hot_categorical":
+                neg_cross_entropy_Fx.append(evaluate_logprob_one_hot_categorical(Fx[..., i], logits=logits_Fx[..., i]).mean(dim=0))
+            else:
+                raise NotImplementedError(f"Specified Data Distribution '{decoder.attribute_distributions[i]}'"
+                                          f" Invalid or Not Currently Implemented")
+        neg_cross_entropy_Fx = torch.stack(neg_cross_entropy_Fx, dim=-1).to(logits_Fx) # (B, D)
+    else:
+        neg_cross_entropy_Fx = None
 
     if permutations is not None:
         neg_cross_entropy_A = neg_cross_entropy_A.reshape(-1, permutations.shape[0]) # (B*P,) -> (B,P)
         neg_cross_entropy_A, _ = torch.max(neg_cross_entropy_A, dim=1) # (B,P,) -> (B,)
 
-    # ELBO for adjacency matrix
     elbos = elbo_coeffs.A * neg_cross_entropy_A \
-            + torch.einsum('i, b i -> b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx) \
             - elbo_coeffs.beta * kld  # (B,)
+    # ELBO for adjacency matrix
+    if logits_Fx is not None:
+        elbos_Fx = torch.einsum('i, b i -> b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx)
+        elbos += elbos_Fx
+    else:
+        pass
 
     return elbos
-
 
 class GraphGCNEncoder(nn.Module):
 
@@ -93,6 +103,8 @@ class GraphGCNEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.shared_params = shared_params
+        self.attributes = config.attributes_names
+        self.attributes_mapping = config.attributes_mapping
 
         # Create all layers except last
         self.model = self.create_model()
@@ -107,7 +119,7 @@ class GraphGCNEncoder(nn.Module):
     def create_model(self):
         if self.config.gnn.architecture == "GIN":
             self.gcn = GIN(num_layers=self.config.gnn.num_layers, num_mlp_layers=self.config.gnn.num_mlp_layers,
-                               input_dim=self.shared_params.node_attributes_dim, hidden_dim=self.config.gnn.layer_dim,
+                               input_dim=len(self.attributes_mapping), hidden_dim=self.config.gnn.layer_dim,
                                output_dim=self.config.mlp.layer_dim[0], final_dropout=self.config.gnn.final_dropout,
                                learn_eps=self.config.gnn.learn_eps, graph_pooling_type=self.config.gnn.graph_pooling,
                                neighbor_pooling_type=self.config.gnn.neighbor_pooling,
@@ -137,6 +149,7 @@ class GraphGCNEncoder(nn.Module):
 
         graph = X
         features = graph.ndata['feat'].float()
+        features = features[..., self.attributes_mapping]
         features = self.gcn(graph, features)
 
         for net in self.model[1:]:
@@ -228,7 +241,7 @@ class GraphMLPDecoder(nn.Module):
                 logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
                 logits_Fx (Tensor): shape (*, B, max_nodes, D)
             X (tuple):     Batch of Graphs (A, Fx)
-                A (Tensor): shape (*, B, max_nodes, max_nodes) #TODO: decide if we reduce in this function or outside
+                A (Tensor): shape (*, B, max_nodes, reduced_edges)
                 Fx (Tensor): shape (*, B, max_nodes, D)
 
         Returns:
@@ -240,7 +253,10 @@ class GraphMLPDecoder(nn.Module):
         A, Fx = X
         logits_A, logits_Fx = logits
         logp_A = self.log_prob_A(logits_A, A)
-        logp_Fx = self.log_prob_Fx(logits_Fx, Fx)
+        if logits_Fx is not None:
+            logp_Fx = self.log_prob_Fx(logits_Fx, Fx)
+        else:
+            logp_Fx = None
 
         return logp_A, logp_Fx
 
@@ -250,7 +266,7 @@ class GraphMLPDecoder(nn.Module):
 
         Args:
             logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-            A (Tensor):     Batch of adjacency matrices (*, B, max_nodes, max_nodes) #TODO: decide if we reduce in this function or outside
+            A (Tensor):     Batch of adjacency matrices (*, B, max_nodes, reduced_edges)
 
         Returns:
             logp_A (Tensor):  log-probability of A, a batch of shape (*, B)
@@ -306,7 +322,10 @@ class GraphMLPDecoder(nn.Module):
         """
 
         A = self.sample_A_red(logits[0], num_samples=num_samples)
-        Fx = self.sample_Fx(logits[1], num_samples=num_samples)
+        if logits[1] is not None:
+            Fx = self.sample_Fx(logits[1], num_samples=num_samples)
+        else:
+            Fx = None
 
         return A, Fx
 
@@ -369,7 +388,10 @@ class GraphMLPDecoder(nn.Module):
 
         logits_A, logits_Fx = logits
         pA = self.param_pA(logits_A)
-        pFx = self.param_pFx(logits_Fx)
+        if logits_Fx is not None:
+            pFx = self.param_pFx(logits_Fx)
+        else:
+            pFx = None
 
         return pA, pFx
 
@@ -431,7 +453,10 @@ class GraphMLPDecoder(nn.Module):
 
         logits_A, logits_Fx = logits
         mA = self.param_mA(logits_A, threshold=threshold)
-        mFx = self.param_mFx(logits_Fx, threshold=threshold)
+        if logits_Fx is not None:
+            mFx = self.param_mFx(logits_Fx, threshold=threshold)
+        else:
+            mFx = None
 
         return mA, mFx
 
