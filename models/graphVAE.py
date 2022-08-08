@@ -4,11 +4,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from typing import Iterable
-import einops
 
 from data_generators import Batch
 from models.gnn_networks import GIN
-from models.networks import FC_ReLU_Network, Network
+from models.networks import FC_ReLU_Network
 from util.distributions import sample_gaussian_with_reparametrisation, compute_kld_with_standard_gaussian, \
     evaluate_logprob_bernoulli, evaluate_logprob_one_hot_categorical, evaluate_logprob_diagonal_gaussian
 from util.util import BinaryTransform
@@ -34,7 +33,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
 
     graphs = dgl.unbatch(X)
     n_nodes = decoder.shared_params.graph_max_nodes
-    reconstructed_features = tuple(decoder.config.attributes_mapping)
+    reconstructed_features = tuple(decoder.attributes_mapping)
     f_dim = len(reconstructed_features) #only the reconstructed dimensions [empty, start, goal]
     A_in = torch.empty((len(graphs), n_nodes, n_nodes)).to(logits_A)
     if logits_Fx is not None:
@@ -103,8 +102,12 @@ class GraphGCNEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.shared_params = shared_params
-        self.attributes = config.attributes_names
-        self.attributes_mapping = config.attributes_mapping
+        if self.config.attributes is None or len(self.config.attributes) == 0 or self.config.attributes[0] == "":
+            self.attributes = None
+            self.attributes_mapping = None
+        else:
+            self.attributes = self.config.attributes
+            self.attributes_mapping = [self.shared_params.node_attributes.index(i) for i in self.attributes]
 
         # Create all layers except last
         self.model = self.create_model()
@@ -182,18 +185,29 @@ class GraphGCNEncoder(nn.Module):
 class GraphMLPDecoder(nn.Module):
 
     def __init__(self, config, shared_params):
+
         super().__init__()
         self.config = config
         self.shared_params = shared_params
+        if self.config.attributes is None or len(self.config.attributes) == 0 or self.config.attributes[0] == "":
+            self.attributes = None
+            self.attributes_mapping = None
+        else:
+            self.attributes = self.config.attributes
+            self.attributes_mapping = [self.shared_params.node_attributes.index(i) for i in self.attributes]
+
         self.attribute_distributions = self.config.distributions
+
+        # model creation
         self.model = self.create_model([self.shared_params.latent_dim, *self.config.layer_dim])
         if self.config.adjacency is not None:
             self.adjacency = nn.Linear(self.config.layer_dim[-1], self.config.output_dim.adjacency)
         else:
             self.adjacency = None
-        if self.config.attributes:
+
+        if self.attributes is not None:
             self.attribute_heads = nn.ModuleList()
-            for i in range(len(self.config.attributes_names)):
+            for i in range(len(self.attributes)):
                 self.attribute_heads.append(nn.Linear(self.config.layer_dim[-1], self.config.output_dim.attributes))
         else:
             self.attribute_heads = None
@@ -291,7 +305,7 @@ class GraphMLPDecoder(nn.Module):
         # Fx #TODO: figure how to explicitly include the distributions_domains property.
         logp_Fx = []
         for i in range(len(self.attribute_distributions)):
-            Fx_dim = self.config.attributes_mapping[i]
+            Fx_dim = self.attributes_mapping[i]
             if self.attribute_distributions[i] == "bernoulli":
                 logp_Fx.append(evaluate_logprob_bernoulli(Fx[..., Fx_dim], logits=logits_Fx[..., i]))
             # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. B,D),

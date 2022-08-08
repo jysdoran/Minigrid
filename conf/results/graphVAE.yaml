@@ -1,0 +1,4 @@
+name: GraphVAE_results_config
+
+plot_every: 1
+attribute_to_gw_encoding: ["start", "goal"] #attributes used to encode a graph to a gridworld

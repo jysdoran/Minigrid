@@ -6,5 +6,5 @@ data_type: 'graph'
 transforms: null
 gridworld_data_dim: [3,27,27]
 encoding: minimal
+max_nodes: null #Autof
 node_attributes: [ "empty", "wall", "start", "goal" ]
-attribute_reconstruction: ["start", "goal"]#

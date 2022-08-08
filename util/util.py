@@ -849,9 +849,9 @@ def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboa
     epochs = cfg.models.hyperparameters.optimiser.epochs
     gridworld_data_dim = cfg.datasets.gridworld_data_dim
     attributes_data = tuple(cfg.datasets.node_attributes)
-    attributes_dec = tuple(cfg.models.configuration.decoder.attributes_names)
-    attributes_enc = tuple(cfg.models.configuration.encoder.attributes_names)
-    attribute_reconstruction = tuple(cfg.datasets.attribute_reconstruction)
+    attributes_dec = tuple(cfg.models.configuration.decoder.attributes)
+    attributes_enc = tuple(cfg.models.configuration.encoder.attributes)
+    attribute_reconstruction = tuple(cfg.results.attribute_to_gw_encoding)
     # Create data loaders
     train_loader = create_dataloader(train_data, batch_size, model.device, shuffle=True)
     data_type = train_data.dataset_metadata['data_type']

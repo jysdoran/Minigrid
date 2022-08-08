@@ -2,7 +2,19 @@ hydra:
   run:
     # Configure output dir of each experiment programmatically from the arguments
     # Example "outputs/mnist/classifier/baseline/2021-03-10-141516"
-    dir: outputs/${datasets.name}/${models.name}/${run_name}/${now:%Y-%m-%d_%H%M%S}
+    dir: outputs/${datasets.name}/${datasets.data_type}_${datasets.encoding}/${models.name}/${run_name}/${hydra.job.override_dirname}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    config:
+      override_dirname:
+        exclude_keys:
+          - models.configuration.model.cuda
+          - models.name
+          - datasets.name
+          - datasets.data_type
+          - datasets.encoding
+          - run_name
+          - models
+    chdir: true
 
 # Global configurations shared between different modules
 run_name: change_me
@@ -11,6 +23,7 @@ seed: 20211201
 defaults:
   - datasets: gridworlds
   - models: graphVAE
+  - results: graphVAE
 
   - override hydra/job_logging: colorlog
   - override hydra/hydra_logging: colorlog
