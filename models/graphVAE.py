@@ -372,7 +372,6 @@ class GraphMLPDecoder(nn.Module):
             Fx (Tensor): attribute matrix, shape (num_samples, *, B, max_nodes, D)
         """
 
-        # TODO: work a way to include attributes_mapping
         # [e, s, g]
         Fx = []
         for i in range(len(self.attribute_distributions)):
@@ -622,7 +621,6 @@ class LightningGraphVAE(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         X, labels = batch
         elbos = self.forward(X)
-        #self.log elbo here TODO
         loss = self.elbo_to_loss(elbos)
         self.log('loss/train', loss)
         return loss
@@ -630,7 +628,6 @@ class LightningGraphVAE(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         X, labels = batch
         elbos = self.forward(X)
-        #self.log elbo here TODO
         loss = self.elbo_to_loss(elbos)
         self.log('loss/val', loss)
         return loss

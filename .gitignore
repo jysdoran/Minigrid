@@ -4,6 +4,7 @@ runs/
 figures/
 /datasets/
 checkpoints/
+outputs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
