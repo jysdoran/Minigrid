@@ -624,6 +624,7 @@ class LightningGraphVAE(pl.LightningModule):
         elbos = self.forward(X)
         #self.log elbo here TODO
         loss = self.elbo_to_loss(elbos)
+        self.log('loss/train', loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -631,13 +632,13 @@ class LightningGraphVAE(pl.LightningModule):
         elbos = self.forward(X)
         #self.log elbo here TODO
         loss = self.elbo_to_loss(elbos)
+        self.log('loss/val', loss)
         return loss
 
     def configure_optimizers(self):
         optimizer = hydra.utils.instantiate(self.hparams.config_optim, params=self.parameters())
-        #optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.config_optim.lr)
         return optimizer
 
     def on_train_start(self):
         # Proper logging of hyperparams and metrics in TB
-        self.logger.log_hyperparams(self.hparams, {"loss/val": 0, "accuracy/val": 0, "accuracy/test": 0})
+        self.logger.log_hyperparams(self.hparams)
