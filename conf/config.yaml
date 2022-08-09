@@ -7,7 +7,7 @@ hydra:
     config:
       override_dirname:
         exclude_keys:
-          - models.configuration.model.cuda
+          - accelerator
           - models.name
           - datasets.name
           - datasets.data_type
@@ -19,10 +19,14 @@ hydra:
 # Global configurations shared between different modules
 run_name: change_me
 seed: 20211201
+accelerator: gpu
+num_devices: 1
+epochs: 10
 
 defaults:
   - datasets: gridworlds
   - models: graphVAE
+  - optim: adam
   - results: graphVAE
 
   - override hydra/job_logging: colorlog

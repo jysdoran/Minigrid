@@ -1,6 +1,5 @@
 import torch
 import torchvision
-import networkx as nx
 import dgl
 from dgl.dataloading import GraphDataLoader
 import os
@@ -16,9 +15,12 @@ from copy import deepcopy
 from typing import Tuple, List
 import math
 import json
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 
 from data_generators import Batch
+from data_loaders import WrappedDataLoader
+from util.transforms import FlipBinaryTransform, ToDeviceTransform
+
 grid_to_gridworld = Batch.encode_grid_to_gridworld
 graph_to_gridworld = Batch.encode_graph_to_gridworld
 reduced_adj_to_gridworld_layout = Batch.encode_reduced_adj_to_gridworld_layout
@@ -414,72 +416,6 @@ def celerp(val, low, high, centroid):
 def cdist_polar(x1, x2, eps=1e-08):
     return torch.abs(torch.nn.functional.cosine_similarity(x1[:, None, :], x2[None, :, :], dim=-1, eps=eps))
 
-
-class BinaryTransform(object):
-    def __init__(self, thr):
-        self.thr = thr
-
-    def __call__(self, x):
-        return (x >= self.thr).to(x)  # do not change the data type or device
-
-
-class FlipBinaryTransform(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, x):
-        return torch.abs(x - 1)
-
-
-class ReshapeTransform(object):
-    def __init__(self, *args):
-        self.shape = args
-
-    def __call__(self, x: torch.Tensor):
-        return x.view(*self.shape)
-
-
-class FlattenTransform(object):
-    def __init__(self, *args):
-        self.dims = args # start and end dim
-
-    def __call__(self, x: torch.Tensor):
-        return x.view(*self.dims)
-
-
-class SelectChannelsTransform(object):
-    def __init__(self, *args):
-        self.selected_channels = args
-
-    def __call__(self, x: torch.Tensor):
-        return x[..., self.selected_channels]
-
-
-class ToDeviceTransform(object):
-    def __init__(self, device):
-        self.device = device
-
-    def __call__(self, x: torch.Tensor):
-        return x.to(self.device)
-
-
-class WrappedDataLoader:
-    def __init__(self, dl, func):
-        self.dl = dl
-        self.func = func
-
-    def __len__(self):
-        return len(self.dl)
-
-    def __iter__(self):
-        batches = iter(self.dl)
-        for b in batches:
-            data, targets = b
-            yield (self.func(data), self.func(targets))
-
-    @property
-    def dataset(self):
-        return self.dl.dataset
 
 def gridworld_to_img(gridworlds):
     flip_bits = FlipBinaryTransform()

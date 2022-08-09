@@ -5,56 +5,50 @@ import hydra
 from pathlib import Path #TODO replace by hydra?
 from omegaconf import DictConfig, OmegaConf
 
-from torch import optim #TODO remove with lightning
-from torch.utils.tensorboard import SummaryWriter #TODO remove with lightning
+import pytorch_lightning as pl
 
-from data_loaders import Maze_Dataset #TODO (may) remove with lightning
-from models.graphVAE import GraphVAE
+from data_loaders import GridNavDataModule
+from models.graphVAE import GraphVAE, LightningGraphVAE
 from util.util import *
 
 @hydra.main(version_base=None, config_path="conf", config_name="config.yaml")
 def run_experiment(cfg: DictConfig) -> None:
+    logger = logging.getLogger(__name__)
+    logger.info("Working directory : {}".format(os.getcwd()))
     process_cfg(cfg)
     seed_everything(cfg.seed)
-    print("Working directory : {}".format(os.getcwd()))
-    logger = logging.getLogger(__name__)
-
-    #TODO: can remove cfg.models when migrating to Lightning
-    model = hydra.utils.instantiate(cfg.models)
-    #model = GraphVAE(configuration=cfg.models.configuration, hyperparameters=cfg.models.hyperparameters) #DEBUG
-    optimizer = optim.Adam(model.parameters(), lr=cfg.models.hyperparameters.optimiser.learning_rate) #TODO: remove with lightning
 
     dataset_full_dir, cfg.datasets.path = get_dataset_dir(cfg.datasets)
-    train_data, test_data = get_data(dataset_full_dir, transforms=cfg.datasets.transforms)
+    data_module = GridNavDataModule(dataset_full_dir, batch_size=cfg.datasets.batch_size,  transforms=cfg.datasets.transforms)
 
-    writer = SummaryWriter('.')
+    model = hydra.utils.instantiate(config=cfg.models,
+                                    config_model=cfg.models.configuration,
+                                    config_optim=cfg.optim,
+                                    hparams_model=cfg.models.hyperparameters,
+                                    _recursive_=False)
+    # model_lightning = LightningGraphVAE(config_model=cfg.models.configuration, config_optim=cfg.optim,
+    #                                     hparams_model=cfg.models.hyperparameters)# DEBUG
+
+    #writer = SummaryWriter('.')
 
     logger.info("\n" + OmegaConf.to_yaml(cfg))
 
-    model, optimizer, model_state_best_training_elbo, \
-    optim_state_best_training_elbo, early_t = fit_model_rw(model, optimizer, train_data, cfg, test_data=test_data,
-                                                           latent_eval_freq=cfg.results.plot_every,
-                                                           tensorboard=writer)
+    trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs)
+    trainer.fit(model, data_module)
 
-    model_checkpoint_filename = cfg.run_name #get_run_name(cfg.run_name, cfg.models, cfg.datasets.path)
-    if early_t: model_checkpoint_filename = model_checkpoint_filename + '_early_t'
-    save_file = model_checkpoint_filename + '.pt'
-    logger.info(f"Saving to {save_file}")
-    save_state(cfg, model, optimizer, save_file, [model_state_best_training_elbo], [optim_state_best_training_elbo])
+    # model, optimizer, model_state_best_training_elbo, \
+    # optim_state_best_training_elbo, early_t = fit_model_rw(model, optimizer, train_data, cfg, test_data=test_data,
+    #                                                        latent_eval_freq=cfg.results.plot_every,
+    #                                                        tensorboard=writer)
 
-    writer.close()
+    # model_checkpoint_filename = cfg.run_name #get_run_name(cfg.run_name, cfg.models, cfg.datasets.path)
+    # if early_t: model_checkpoint_filename = model_checkpoint_filename + '_early_t'
+    # save_file = model_checkpoint_filename + '.pt'
+    # logger.info(f"Saving to {save_file}")
+    # save_state(cfg, model, optimizer, save_file, [model_state_best_training_elbo], [optim_state_best_training_elbo])
+
+    # writer.close()
     logger.info("Done")
-
-def get_data(nav_dir, transforms=None):
-    train_data = Maze_Dataset(
-        nav_dir, train=True,
-        transform=transforms)
-
-    test_data = Maze_Dataset(
-        nav_dir, train=False,
-        transform=transforms)
-
-    return train_data, test_data
 
 def get_dataset_dir(cfg):
     base_dir = str(Path(__file__).resolve().parent)
@@ -71,17 +65,9 @@ def get_dataset_dir(cfg):
     encoding = cfg.encoding
 
     data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-f={attributes_dim}-enc={encoding}"
-    #data_directory = 'test'
+    data_directory = 'test'
     data_full_dir = datasets_dir + data_directory
     return data_full_dir, data_directory
-
-def get_run_name(tag, model_cfg, dataset_dir):
-
-    latent_dim = model_cfg.configuration.shared_parameters.latent_dim
-    batch_size = model_cfg.hyperparameters.optimiser.batch_size
-    epochs = model_cfg.hyperparameters.optimiser.epochs
-    run_name = f"{tag}_{dataset_dir}_-z={latent_dim}_b={batch_size}-e={epochs}"
-    return run_name
 
 def process_cfg(cfg):
     # sets all of the Auto arguments
@@ -92,6 +78,26 @@ def process_cfg(cfg):
             f = lambda x : (x - 1) / 2
             cfg.datasets.max_nodes = int(f(gw_data_dim[1]) * f(gw_data_dim[2]))
             cfg.models.configuration.decoder.output_dim.adjacency = int((cfg.datasets.max_nodes - 1)*2)
+
+# #obsolete
+# def get_run_name(tag, model_cfg, dataset_dir):
+#
+#     latent_dim = model_cfg.configuration.shared_parameters.latent_dim
+#     batch_size = model_cfg.hyperparameters.optimiser.batch_size
+#     epochs = model_cfg.hyperparameters.optimiser.epochs
+#     run_name = f"{tag}_{dataset_dir}_-z={latent_dim}_b={batch_size}-e={epochs}"
+#     return run_name
+
+# def get_data(nav_dir, transforms=None):
+#     train_data = GridNav_Dataset(
+#         nav_dir, train=True,
+#         transform=transforms)
+#
+#     test_data = GridNav_Dataset(
+#         nav_dir, train=False,
+#         transform=transforms)
+#
+#     return train_data, test_data
 
 
 if __name__ == "__main__":

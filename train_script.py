@@ -1,6 +1,3 @@
-import sys
-import json
-import yaml
 from pathlib import Path
 
 from torch import optim
@@ -8,7 +5,8 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 
-from data_loaders import Maze_Dataset
+from data_loaders import GridNav_Dataset
+from util.transforms import SelectChannelsTransform
 from util.util import *
 from models.VAE import *
 
@@ -59,11 +57,11 @@ else:
     t = None
 
 # #Uncomment
-train_data = Maze_Dataset(
+train_data = GridNav_Dataset(
           nav_dir, train=True,
           transform = t)
 
-test_data = Maze_Dataset(
+test_data = GridNav_Dataset(
           nav_dir, train=False,
           transform = t)
 

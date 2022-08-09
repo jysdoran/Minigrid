@@ -1,17 +1,23 @@
-import os.path
+import logging
 
-import dgl
+import os.path
 import pickle
 from typing import Any, Callable, Optional, Tuple
 
-import numpy as np
 import torch
-from PIL import Image
+import pytorch_lightning as pl
+import dgl
 
+from torch.utils.data import DataLoader, random_split
 from torchvision.datasets.utils import check_integrity
 from torchvision.datasets.vision import VisionDataset
+from dgl.dataloading import GraphDataLoader
 
-class Maze_Dataset(VisionDataset):
+from util.transforms import ToDeviceTransform
+
+logger = logging.getLogger(__name__)
+
+class GridNav_Dataset(VisionDataset):
     """`MAZE`_ Dataset.
 
     Args:
@@ -156,3 +162,60 @@ class Maze_Dataset(VisionDataset):
     def extra_repr(self) -> str:
         split = "Train" if self.train is True else "Test"
         return f"Split: {split}"
+
+
+class GridNavDataModule(pl.LightningDataModule):
+    def __init__(self, data_dir: str = "", batch_size: int = 32, transform=None, **kwargs):
+        super().__init__()
+        #sampler = dgl.dataloading.GraphDataLoader()
+        self.data_dir = data_dir
+        self.batch_size = batch_size
+        self.transform = transform
+        logger.info("Initialize Gridworld DataModule")
+
+    def setup(self, stage=None):
+        if stage == 'fit' or stage is None:
+            dataset_full = GridNav_Dataset(self.data_dir, train=True, transform=self.transform)
+            split_size = [int(0.8 * len(dataset_full)), int(0.2 * len(dataset_full))]
+            train, val = random_split(dataset_full, split_size)
+            self.train = train.dataset
+            self.val = val.dataset
+        elif stage == 'test' or stage is None:
+            self.test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
+
+    def train_dataloader(self):
+        return self.create_dataloader(self.train, batch_size=self.batch_size, shuffle=True)
+
+    # Double workers for val and test loaders since there is no backward pass and GPU computation is faster
+    def val_dataloader(self):
+        return self.create_dataloader(self.val, batch_size=self.batch_size, shuffle=False)
+
+    def test_dataloader(self):
+        return self.create_dataloader(self.test, batch_size=self.batch_size, shuffle=False)
+
+    def create_dataloader(self, data, batch_size, shuffle=True):
+        data_type = data.dataset_metadata['data_type']
+        if data_type == 'graph':
+            data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
+        else:
+            raise NotImplementedError("Data Module not currently implemented for Non Graph Data")
+        return data_loader
+
+
+class WrappedDataLoader:
+    def __init__(self, dl, func):
+        self.dl = dl
+        self.func = func
+
+    def __len__(self):
+        return len(self.dl)
+
+    def __iter__(self):
+        batches = iter(self.dl)
+        for b in batches:
+            data, targets = b
+            yield (self.func(data), self.func(targets))
+
+    @property
+    def dataset(self):
+        return self.dl.dataset

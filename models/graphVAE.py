@@ -1,6 +1,8 @@
 import dgl
 import numpy as np
 import torch
+import pytorch_lightning as pl
+import hydra
 from torch import nn
 import torch.nn.functional as F
 from typing import Iterable
@@ -10,7 +12,7 @@ from models.gnn_networks import GIN
 from models.networks import FC_ReLU_Network
 from util.distributions import sample_gaussian_with_reparametrisation, compute_kld_with_standard_gaussian, \
     evaluate_logprob_bernoulli, evaluate_logprob_one_hot_categorical, evaluate_logprob_diagonal_gaussian
-from util.util import BinaryTransform
+from util.transforms import BinaryTransform
 
 
 def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, permutations=None):
@@ -580,3 +582,62 @@ class GraphVAE(nn.Module):
 
         return total_params
 
+
+class LightningGraphVAE(pl.LightningModule):
+
+    def __init__(self, config_model, config_optim, hparams_model, **kwargs):
+        super(LightningGraphVAE, self).__init__()
+        self.save_hyperparameters()
+
+        self.encoder = GraphGCNEncoder(self.hparams.config_model.encoder, self.hparams.config_model.shared_parameters)
+        self.decoder = GraphMLPDecoder(self.hparams.config_model.decoder, self.hparams.config_model.shared_parameters)
+
+        if self.hparams.config_model.model.augmented_inputs:
+            transforms = torch.tensor(self.hparams.config_model.model.transforms, dtype=torch.int)
+            self.permutations = Batch.augment_adj(self.hparams.config_model.shared_parameters.graph_max_nodes,
+                                                  transforms).long()
+        else: self.permutations = None
+
+        # device = torch.device("cuda" if self.hparams.config_model.model.cuda else "cpu")
+        # self.to(device)
+
+    def forward(self, X):
+        return self.elbo(X)
+
+    def elbo(self, X):
+        return graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
+                                      num_samples=self.hparams.config_model.model.num_variational_samples,
+                                      elbo_coeffs=self.hparams.hparams_model.loss.elbo_coeffs,
+                                      permutations=self.permutations)
+
+    def elbo_to_loss(self, elbos):
+        # Compute the average ELBO over the mini-batch
+        elbo = elbos.mean(0)
+        # We want to _maximise_ the ELBO, but the SGD implementations
+        # do minimisation by default, hence we multiply the ELBO by -1.
+        loss = -elbo
+
+        return loss
+
+    def training_step(self, batch, batch_idx):
+        X, labels = batch
+        elbos = self.forward(X)
+        #self.log elbo here TODO
+        loss = self.elbo_to_loss(elbos)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        X, labels = batch
+        elbos = self.forward(X)
+        #self.log elbo here TODO
+        loss = self.elbo_to_loss(elbos)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = hydra.utils.instantiate(self.hparams.config_optim, params=self.parameters())
+        #optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.config_optim.lr)
+        return optimizer
+
+    def on_train_start(self):
+        # Proper logging of hyperparams and metrics in TB
+        self.logger.log_hyperparams(self.hparams, {"loss/val": 0, "accuracy/val": 0, "accuracy/test": 0})

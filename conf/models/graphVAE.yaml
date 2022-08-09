@@ -1,5 +1,5 @@
 name: GraphVAE
-_target_: models.graphVAE.GraphVAE
+_target_: models.graphVAE.LightningGraphVAE
 
 # these parameters should not change
 configuration:
@@ -10,7 +10,6 @@ configuration:
     node_attributes: ${datasets.node_attributes}
 
   model:
-    cuda: True
     gradient_type: pathwise
     num_variational_samples: 1
     augmented_inputs: False
@@ -55,10 +54,6 @@ configuration:
 
 # these can change between runs
 hyperparameters:
-  optimiser:
-    batch_size: 50
-    epochs: 10
-    learning_rate: 1e-4
   loss:
     elbo_coeffs:
       A: 1

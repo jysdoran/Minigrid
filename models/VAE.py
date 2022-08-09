@@ -6,7 +6,7 @@ import torch.nn as nn
 from util.distributions import evaluate_logprob_continuous_bernoulli, evaluate_logprob_bernoulli, \
     evaluate_logprob_diagonal_gaussian, compute_kld_with_standard_gaussian, sample_gaussian_with_reparametrisation, \
     sample_gaussian_without_reparametrisation
-from util.util import BinaryTransform
+from util.transforms import BinaryTransform
 from models.networks import FC_ReLU_Network, CNN_Factory
 from models.gnn_networks import GIN
 from models.layers import Reshape
