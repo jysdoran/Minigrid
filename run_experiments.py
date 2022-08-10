@@ -11,6 +11,7 @@ from pytorch_lightning.loggers import WandbLogger
 from data_loaders import GridNavDataModule
 from models.graphVAE import GraphVAE, LightningGraphVAE
 from util.util import *
+from util.logger_callbacks import ImageLogger
 
 @hydra.main(version_base=None, config_path="conf", config_name="config.yaml")
 def run_experiment(cfg: DictConfig) -> None:
@@ -33,7 +34,13 @@ def run_experiment(cfg: DictConfig) -> None:
 
     logger.info("\n" + OmegaConf.to_yaml(cfg))
 
-    trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs, logger=wandb_logger)
+    data_module.setup()
+    logging_callbacks = [
+        ImageLogger(data_module.samples, cfg.datasets.node_attributes,
+                    cfg.results.attribute_to_gw_encoding, num_samples=cfg.results.num_image_samples, accelerator=cfg.accelerator),
+    ]
+    trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs,
+                         logger=wandb_logger, callbacks=logging_callbacks)
     trainer.fit(model, data_module)
     # evaluate the model on a test set
     trainer.test(datamodule=data_module,

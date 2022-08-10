@@ -171,7 +171,8 @@ class GridNavDataModule(pl.LightningDataModule):
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.transform = transform
-        logger.info("Initialize Gridworld DataModule")
+        self.samples = {}
+        logger.info("Initializing Gridworld Navigation DataModule")
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:
@@ -180,25 +181,31 @@ class GridNavDataModule(pl.LightningDataModule):
             train, val = random_split(dataset_full, split_size)
             self.train = train.dataset
             self.val = val.dataset
-        elif stage == 'test' or stage is None:
+            self.samples["train"] = self.train[:self.batch_size]
+            self.samples["val"] = self.val[:self.batch_size]
+        if stage == 'test' or stage is None:
             self.test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
+            self.samples["test"] = self.test[:self.batch_size]
 
     def train_dataloader(self):
-        return self.create_dataloader(self.train, batch_size=self.batch_size, shuffle=True)
+        loader = self.create_dataloader(self.train, batch_size=self.batch_size, shuffle=True)
+        return loader
 
     # Double workers for val and test loaders since there is no backward pass and GPU computation is faster
     def val_dataloader(self):
-        return self.create_dataloader(self.val, batch_size=self.batch_size, shuffle=False)
+        loader = self.create_dataloader(self.val, batch_size=self.batch_size, shuffle=False)
+        return loader
 
     def test_dataloader(self):
-        return self.create_dataloader(self.test, batch_size=self.batch_size, shuffle=False)
+        loader = self.create_dataloader(self.test, batch_size=self.batch_size, shuffle=False)
+        return loader
 
     def create_dataloader(self, data, batch_size, shuffle=True):
         data_type = data.dataset_metadata['data_type']
         if data_type == 'graph':
             data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
         else:
-            raise NotImplementedError("Data Module not currently implemented for Non Graph Data")
+            raise NotImplementedError("Data Module not currently implemented for non Graph Data.")
         return data_loader
 
 
