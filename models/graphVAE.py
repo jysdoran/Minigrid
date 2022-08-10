@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import pytorch_lightning as pl
 import hydra
+import wandb
 from torch import nn
 import torch.nn.functional as F
 from typing import Iterable
@@ -96,7 +97,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
     else:
         pass
 
-    return elbos
+    return elbos, logits_A.mean(dim=0), logits_Fx.mean(dim=0), mean, logvar
 
 class GraphGCNEncoder(nn.Module):
 
@@ -563,11 +564,17 @@ class GraphVAE(nn.Module):
         else:
             raise ValueError(f'gradient_type={self.hparams.gradient_type} is invalid')
 
+    def all_model_outputs_pathwise(self, X, num_samples: int = None):
+        if num_samples is None: num_samples = self.configuration.model.num_variational_samples
+        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+            graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
+                                 num_samples=num_samples,
+                                 elbo_coeffs=self.hyperparameters.loss.elbo_coeffs,
+                                 permutations=self.permutations)
+        return elbos, logits_A, logits_Fx, mean, var_unconstrained
+
     def elbo(self, X):
-        return graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
-                                      num_samples=self.configuration.model.num_variational_samples,
-                                      elbo_coeffs=self.hyperparameters.loss.elbo_coeffs,
-                                      permutations=self.permutations)
+        elbos, _, _, _, _ = self.all_model_outputs_pathwise(X)
 
     @property
     def num_parameters(self):
@@ -584,7 +591,7 @@ class GraphVAE(nn.Module):
 
 class LightningGraphVAE(pl.LightningModule):
 
-    def __init__(self, config_model, config_optim, hparams_model, **kwargs):
+    def __init__(self, config_model, config_optim, hparams_model, config_logging, **kwargs):
         super(LightningGraphVAE, self).__init__()
         self.save_hyperparameters()
 
@@ -597,17 +604,24 @@ class LightningGraphVAE(pl.LightningModule):
                                                   transforms).long()
         else: self.permutations = None
 
-        # device = torch.device("cuda" if self.hparams.config_model.model.cuda else "cpu")
-        # self.to(device)
+        device = torch.device("cuda" if self.hparams.config_model.model.accelerator == "gpu" else "cpu")
+        self.to(device)
 
     def forward(self, X):
         return self.elbo(X)
 
+    def all_model_outputs_pathwise(self, X, num_samples: int = None):
+        if num_samples is None: num_samples = self.hparams.config_model.model.num_variational_samples
+        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+            graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
+                                 num_samples=num_samples,
+                                 elbo_coeffs=self.hparams.hparams_model.loss.elbo_coeffs,
+                                 permutations=self.permutations)
+        return elbos, logits_A, logits_Fx, mean, var_unconstrained
+
     def elbo(self, X):
-        return graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
-                                      num_samples=self.hparams.config_model.model.num_variational_samples,
-                                      elbo_coeffs=self.hparams.hparams_model.loss.elbo_coeffs,
-                                      permutations=self.permutations)
+        elbos, _, _, _, _ = self.all_model_outputs_pathwise(X)
+        return elbos
 
     def elbo_to_loss(self, elbos):
         # Compute the average ELBO over the mini-batch
@@ -622,15 +636,43 @@ class LightningGraphVAE(pl.LightningModule):
         X, labels = batch
         elbos = self.forward(X)
         loss = self.elbo_to_loss(elbos)
-        self.log('loss/train', loss)
+        self.log('loss/train', loss, on_step=True, on_epoch=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
         X, labels = batch
-        elbos = self.forward(X)
+        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+            self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_logging.num_variational_samples)
         loss = self.elbo_to_loss(elbos)
-        self.log('loss/val', loss)
-        return loss
+        return loss, logits_A, logits_Fx, mean, var_unconstrained
+
+    def test_step(self, batch, batch_idx):
+        return self.validation_step(batch, batch_idx)
+
+    def validation_epoch_end(self, validation_step_outputs):
+        loss, logits_A, logits_Fx, mean, var_unconstrained = map(torch.stack, zip(*validation_step_outputs))
+        del validation_step_outputs
+
+        std_of_abs_mean = torch.linalg.norm(mean, dim=-1).std().item()
+        #TODO: change with softplus
+        mean_of_abs_std = var_unconstrained.exp().sum(axis=-1).sqrt().mean().item()
+        mean_of_abs_std /= var_unconstrained.shape[-1] #normalise by dimensionality of Z space
+
+        self.log('loss/val', loss, on_step=False, on_epoch=True)
+        self.log('mean/std/val', std_of_abs_mean)
+        self.log('sigma/mean/val', mean_of_abs_std)
+
+        flattened_logits_A = torch.flatten(logits_A)
+        flattened_logits_Fx = torch.flatten(logits_Fx)
+        self.logger.experiment.log(
+            {"logits/A/val": wandb.Histogram(flattened_logits_A.to("cpu")),
+             "global_step": self.global_step})
+        self.logger.experiment.log(
+            {"logits/Fx/val": wandb.Histogram(flattened_logits_Fx.to("cpu")),
+             "global_step": self.global_step})
+
+    def test_epoch_end(self, test_step_outputs):
+        return self.validation_epoch_end(test_step_outputs)
 
     def configure_optimizers(self):
         optimizer = hydra.utils.instantiate(self.hparams.config_optim, params=self.parameters())

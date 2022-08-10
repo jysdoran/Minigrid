@@ -10,6 +10,7 @@ configuration:
     node_attributes: ${datasets.node_attributes}
 
   model:
+    accelerator: ${accelerator}
     gradient_type: pathwise
     num_variational_samples: 1
     augmented_inputs: False
