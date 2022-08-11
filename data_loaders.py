@@ -172,20 +172,22 @@ class GridNavDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.transform = transform
         self.samples = {}
+        self.dataset = None #Initialised lated
         logger.info("Initializing Gridworld Navigation DataModule")
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:
             dataset_full = GridNav_Dataset(self.data_dir, train=True, transform=self.transform)
-            split_size = [int(0.8 * len(dataset_full)), int(0.2 * len(dataset_full))]
+            split_size = [int(0.9 * len(dataset_full)), int(0.1 * len(dataset_full))]
             train, val = random_split(dataset_full, split_size)
-            self.train = train.dataset
-            self.val = val.dataset
-            self.samples["train"] = self.train[:self.batch_size]
-            self.samples["val"] = self.val[:self.batch_size]
+            self.dataset = train.dataset
+            self.train = train
+            self.val = val
+            self.samples["train"] = next(iter(self.train_dataloader()))
+            self.samples["val"] = next(iter(self.val_dataloader()))
         if stage == 'test' or stage is None:
             self.test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
-            self.samples["test"] = self.test[:self.batch_size]
+            self.samples["test"] = next(iter(self.test_dataloader()))
 
     def train_dataloader(self):
         loader = self.create_dataloader(self.train, batch_size=self.batch_size, shuffle=True)
@@ -201,7 +203,7 @@ class GridNavDataModule(pl.LightningDataModule):
         return loader
 
     def create_dataloader(self, data, batch_size, shuffle=True):
-        data_type = data.dataset_metadata['data_type']
+        data_type = self.dataset.dataset_metadata['data_type']
         if data_type == 'graph':
             data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
         else:

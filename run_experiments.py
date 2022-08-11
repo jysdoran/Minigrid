@@ -27,7 +27,7 @@ def run_experiment(cfg: DictConfig) -> None:
                                     config_model=cfg.models.configuration,
                                     config_optim=cfg.optim,
                                     hparams_model=cfg.models.hyperparameters,
-                                    config_logging = cfg.results,
+                                    config_logging =cfg.results,
                                     _recursive_=False)
 
     wandb_logger = WandbLogger(project="auto-curriculum-design", name=cfg.run_name, save_dir=os.getcwd())
@@ -64,7 +64,7 @@ def get_dataset_dir(cfg):
     encoding = cfg.encoding
 
     data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-f={attributes_dim}-enc={encoding}"
-    data_directory = 'test'
+    #data_directory = 'test'
     data_full_dir = datasets_dir + data_directory
     return data_full_dir, data_directory
 

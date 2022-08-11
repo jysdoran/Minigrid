@@ -88,8 +88,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
         neg_cross_entropy_A = neg_cross_entropy_A.reshape(-1, permutations.shape[0]) # (B*P,) -> (B,P)
         neg_cross_entropy_A, _ = torch.max(neg_cross_entropy_A, dim=1) # (B,P,) -> (B,)
 
-    elbos = elbo_coeffs.A * neg_cross_entropy_A \
-            - elbo_coeffs.beta * kld  # (B,)
+    elbos = elbo_coeffs.A * neg_cross_entropy_A - elbo_coeffs.beta * kld  # (B,)
     # ELBO for adjacency matrix
     if logits_Fx is not None:
         elbos_Fx = torch.einsum('i, b i -> b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx)
@@ -643,14 +642,14 @@ class LightningGraphVAE(pl.LightningModule):
         X, labels = batch
         elbos, logits_A, logits_Fx, mean, var_unconstrained = \
             self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_logging.num_variational_samples)
-        loss = self.elbo_to_loss(elbos)
+        loss = self.elbo_to_loss(elbos).reshape(1)
         return loss, logits_A, logits_Fx, mean, var_unconstrained
 
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx)
 
     def validation_epoch_end(self, validation_step_outputs):
-        loss, logits_A, logits_Fx, mean, var_unconstrained = map(torch.stack, zip(*validation_step_outputs))
+        loss, logits_A, logits_Fx, mean, var_unconstrained = map(torch.cat, zip(*validation_step_outputs))
         del validation_step_outputs
 
         std_of_abs_mean = torch.linalg.norm(mean, dim=-1).std().item()
@@ -662,8 +661,8 @@ class LightningGraphVAE(pl.LightningModule):
         self.log('mean/std/val', std_of_abs_mean)
         self.log('sigma/mean/val', mean_of_abs_std)
 
-        flattened_logits_A = torch.flatten(logits_A)
-        flattened_logits_Fx = torch.flatten(logits_Fx)
+        flattened_logits_A = torch.flatten(self.decoder.param_pA(logits_A))
+        flattened_logits_Fx = torch.flatten(self.decoder.param_pFx(logits_Fx))
         self.logger.experiment.log(
             {"logits/A/val": wandb.Histogram(flattened_logits_A.to("cpu")),
              "global_step": self.global_step})
