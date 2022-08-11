@@ -8,10 +8,9 @@ import pytorch_lightning as pl
 import wandb
 import einops
 
-from data_generators import Batch
+from data_generators import Batch, OBJECT_TO_CHANNEL_AND_IDX
 encode_graph_to_gridworld = Batch.encode_graph_to_gridworld
 encode_reduced_adj_to_gridworld_layout = Batch.encode_reduced_adj_to_gridworld_layout
-from util.util import gridworld_to_img
 from util.transforms import DilationTransform, FlipBinaryTransform
 
 logger = logging.getLogger(__name__)
@@ -180,4 +179,25 @@ class ImageLogger(pl.Callback):
         return heat_map
 
     def gridworld_to_img(self, gws):
-        return gridworld_to_img(gws)
+        colors = {
+            'wall': [0., 0., 0., 1.],   #black
+            'empty': [0., 0., 0., 0.],  #white
+            'start': [0., 0., 1., 1.],  #blue
+            'goal': [0., 1., 0., 1.],   #green
+        }
+
+        assert OBJECT_TO_CHANNEL_AND_IDX["wall"][1] != 0 or OBJECT_TO_CHANNEL_AND_IDX["empty"][1] != 0
+        if OBJECT_TO_CHANNEL_AND_IDX["empty"][1] != 0:
+            colors.pop("wall")
+        else:
+            colors.pop("empty")
+
+        imgs = torch.zeros((gws.shape[0], 4, *gws.shape[-2:])).to(gws.device)
+
+        for feat in colors.keys():
+            mask = gws[:, OBJECT_TO_CHANNEL_AND_IDX[feat][0], ...] == OBJECT_TO_CHANNEL_AND_IDX[feat][1]
+            color = torch.tensor(colors[feat]).to(gws)
+            cm = torch.einsum('c, b h w -> b c h w', color, mask)
+            imgs[cm>0] = cm[cm>0]
+
+        return imgs

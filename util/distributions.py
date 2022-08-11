@@ -30,7 +30,7 @@ def evaluate_logprob_bernoulli(X, *, logits):
         logpx (Tensor): log-probabilities of the inputs X, a batch of shape (B,)
     """
     cb = torch.distributions.Bernoulli(logits=logits)
-    return cb.log_prob(X).sum(dim=-1)
+    return cb.log_prob(X).mean(dim=-1)
 
 
 def evaluate_logprob_one_hot_categorical(X, *, logits):
