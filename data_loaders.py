@@ -165,14 +165,16 @@ class GridNav_Dataset(VisionDataset):
 
 
 class GridNavDataModule(pl.LightningDataModule):
-    def __init__(self, data_dir: str = "", batch_size: int = 32, transform=None, **kwargs):
+    def __init__(self, data_dir: str = "", batch_size: int = 32, predict_dataset_size: int = 2048,
+                 transform=None, **kwargs):
         super().__init__()
         #sampler = dgl.dataloading.GraphDataLoader()
         self.data_dir = data_dir
         self.batch_size = batch_size
+        self.predict_dataset_size = predict_dataset_size
         self.transform = transform
         self.samples = {}
-        self.dataset = None #Initialised lated
+        self.dataset = None
         logger.info("Initializing Gridworld Navigation DataModule")
 
     def setup(self, stage=None):
@@ -183,7 +185,9 @@ class GridNavDataModule(pl.LightningDataModule):
             self.dataset = train.dataset
             self.train = train
             self.val = val
-            self.samples["train"] = next(iter(self.train_dataloader()))
+            split_predict = [self.predict_dataset_size, len(self.train) - self.predict_dataset_size]
+            self.predict, _ = random_split(self.train, split_predict) #get a small amount of train data for predict step
+            self.samples["train"] = next(iter(self.predict_dataloader())) #"reference" train samples always from predict dataloader
             self.samples["val"] = next(iter(self.val_dataloader()))
         if stage == 'test' or stage is None:
             self.test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
@@ -196,6 +200,10 @@ class GridNavDataModule(pl.LightningDataModule):
     # Double workers for val and test loaders since there is no backward pass and GPU computation is faster
     def val_dataloader(self):
         loader = self.create_dataloader(self.val, batch_size=self.batch_size, shuffle=False)
+        return loader
+
+    def predict_dataloader(self):
+        loader = self.create_dataloader(self.predict, batch_size=self.batch_size, shuffle=False)
         return loader
 
     def test_dataloader(self):

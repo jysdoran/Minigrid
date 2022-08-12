@@ -21,7 +21,10 @@ def run_experiment(cfg: DictConfig) -> None:
     seed_everything(cfg.seed)
 
     dataset_full_dir, cfg.datasets.path = get_dataset_dir(cfg.datasets)
-    data_module = GridNavDataModule(dataset_full_dir, batch_size=cfg.datasets.batch_size,  transforms=cfg.datasets.transforms)
+    data_module = GridNavDataModule(dataset_full_dir,
+                                    batch_size=cfg.datasets.batch_size,
+                                    predict_dataset_size=cfg.results.num_embeddings_samples,
+                                    transforms=cfg.datasets.transforms)
 
     model = hydra.utils.instantiate(config=cfg.models,
                                     config_model=cfg.models.configuration,
@@ -46,7 +49,7 @@ def run_experiment(cfg: DictConfig) -> None:
                          logger=wandb_logger, callbacks=logging_callbacks)
     trainer.fit(model, data_module)
     # run prediction (latent space viz and interpolation) in inference mode
-    trainer.predict(dataloaders=data_module.train_dataloader())
+    trainer.predict(dataloaders=data_module.predict_dataloader())
     # evaluate the model on a test set
     trainer.test(datamodule=data_module,
                  ckpt_path=None)  # uses last-saved model
