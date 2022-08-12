@@ -13,14 +13,16 @@ from data_generators import Batch, OBJECT_TO_CHANNEL_AND_IDX
 encode_graph_to_gridworld = Batch.encode_graph_to_gridworld
 encode_reduced_adj_to_gridworld_layout = Batch.encode_reduced_adj_to_gridworld_layout
 from util.transforms import DilationTransform, FlipBinaryTransform
+from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
-class ImageLogger(pl.Callback):
-    def __init__(self, samples, attributes, used_attributes, num_samples=32, accelerator="cpu"):
+class GraphVAELogger(pl.Callback):
+    def __init__(self, samples, attributes, used_attributes, num_samples=32, max_cached_batches=0, accelerator="cpu"):
         super().__init__()
         device = torch.device("cuda" if accelerator == "gpu" else "cpu")
         self.num_samples = num_samples
+        self.max_cached_batches = max_cached_batches
         self.attributes = attributes
         self.used_attributes = used_attributes
         self.graphs = {}
@@ -28,7 +30,10 @@ class ImageLogger(pl.Callback):
         self.gw = {}
         self.imgs = {}
         self.node_to_gw_mapping = DilationTransform(1)
-        self.validation_batch = []
+        self.validation_batch = {
+            "graph": [],
+            "label_ids": [],
+        }
         self.validation_step_outputs = {
             "loss" : [],
             "logits_A": [],
@@ -36,6 +41,9 @@ class ImageLogger(pl.Callback):
             "mean": [],
             "var_unconstrained": [],
         }
+
+        self.predict_batch = deepcopy(self.validation_batch)
+        self.predict_step_outputs = deepcopy(self.validation_step_outputs)
 
         try:
             for key in ["train", "val", "test"]:
@@ -46,57 +54,24 @@ class ImageLogger(pl.Callback):
                 self.graphs[key] = dgl.batch(self.graphs[key]).to(device)
                 self.labels[key] = self.labels[key].to(device)
         except KeyError:
-            logger.info(f"{key} dataset was not supplied in the samples provided to the ImageLogger")
+            logger.info(f"{key} dataset was not supplied in the samples provided to the GraphVAELogger")
 
         for key in self.graphs.keys():
             self.gw[key] = self.encode_graph_to_gridworld(self.graphs[key], self.attributes).to(device)
             self.imgs[key] = self.gridworld_to_img(self.gw[key]).to(device)
 
-    def on_fit_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+    # Main logging logic
 
-        # colors = {
-        #     "bright_red": [1, 0, 0, 1],
-        #     "light_red": [1, 0, 0, 0.1],
-        #     "bright_blue": [0, 0, 1, 1],
-        #     "light_blue": [0, 0, 1, 0.1],
-        #     "white": [0, 0, 0, 0],
-        #     "black": [0, 0, 0, 1],
-        # }
-        #
-        # imgs = []
-        # for val in colors.values():
-        #     imgs.append(einops.repeat(torch.tensor(val), 'c->c h w', h=4, w=4))
-        # imgs = torch.stack(imgs)
-        #
-        # self.log_images(trainer, "test/colors", imgs, colors.keys(), mode="RGBA")
+    def on_fit_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
 
         try:
             self.log_images(trainer, "examples/train", self.imgs["train"], self.labels["train"])
             self.log_images(trainer, "examples/val", self.imgs["val"], self.labels["val"])
             self.log_images(trainer, "examples/test", self.imgs["test"], self.labels["test"])
         except KeyError as e:
-            logger.info(f"{e} dataset was not supplied in the samples provided to the ImageLogger")
-
-    def on_validation_batch_end(
-        self,
-        trainer: "pl.Trainer",
-        pl_module: "pl.LightningModule",
-        outputs: Tuple,
-        batch: Any,
-        batch_idx: int,
-        dataloader_idx: int,
-    ) -> None:
-        # may have to offload some of these from gpu
-        loss, logits_A, logits_Fx, mean, var_unconstrained = outputs
-        self.validation_step_outputs["loss"].append(loss)
-        self.validation_step_outputs["logits_A"].append(logits_A)
-        self.validation_step_outputs["logits_Fx"].append(logits_Fx)
-        self.validation_step_outputs["mean"].append(mean)
-        self.validation_step_outputs["var_unconstrained"].append(var_unconstrained)
-        self.validation_batch.append(batch)
+            logger.info(f"{e} dataset was not supplied in the samples provided to the GraphVAELogger")
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        self.prepare_validation_outputs()
         if "train" in self.graphs.keys():
             elbos, logits_A, logits_Fx, mean, var_unconstrained = self.obtain_model_outputs(self.graphs["train"], pl_module)
             reconstructed_imgs_train = self.obtain_imgs(logits_A, logits_Fx, pl_module)
@@ -110,29 +85,19 @@ class ImageLogger(pl.Callback):
             self.log_images(trainer, "reconstructions/val", reconstructed_imgs_val, self.labels["val"])
             self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/val", logits_A=logits_A, logits_Fx=logits_Fx)
 
-        # Consider doing it just once at end of run if this turns out too expensive
-        self.log_latent_embeddings(trainer, pl_module, "latent_space")
         prior_samples = torch.randn(mean.shape).to(device=pl_module.device)
         logits_A_prior, logits_Fx_prior = pl_module.decoder(prior_samples)
         generated_imgs = self.obtain_imgs(logits_A_prior, logits_Fx_prior, pl_module)
         self.log_images(trainer, "generated/prior", generated_imgs)
         self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="generated/prior", logits_A=logits_A_prior, logits_Fx=logits_Fx_prior)
 
-        self.reset_validation_outputs()
+    def on_fit_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        GraphVAELogger.prepare_stored_batch(self.validation_batch, self.validation_step_outputs)
+        self.log_latent_embeddings(trainer, pl_module, "latent_space/val", mode="val")
 
-    def reset_validation_outputs(self):
-        self.validation_batch = []
-        self.validation_step_outputs = {
-            "loss" : [],
-            "logits_A": [],
-            "logits_Fx": [],
-            "mean": [],
-            "var_unconstrained": [],
-        }
-
-    def prepare_validation_outputs(self):
-        for key in self.validation_step_outputs.keys():
-            self.validation_step_outputs[key] = torch.cat(self.validation_step_outputs[key]).cpu()
+    def on_predict_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        GraphVAELogger.prepare_stored_batch(self.predict_batch, self.predict_step_outputs)
+        self.log_latent_embeddings(trainer, pl_module, "latent_space/train", mode="predict")
 
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         if "test" in self.graphs.keys():
@@ -141,11 +106,92 @@ class ImageLogger(pl.Callback):
             reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
             self.log_images(trainer, "reconstructions/test", reconstructed_imgs, self.labels["test"])
 
+    # Boiler plate code
+
+    def on_validation_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        self.clear_stored_batches()
+
+    def on_train_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        self.clear_stored_batches()
+
+    def on_predict_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        self.clear_stored_batches()
+
+    def on_test_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        self.clear_stored_batches()
+
+    def on_validation_batch_end(
+        self,
+        trainer: "pl.Trainer",
+        pl_module: "pl.LightningModule",
+        outputs: Tuple,
+        batch: Any,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        if batch_idx < self.max_cached_batches:
+            GraphVAELogger.store_batch(self.validation_batch, self.validation_step_outputs, batch, outputs)
+
+    def on_predict_batch_end(
+        self,
+        trainer: "pl.Trainer",
+        pl_module: "pl.LightningModule",
+        outputs: Tuple,
+        batch: Any,
+        batch_idx: int,
+        data_loader_idx: int = 0,
+    ) -> None:
+        if batch_idx < self.max_cached_batches:
+            self.store_batch(self.predict_batch, self.predict_step_outputs, batch, outputs)
+
+    # utility methods
+
+    def clear_stored_batches(self):
+        self.validation_batch = {
+            "graph": [],
+            "label_ids": [],
+        }
+        self.validation_step_outputs = {
+            "loss" : [],
+            "logits_A": [],
+            "logits_Fx": [],
+            "mean": [],
+            "var_unconstrained": [],
+        }
+        self.predict_batch = deepcopy(self.validation_batch)
+        self.predict_step_outputs = deepcopy(self.validation_step_outputs)
+
     def obtain_model_outputs(self, graphs, pl_module):
 
         elbos, logits_A, logits_Fx, mean, var_unconstrained = \
             pl_module.all_model_outputs_pathwise(graphs, num_samples=pl_module.hparams.config_logging.num_variational_samples)
         return elbos, logits_A, logits_Fx, mean, var_unconstrained
+
+    @staticmethod
+    def prepare_stored_batch(batch_dict, output_dict):
+
+        def flatten(l):
+            return [item for sublist in l for item in sublist]
+
+        unbatched_graphs = [dgl.unbatch(g) for g in batch_dict["graph"]]
+        batch_dict["graph"] = flatten(unbatched_graphs)
+        batch_dict["label_ids"] = torch.cat(batch_dict["label_ids"])
+
+        for key in output_dict.keys():
+            output_dict[key] = torch.cat(output_dict[key])
+
+    @staticmethod
+    def store_batch(batch_dict, output_dict, batch, output):
+        loss, logits_A, logits_Fx, mean, var_unconstrained = output
+
+        batch_dict["graph"].append(batch[0])
+        batch_dict["label_ids"].append(batch[1])
+
+        output_dict["loss"].append(loss)
+        output_dict["logits_A"].append(logits_A)
+        output_dict["logits_Fx"].append(logits_Fx)
+        output_dict["mean"].append(mean)
+        output_dict["var_unconstrained"].append(var_unconstrained)
 
     def obtain_imgs(self, logits_A, logits_Fx, pl_module):
 
@@ -176,14 +222,29 @@ class ImageLogger(pl.Callback):
         self.log_images(trainer, tag + "/prob_heatmap/goal", heatmap_goal, mode="RGBA")
         self.log_images(trainer, tag + "/prob_heatmap/layout", heatmap_layout, mode="RGBA")
 
-    def log_latent_embeddings(self, trainer, pl_module, tag):
-        Z = self.validation_step_outputs["mean"]
-        logits_A, logits_Fx = self.validation_step_outputs["logits_A"], self.validation_step_outputs["logits_Fx"]
+    def log_latent_embeddings(self, trainer, pl_module, tag, mode="val"):
+        if mode == "val":
+            Z = self.validation_step_outputs["mean"]
+            logits_A, logits_Fx = self.validation_step_outputs["logits_A"], self.validation_step_outputs["logits_Fx"]
+            graphs = self.validation_batch["graph"]
+        elif mode == "predict":
+            Z = self.predict_step_outputs["mean"]
+            logits_A, logits_Fx = self.predict_step_outputs["logits_A"], self.predict_step_outputs["logits_Fx"]
+            graphs = self.predict_batch["graph"]
+
         assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0]
-        reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+
         Z = Z.cpu().numpy()
+
+        reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+        del logits_A, logits_Fx
+        input_gws = self.encode_graph_to_gridworld(graphs, self.attributes)
+        input_imgs = self.gridworld_to_img(input_gws)
+        del input_gws
+
         col_names = ["Z"+str(i) for i in range(Z.shape[-1])]
         df = pd.DataFrame(Z, columns=col_names)
+        df.insert(0, "Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
         df.insert(0, "Reconstructions", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs])
 
         trainer.logger.experiment.log({

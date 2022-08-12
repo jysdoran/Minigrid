@@ -645,6 +645,13 @@ class LightningGraphVAE(pl.LightningModule):
         loss = self.elbo_to_loss(elbos).reshape(1)
         return loss, logits_A, logits_Fx, mean, var_unconstrained
 
+    def predict_step(self, batch, batch_idx):
+        X, labels = batch
+        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+            self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_logging.num_variational_samples)
+        loss = self.elbo_to_loss(elbos).reshape(1)
+        return loss, logits_A, logits_Fx, mean, var_unconstrained
+
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx)
 

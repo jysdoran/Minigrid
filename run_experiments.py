@@ -11,7 +11,7 @@ from pytorch_lightning.loggers import WandbLogger
 from data_loaders import GridNavDataModule
 from models.graphVAE import GraphVAE, LightningGraphVAE
 from util.util import *
-from util.logger_callbacks import ImageLogger
+from util.logger_callbacks import GraphVAELogger
 
 @hydra.main(version_base=None, config_path="conf", config_name="config.yaml")
 def run_experiment(cfg: DictConfig) -> None:
@@ -36,12 +36,17 @@ def run_experiment(cfg: DictConfig) -> None:
 
     data_module.setup()
     logging_callbacks = [
-        ImageLogger(data_module.samples, cfg.datasets.node_attributes,
-                    cfg.results.attribute_to_gw_encoding, num_samples=cfg.results.num_image_samples, accelerator=cfg.accelerator),
+        GraphVAELogger(data_module.samples, cfg.datasets.node_attributes,
+                       cfg.results.attribute_to_gw_encoding,
+                       num_samples=cfg.results.num_image_samples,
+                       max_cached_batches=cfg.results.max_cached_batches,
+                       accelerator=cfg.accelerator),
     ]
     trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs,
                          logger=wandb_logger, callbacks=logging_callbacks)
     trainer.fit(model, data_module)
+    # run prediction (latent space viz and interpolation) in inference mode
+    trainer.predict(dataloaders=data_module.train_dataloader())
     # evaluate the model on a test set
     trainer.test(datamodule=data_module,
                  ckpt_path=None)  # uses last-saved model
@@ -77,6 +82,8 @@ def process_cfg(cfg):
             f = lambda x : (x - 1) / 2
             cfg.datasets.max_nodes = int(f(gw_data_dim[1]) * f(gw_data_dim[2]))
             cfg.models.configuration.decoder.output_dim.adjacency = int((cfg.datasets.max_nodes - 1)*2)
+
+    cfg.results.max_cached_batches = cfg.results.num_embeddings_samples // cfg.datasets.batch_size
 
 # #obsolete but keeping it in case we need more custom runnames
 # def get_run_name(tag, model_cfg, dataset_dir):
