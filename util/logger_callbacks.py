@@ -2,11 +2,12 @@ import logging
 
 import dgl
 import numpy as np
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, Optional, Any
 import torch
 import pytorch_lightning as pl
 import wandb
 import einops
+import pandas as pd
 
 from data_generators import Batch, OBJECT_TO_CHANNEL_AND_IDX
 encode_graph_to_gridworld = Batch.encode_graph_to_gridworld
@@ -27,6 +28,14 @@ class ImageLogger(pl.Callback):
         self.gw = {}
         self.imgs = {}
         self.node_to_gw_mapping = DilationTransform(1)
+        self.validation_batch = []
+        self.validation_step_outputs = {
+            "loss" : [],
+            "logits_A": [],
+            "logits_Fx": [],
+            "mean": [],
+            "var_unconstrained": [],
+        }
 
         try:
             for key in ["train", "val", "test"]:
@@ -68,7 +77,26 @@ class ImageLogger(pl.Callback):
         except KeyError as e:
             logger.info(f"{e} dataset was not supplied in the samples provided to the ImageLogger")
 
+    def on_validation_batch_end(
+        self,
+        trainer: "pl.Trainer",
+        pl_module: "pl.LightningModule",
+        outputs: Tuple,
+        batch: Any,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        # may have to offload some of these from gpu
+        loss, logits_A, logits_Fx, mean, var_unconstrained = outputs
+        self.validation_step_outputs["loss"].append(loss)
+        self.validation_step_outputs["logits_A"].append(logits_A)
+        self.validation_step_outputs["logits_Fx"].append(logits_Fx)
+        self.validation_step_outputs["mean"].append(mean)
+        self.validation_step_outputs["var_unconstrained"].append(var_unconstrained)
+        self.validation_batch.append(batch)
+
     def on_validation_epoch_end(self, trainer, pl_module):
+        self.prepare_validation_outputs()
         if "train" in self.graphs.keys():
             elbos, logits_A, logits_Fx, mean, var_unconstrained = self.obtain_model_outputs(self.graphs["train"], pl_module)
             reconstructed_imgs_train = self.obtain_imgs(logits_A, logits_Fx, pl_module)
@@ -82,11 +110,29 @@ class ImageLogger(pl.Callback):
             self.log_images(trainer, "reconstructions/val", reconstructed_imgs_val, self.labels["val"])
             self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/val", logits_A=logits_A, logits_Fx=logits_Fx)
 
+        # Consider doing it just once at end of run if this turns out too expensive
+        self.log_latent_embeddings(trainer, pl_module, "latent_space")
         prior_samples = torch.randn(mean.shape).to(device=pl_module.device)
         logits_A_prior, logits_Fx_prior = pl_module.decoder(prior_samples)
         generated_imgs = self.obtain_imgs(logits_A_prior, logits_Fx_prior, pl_module)
         self.log_images(trainer, "generated/prior", generated_imgs)
         self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="generated/prior", logits_A=logits_A_prior, logits_Fx=logits_Fx_prior)
+
+        self.reset_validation_outputs()
+
+    def reset_validation_outputs(self):
+        self.validation_batch = []
+        self.validation_step_outputs = {
+            "loss" : [],
+            "logits_A": [],
+            "logits_Fx": [],
+            "mean": [],
+            "var_unconstrained": [],
+        }
+
+    def prepare_validation_outputs(self):
+        for key in self.validation_step_outputs.keys():
+            self.validation_step_outputs[key] = torch.cat(self.validation_step_outputs[key]).cpu()
 
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         if "test" in self.graphs.keys():
@@ -130,8 +176,22 @@ class ImageLogger(pl.Callback):
         self.log_images(trainer, tag + "/prob_heatmap/goal", heatmap_goal, mode="RGBA")
         self.log_images(trainer, tag + "/prob_heatmap/layout", heatmap_layout, mode="RGBA")
 
-    def encode_graph_to_gridworld(self, graphs, attributes):
-        return encode_graph_to_gridworld(graphs, attributes, self.used_attributes)
+    def log_latent_embeddings(self, trainer, pl_module, tag):
+        Z = self.validation_step_outputs["mean"]
+        logits_A, logits_Fx = self.validation_step_outputs["logits_A"], self.validation_step_outputs["logits_Fx"]
+        assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0]
+        reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+        Z = Z.cpu().numpy()
+        col_names = ["Z"+str(i) for i in range(Z.shape[-1])]
+        df = pd.DataFrame(Z, columns=col_names)
+        df.insert(0, "Reconstructions", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs])
+
+        trainer.logger.experiment.log({
+            tag: wandb.Table(
+                dataframe=df
+            ),
+            "global_step": trainer.global_step
+        })
 
     def prob_heatmap_fx(self, probs_fx, grid_dim):
         #TODO: at some point good to look into using those directly
@@ -177,6 +237,9 @@ class ImageLogger(pl.Callback):
         heat_map = einops.rearrange(heat_map, 'b h w c -> b c h w')
 
         return heat_map
+
+    def encode_graph_to_gridworld(self, graphs, attributes):
+        return encode_graph_to_gridworld(graphs, attributes, self.used_attributes)
 
     def gridworld_to_img(self, gws):
         colors = {
