@@ -99,5 +99,5 @@ def process_cfg(cfg):
 
 
 if __name__ == "__main__":
-    sys.argv.append('run_name=gnn_features_sg')
+    #sys.argv.append('run_name=gnn_features_sg')
     run_experiment()

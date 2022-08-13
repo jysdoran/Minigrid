@@ -267,7 +267,7 @@ class GraphVAELogger(pl.Callback):
 
         assert len(probs_fx.shape) == 2
 
-        #probs_fx = torch.sigmoid(probs_fx) # get to [0, 1] domain
+        probs_fx = probs_fx / probs_fx.amax(dim=[i for i in range(1, len(probs_fx.shape))], keepdim=True)
         probs_fx = probs_fx.reshape(probs_fx.shape[0], grid_dim, grid_dim)
         heat_map = torch.zeros((*probs_fx.shape, 4)) # (B, H, W, C), C=RGBA
         heat_map[..., 0] = 1  # all values will be shades of red #TODO: could do color according to start/goal config

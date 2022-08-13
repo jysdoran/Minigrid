@@ -38,7 +38,6 @@ configuration:
       neighbor_pooling: sum
 
     mlp:
-      num_layers: 2
       layer_dim: [ 1024, 128 ] #[ 1024, 256 ]
 
   decoder:

@@ -83,7 +83,7 @@ def compute_kld_with_standard_gaussian(q_mean, q_logvar):
 
     q_var = q_logvar.exp()
 
-    kld = -0.5 * (1 + q_logvar - q_mean ** 2 - q_var).sum(dim=-1)
+    kld = -0.5 * (1 + q_logvar - q_mean ** 2 - q_var).mean(dim=-1)
 
     return kld
 

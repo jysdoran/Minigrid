@@ -1,7 +1,7 @@
 name: gridworlds
 path: change_me
 size: 110200 #120000
-batch_size: 50 #128
+batch_size: 128 #128
 task_structures: ['rooms_unstructured_layout','maze']
 data_type: 'graph'
 transforms: null
