@@ -1,0 +1,7 @@
+name: gridworlds_descriptors
+data_type: graph
+task_structure: # AUTO {maze, rooms_unstructured}
+difficulty_metrics: null #AUTO
+  shortest_path: null #AUTO
+  resistance: null #AUTO
+generating_algorithm #AUTO {'prims', 'multiroom'}

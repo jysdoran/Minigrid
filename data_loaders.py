@@ -180,7 +180,7 @@ class GridNavDataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:
             dataset_full = GridNav_Dataset(self.data_dir, train=True, transform=self.transform)
-            split_size = [int(0.9 * len(dataset_full)), int(0.1 * len(dataset_full))]
+            split_size = [int(0.9 * len(dataset_full)), len(dataset_full) - int(0.9 * len(dataset_full))]
             train, val = random_split(dataset_full, split_size)
             self.dataset = train.dataset
             self.train = train
