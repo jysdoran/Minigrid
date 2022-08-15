@@ -9,7 +9,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 
 from data_loaders import GridNavDataModule
-from models.graphVAE import GraphVAE, LightningGraphVAE
+from models.graphVAE import LightningGraphVAE
 from util.util import *
 from util.logger_callbacks import GraphVAELogger
 
@@ -33,7 +33,8 @@ def run_experiment(cfg: DictConfig) -> None:
                                     config_logging =cfg.results,
                                     _recursive_=False)
 
-    wandb_logger = WandbLogger(project="auto-curriculum-design", name=cfg.run_name, save_dir=os.getcwd())
+    wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd())
+    wandb_logger.experiment.name = cfg.run_name + "_" + wandb_logger.experiment.name
 
     logger.info("\n" + OmegaConf.to_yaml(cfg))
 
@@ -54,7 +55,6 @@ def run_experiment(cfg: DictConfig) -> None:
     trainer.test(datamodule=data_module,
                  ckpt_path=None)  # uses last-saved model
 
-    # writer.close()
     logger.info("Done")
 
 def get_dataset_dir(cfg):
@@ -72,7 +72,7 @@ def get_dataset_dir(cfg):
     encoding = cfg.encoding
 
     data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-f={attributes_dim}-enc={encoding}"
-    #data_directory = 'test'
+    # data_directory = 'test'
     data_full_dir = datasets_dir + data_directory
     return data_full_dir, data_directory
 

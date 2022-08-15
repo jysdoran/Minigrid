@@ -1,11 +1,11 @@
 name: gridworlds
 path: change_me
 size: 110200 #120000
-batch_size: 128 #128
+batch_size: 128
 task_structures: ['rooms_unstructured_layout','maze']
 data_type: 'graph'
 transforms: null
 gridworld_data_dim: [3,27,27]
 encoding: minimal
-max_nodes: null #Autof
+max_nodes: null #AUTO
 node_attributes: [ "empty", "wall", "start", "goal" ]
