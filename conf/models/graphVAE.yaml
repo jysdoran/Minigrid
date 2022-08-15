@@ -8,6 +8,7 @@ configuration:
     latent_dim: 12 #64
     graph_max_nodes: ${datasets.max_nodes}
     node_attributes: ${datasets.node_attributes}
+    batch_size: ${datasets.batch_size}
 
   model:
     accelerator: ${accelerator}

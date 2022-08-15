@@ -1,3 +1,2 @@
 _target_: torch.optim.Adam
 lr: 1e-4
-batch_size: ${datasets.batch_size}
