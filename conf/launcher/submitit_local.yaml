@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  # Hydra's launcher API is synchronous and not async
+  # https://github.com/facebookresearch/hydra/issues/1377#issuecomment-773583397
+  # so all jobs in a batch must finish before launching next batch
+  #
+  # Refer to https://hydra.cc/docs/plugins/submitit_launcher/ and
+  # https://github.com/facebookincubator/submitit/blob/main/docs/examples.md
+  # for more information.
+  #
+  # Use submitit_local for local multiprocessing
+  - override /hydra/launcher: submitit_local
+
+hydra:
+  launcher:
+    # @package hydra.launcher
+    _target_: hydra_plugins.launchers.my_submitit_launcher.MyLocalLauncher
+    # submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+    #timeout_min: 60
+    cpus_per_task: 12
+    gpus_per_node: 1
+    tasks_per_node: 1
+    mem_gb: 16
+    nodes: 1

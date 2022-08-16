@@ -28,6 +28,20 @@ defaults:
   - models: graphVAE
   - optim: adam
   - results: graphVAE
+#  - launcher: submitit_local
+#  - sweeper: wandb
+  - _self_
 
   - override hydra/job_logging: colorlog
   - override hydra/hydra_logging: colorlog
+  # Hydra's launcher API is synchronous and not async
+  # https://github.com/facebookresearch/hydra/issues/1377#issuecomment-773583397
+  # so all jobs in a batch must finish before launching next batch
+  #
+  # Refer to https://hydra.cc/docs/plugins/submitit_launcher/ and
+  # https://github.com/facebookincubator/submitit/blob/main/docs/examples.md
+  # for more information.
+  #
+  # Use submitit_local for local multiprocessing
+#  - override /hydra/launcher: submitit_local
+#  - override /hydra/sweeper: wandb
