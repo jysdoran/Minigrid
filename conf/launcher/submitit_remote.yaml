@@ -17,16 +17,16 @@ hydra:
     # having the below config and not sharing resources between each other
     _target_: hydra_plugins.launchers.my_submitit_launcher.MySlurmLauncher
     timeout_min: 60
-    # partition: main  # place your SLURM partition here
+    partition: main  # place your SLURM partition here
     cpus_per_task: 12  # task = process, cpus = threads if hyperthreading enabled
-    # gres: gpu:rtx8000:1  # place your SLURM gres config here
+    gres: gpu:1 # place your SLURM gres config here
     nodes: 1
 
     # num of tasks to spawn in each node (will repeat each task in a job array
     # in each node)
     tasks_per_node: 1
 
-    mem_gb: 4  # RAM per node (not GPU memory) in GB
+    mem_gb: 12  # RAM per node (not GPU memory) in GB
     # max num of tasks to run in parallel (via job array) with above config
     array_parallelism: 256
 

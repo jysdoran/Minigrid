@@ -28,11 +28,11 @@ hydra:
       # reached. Use a multi-processing launcher to have these agents execute
       # simultaneously, otherwise it's a useless option since they'll execute in
       # sequence. Default is 1.
-      num_agents: 2
+      num_agents: 1
 
       # (Optional) Total number of agents to launch (must be >= num_agents)
       # Default is 1.
-      budget: 4
+      budget: 2
 
       # (Optional) Specify the entity for this sweep. Otherwise infer from the
       # environment.
