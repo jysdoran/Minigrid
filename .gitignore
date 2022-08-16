@@ -2,9 +2,11 @@
 
 runs/
 figures/
-/datasets/
 checkpoints/
 outputs/
+multirun/
+/wandb/
+/datasets/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

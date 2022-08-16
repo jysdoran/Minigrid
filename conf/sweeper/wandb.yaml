@@ -106,12 +106,8 @@ hydra:
 #        max: 1.0
 
       # A linearly-distributed integer scalar between 4 to 16
-      datasets.batch_size:
-        distribution: q_log_uniform
-        min: 32
-        max: 128
-        q: 2.0
+      datasets.batch_size: [16, 32, 64, 128]
 
-      models.configuration.shared_parameters: 8, 12
+      models.configuration.shared_parameters.latent_dim: [8, 12]
 
       epochs: 1
