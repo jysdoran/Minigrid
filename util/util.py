@@ -783,8 +783,8 @@ def encode_to_img(data, data_type:str, attributes:Tuple[str]=( "empty", "wall", 
 def fit_model_rw(model, optimizer, train_data, cfg, *, test_data=None, tensorboard=None, latent_eval_freq=10):
     batch_size = cfg.models.hyperparameters.optimiser.batch_size
     epochs = cfg.models.hyperparameters.optimiser.epochs
-    gridworld_data_dim = cfg.datasets.gridworld_data_dim
-    attributes_data = tuple(cfg.datasets.node_attributes)
+    gridworld_data_dim = cfg.data.dataset.gridworld_data_dim
+    attributes_data = tuple(cfg.data.dataset.node_attributes)
     attributes_dec = tuple(cfg.models.configuration.decoder.attributes)
     attributes_enc = tuple(cfg.models.configuration.encoder.attributes)
     attribute_reconstruction = tuple(cfg.results.attribute_to_gw_encoding)

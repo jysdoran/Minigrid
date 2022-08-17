@@ -2,16 +2,16 @@ hydra:
   run:
     # Configure output dir of each experiment programmatically from the arguments
     # Example "outputs/mnist/classifier/baseline/2021-03-10-141516"
-    dir: outputs/${datasets.name}/${datasets.data_type}_${datasets.encoding}/${models.name}/${run_name}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: outputs/${data.dataset.name}/${data.dataset.data_type}_${data.dataset.encoding}/${models.name}/${run_name}/${now:%Y-%m-%d_%H-%M-%S}
   job:
     config:
       override_dirname:
         exclude_keys:
           - accelerator
           - models.name
-          - datasets.name
-          - datasets.data_type
-          - datasets.encoding
+          - data.dataset.name
+          - data.dataset.data_type
+          - data.dataset.encoding
           - run_name
           - models
     chdir: true
@@ -28,8 +28,6 @@ defaults:
   - models: graphVAE
   - optim: adam
   - results: graphVAE
-#  - launcher: submitit_local
-#  - sweeper: wandb
   - _self_
 
   - override hydra/job_logging: colorlog

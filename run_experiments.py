@@ -20,11 +20,11 @@ def run_experiment(cfg: DictConfig) -> None:
     process_cfg(cfg)
     seed_everything(cfg.seed)
 
-    dataset_full_dir, cfg.datasets.path = get_dataset_dir(cfg.datasets)
+    dataset_full_dir, cfg.data.dataset.path = get_dataset_dir(cfg.datasets)
     data_module = GridNavDataModule(dataset_full_dir,
-                                    batch_size=cfg.datasets.batch_size,
+                                    batch_size=cfg.data.dataset.batch_size,
                                     predict_dataset_size=cfg.results.num_embeddings_samples,
-                                    transforms=cfg.datasets.transforms)
+                                    transforms=cfg.data.dataset.transforms)
 
     model = hydra.utils.instantiate(config=cfg.models,
                                     config_model=cfg.models.configuration,
@@ -40,7 +40,7 @@ def run_experiment(cfg: DictConfig) -> None:
 
     data_module.setup()
     logging_callbacks = [
-        GraphVAELogger(data_module.samples, cfg.datasets.node_attributes,
+        GraphVAELogger(data_module.samples, cfg.data.dataset.node_attributes,
                        cfg.results.attribute_to_gw_encoding,
                        num_samples=cfg.results.num_image_samples,
                        max_cached_batches=cfg.results.max_cached_batches,
@@ -79,14 +79,14 @@ def get_dataset_dir(cfg):
 def process_cfg(cfg):
     # sets all of the Auto arguments
 
-    if cfg.datasets.data_type =='graph':
-        if cfg.datasets.encoding =='minimal':
-            gw_data_dim = cfg.datasets.gridworld_data_dim
+    if cfg.data.dataset.data_type =='graph':
+        if cfg.data.dataset.encoding =='minimal':
+            gw_data_dim = cfg.data.dataset.gridworld_data_dim
             f = lambda x : (x - 1) / 2
-            cfg.datasets.max_nodes = int(f(gw_data_dim[1]) * f(gw_data_dim[2]))
-            cfg.models.configuration.decoder.output_dim.adjacency = int((cfg.datasets.max_nodes - 1)*2)
+            cfg.data.dataset.max_nodes = int(f(gw_data_dim[1]) * f(gw_data_dim[2]))
+            cfg.models.configuration.decoder.output_dim.adjacency = int((cfg.data.dataset.max_nodes - 1)*2)
 
-    cfg.results.max_cached_batches = cfg.results.num_embeddings_samples // cfg.datasets.batch_size
+    cfg.results.max_cached_batches = cfg.results.num_embeddings_samples // cfg.data.dataset.batch_size
 
 # #obsolete but keeping it in case we need more custom runnames
 # def get_run_name(tag, model_cfg, dataset_dir):

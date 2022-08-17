@@ -6,9 +6,9 @@ configuration:
 
   shared_parameters:
     latent_dim: 12 #64
-    graph_max_nodes: ${datasets.max_nodes}
-    node_attributes: ${datasets.node_attributes}
-    batch_size: ${datasets.batch_size}
+    graph_max_nodes: ${data.dataset.max_nodes}
+    node_attributes: ${data.dataset.node_attributes}
+    batch_size: ${data.dataset.batch_size}
 
   model:
     accelerator: ${accelerator}
@@ -49,7 +49,7 @@ configuration:
     distributions_domains: ["nodes", "nodes"]
     output_dim: #this should be computed according to adjacency, data.graph_max_nodes
       adjacency: null # Auto (max_node-1)*2
-      attributes: ${datasets.max_nodes} # Auto (max_nodes)
+      attributes: ${data.dataset.max_nodes} # Auto (max_nodes)
     architecture: MLP
     num_layers: 2 #not counting the final multihead layer
     layer_dim: [ 128, 256 ] # [ 256, 1024 ]
