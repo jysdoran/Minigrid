@@ -11,29 +11,43 @@ test_batch_ids: null #AUTO
 
 data_type: graph
 encoding: minimal
-normalise_difficulty: true
+normalise_metrics: true
 gridworld_data_dim: [3,27,27]
 task_type: navigate_to_goal
 task_structure_split: #Assumed similar across train and test batches
   maze: 0.5
   rooms_unstructured_layout: 0.5
-seed: null #AUTO
+seed: 123456 #AUTO
+
+label_descriptors:
+  - task_structure # AUTO {maze, rooms_unstructured}
+  - shortest_path
+  - resistance
+  - navigable_nodes
+  - optimal_trajectories
+  - generating_algorithm #{'prims', 'multiroom'}
+  - seed
 
 label_descriptors_config:
   task_structures: [maze, rooms_unstructured_layout]
-  difficulty_metrics:
-    shortest_path:
-      min: 0.0
-      max: 1.0
-    resistance:
-      min: 0.0
-      max: 1.0
-  num_optimal_trajectories: 0
+  shortest_path:
+    min: 0.0
+    max: 1.0
+    normalisation_factor: null #AUTO
+  resistance:
+    min: 0.0
+    max: 1.0
+    normalisation_factor: null #AUTO
+  navigable_nodes:
+    min: 0.0
+    max: 1.0
+    normalisation_factor: null #AUTO
+  num_optimal_trajectories: 1
   generating_algorithm: [prims, multiroom]
-  generation_seed: false
+  use_seed: true
 
 feature_descriptors:
   - empty
-  - walls
-  - start_position
-  - goal_position
+  - wall
+  - start
+  - goal

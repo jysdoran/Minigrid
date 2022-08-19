@@ -24,7 +24,8 @@ num_devices: 1
 epochs: 10
 
 defaults:
-  - datasets: gridworlds
+  - data/data_generation: gridworlds
+  - data/dataset: gridworlds
   - models: graphVAE
   - optim: adam
   - results: graphVAE

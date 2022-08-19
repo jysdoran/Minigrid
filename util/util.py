@@ -17,13 +17,11 @@ import math
 import json
 from omegaconf import OmegaConf
 
-from data_generators import Batch
 from data_loaders import WrappedDataLoader
 from util.transforms import FlipBinaryTransform, ToDeviceTransform
 
-grid_to_gridworld = Batch.encode_grid_to_gridworld
-graph_to_gridworld = Batch.encode_graph_to_gridworld
-reduced_adj_to_gridworld_layout = Batch.encode_reduced_adj_to_gridworld_layout
+#grid_to_gridworld = Batch.encode_grid_to_gridworld
+#graph_to_gridworld = Batch.encode_graph_to_gridworld
 
 #WIP section
 
