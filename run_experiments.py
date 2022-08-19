@@ -19,8 +19,9 @@ def run_experiment(cfg: DictConfig) -> None:
     logger.info("Working directory : {}".format(os.getcwd()))
     process_cfg(cfg)
     seed_everything(cfg.seed)
+    test_mode = True if cfg.run_name == "test" else False
 
-    dataset_full_dir, cfg.data.dataset.path = get_dataset_dir(cfg.datasets)
+    dataset_full_dir, cfg.data.dataset.path = get_dataset_dir(cfg.data.dataset, test_mode)
     data_module = GridNavDataModule(dataset_full_dir,
                                     batch_size=cfg.data.dataset.batch_size,
                                     predict_dataset_size=cfg.results.num_embeddings_samples,
@@ -40,7 +41,7 @@ def run_experiment(cfg: DictConfig) -> None:
 
     data_module.setup()
     logging_callbacks = [
-        GraphVAELogger(data_module.samples, cfg.data.dataset.node_attributes,
+        GraphVAELogger(data_module.dataset.target_contents, data_module.samples, cfg.data.dataset.node_attributes,
                        cfg.results.attribute_to_gw_encoding,
                        num_samples=cfg.results.num_image_samples,
                        max_cached_batches=cfg.results.max_cached_batches,
@@ -57,7 +58,7 @@ def run_experiment(cfg: DictConfig) -> None:
 
     logger.info("Done")
 
-def get_dataset_dir(cfg):
+def get_dataset_dir(cfg, test_mode=False):
     base_dir = str(Path(__file__).resolve().parent)
     datasets_dir = base_dir + '/datasets/'
 
@@ -71,8 +72,10 @@ def get_dataset_dir(cfg):
     attributes_dim = len(cfg.node_attributes)
     encoding = cfg.encoding
 
-    data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-f={attributes_dim}-enc={encoding}"
-    # data_directory = 'test'
+    if test_mode:
+        data_directory = 'test'
+    else:
+        data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-f={attributes_dim}-enc={encoding}"
     data_full_dir = datasets_dir + data_directory
     return data_full_dir, data_directory
 

@@ -1,6 +1,7 @@
 import logging
 
 import dgl
+import networkx as nx
 import numpy as np
 from typing import List, Union, Tuple, Optional, Any
 import torch
@@ -8,19 +9,23 @@ import pytorch_lightning as pl
 import wandb
 import einops
 import pandas as pd
+from typing import Dict
 
 from data_generators import Batch, OBJECT_TO_CHANNEL_AND_IDX
 encode_graph_to_gridworld = Batch.encode_graph_to_gridworld
 encode_reduced_adj_to_gridworld_layout = Batch.encode_reduced_adj_to_gridworld_layout
+encode_decoder_mode_to_graph = Batch.encode_decoder_mode_to_graph
 from util.transforms import DilationTransform, FlipBinaryTransform
+from util.graph_metrics import compute_metrics
 from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
 class GraphVAELogger(pl.Callback):
-    def __init__(self, samples, attributes, used_attributes, num_samples=32, max_cached_batches=0, accelerator="cpu"):
+    def __init__(self, label_contents:Dict, samples, attributes, used_attributes, num_samples=32, max_cached_batches=0, accelerator="cpu"):
         super().__init__()
         device = torch.device("cuda" if accelerator == "gpu" else "cpu")
+        self.label_contents = label_contents
         self.num_samples = num_samples
         self.max_cached_batches = max_cached_batches
         self.attributes = attributes
@@ -227,25 +232,52 @@ class GraphVAELogger(pl.Callback):
             Z = self.validation_step_outputs["mean"]
             logits_A, logits_Fx = self.validation_step_outputs["logits_A"], self.validation_step_outputs["logits_Fx"]
             graphs = self.validation_batch["graph"]
+            labels = self.validation_batch["label_ids"]
         elif mode == "predict":
             Z = self.predict_step_outputs["mean"]
             logits_A, logits_Fx = self.predict_step_outputs["logits_A"], self.predict_step_outputs["logits_Fx"]
             graphs = self.predict_batch["graph"]
+            labels = self.predict_batch["label_ids"]
 
         assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0]
 
         Z = Z.cpu().numpy()
 
+        mode_probs_A, mode_probs_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
+        reconstructed_graphs = encode_decoder_mode_to_graph(mode_probs_A, mode_probs_Fx, make_valid=False,
+                                                            device=torch.device("cpu"))
+        reconstruction_metrics = compute_metrics(
+            reconstructed_graphs,
+            desired_metrics=["valid","solvable","shortest_path", "resistance", "navigable_nodes"],
+            start_dim=pl_module.decoder.attributes.index("start"),
+            goal_dim=pl_module.decoder.attributes.index("goal"))
+
         reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
-        del logits_A, logits_Fx
+
+        del logits_A, logits_Fx, mode_probs_A, mode_probs_Fx, reconstructed_graphs
+
         input_gws = self.encode_graph_to_gridworld(graphs, self.attributes)
         input_imgs = self.gridworld_to_img(input_gws)
         del input_gws
 
         col_names = ["Z"+str(i) for i in range(Z.shape[-1])]
         df = pd.DataFrame(Z, columns=col_names)
+        # Store pre-computed Input metrics
+        for input_property in reversed(["task_structure", "shortest_path", "resistance", "navigable_nodes", "seed"]):
+            if isinstance(self.label_contents[input_property], list):
+                data = [self.label_contents[input_property][i] for i in labels]
+            else:
+                data = self.label_contents[input_property][labels]
+            df.insert(0, f"Input_{input_property}", data)
+
+        # Store Reconstruction metrics
+        for key in reconstruction_metrics.keys():
+            df.insert(0, f"Reconstruction_{key}", reconstruction_metrics[key])
+        del reconstruction_metrics
+
         df.insert(0, "Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
         df.insert(0, "Reconstructions", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs])
+        df.insert(0, "Label_ids", labels.tolist())
 
         trainer.logger.experiment.log({
             tag: wandb.Table(
@@ -298,6 +330,7 @@ class GraphVAELogger(pl.Callback):
         heat_map = einops.rearrange(heat_map, 'b h w c -> b c h w')
 
         return heat_map
+
 
     def encode_graph_to_gridworld(self, graphs, attributes):
         return encode_graph_to_gridworld(graphs, attributes, self.used_attributes)

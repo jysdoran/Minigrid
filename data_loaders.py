@@ -2,7 +2,7 @@ import logging
 
 import os.path
 import pickle
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, Dict
 
 import torch
 import pytorch_lightning as pl
@@ -48,8 +48,8 @@ class GridNav_Dataset(VisionDataset):
 
     test_list = [
         ["test_batch.data", "TODO"],
-        ["test_batch_0.data", "TODO"],
-        ["test_batch_1.data", "TODO"],
+        ["test_batch_90.data", "TODO"],
+        ["test_batch_91.data", "TODO"],
     ]
     meta = {
         "filename": "dataset.meta",
@@ -83,7 +83,7 @@ class GridNav_Dataset(VisionDataset):
 
         self.data: Any = []
         self.targets = []
-        self.target_contents: Any = []
+        self.target_contents: Dict = None
         self.batches_metadata: Any = []
 
         # now load the picked numpy arrays
@@ -102,7 +102,23 @@ class GridNav_Dataset(VisionDataset):
                     # as behavior is order dependent
                     try:
                         self.batches_metadata.append(entry["batch_meta"])
-                        self.target_contents.append(entry["label_contents"])
+                        if self.target_contents is None:
+                            self.target_contents = entry["label_contents"]
+                        else:
+                            try:
+                                for key in entry["label_contents"].keys():
+                                    if isinstance(entry["label_contents"][key], list):
+                                        self.target_contents[key].extend(entry["label_contents"][key])
+                                    elif isinstance(entry["label_contents"][key], torch.Tensor):
+                                        self.target_contents[key] = \
+                                            torch.cat((self.target_contents[key], entry["label_contents"][key]))
+                                    else:
+                                        raise ValueError("Unsupported type for target_contents")
+                            except KeyError as e:
+                                raise KeyError(f"{e} not found in {self.target_contents.keys()}. Mismatch in label contents "
+                                               f"across batch files")
+
+                        # these ones will usually be skipped
                         self.data.extend(entry["data"])
                         self.targets.extend(entry["labels"])
                     except KeyError as e:
