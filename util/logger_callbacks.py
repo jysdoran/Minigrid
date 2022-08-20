@@ -3,13 +3,12 @@ import logging
 import dgl
 import networkx as nx
 import numpy as np
-from typing import List, Union, Tuple, Optional, Any
+from typing import List, Union, Tuple, Optional, Any, Dict
 import torch
 import pytorch_lightning as pl
 import wandb
 import einops
 import pandas as pd
-from typing import Dict
 
 from data_generators import Batch, OBJECT_TO_CHANNEL_AND_IDX
 encode_graph_to_gridworld = Batch.encode_graph_to_gridworld
@@ -22,10 +21,20 @@ from copy import deepcopy
 logger = logging.getLogger(__name__)
 
 class GraphVAELogger(pl.Callback):
-    def __init__(self, label_contents:Dict, samples, attributes, used_attributes, num_samples=32, max_cached_batches=0, accelerator="cpu"):
+    def __init__(self,
+                 label_contents: Dict[str, Any],
+                 samples: Dict[str, Tuple[dgl.DGLGraph, torch.Tensor]],
+                 attributes: List[str],
+                 used_attributes: List[str],
+                 label_descriptors_config: Dict = None,
+                 num_samples: int = 32,
+                 max_cached_batches: int = 0,
+                 accelerator: str = "cpu"):
+
         super().__init__()
         device = torch.device("cuda" if accelerator == "gpu" else "cpu")
         self.label_contents = label_contents
+        self.label_descriptors_config = label_descriptors_config
         self.num_samples = num_samples
         self.max_cached_batches = max_cached_batches
         self.attributes = attributes
@@ -252,6 +261,9 @@ class GraphVAELogger(pl.Callback):
             start_dim=pl_module.decoder.attributes.index("start"),
             goal_dim=pl_module.decoder.attributes.index("goal"))
 
+        if self.label_descriptors_config is not None:
+            reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
+
         reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
 
         del logits_A, logits_Fx, mode_probs_A, mode_probs_Fx, reconstructed_graphs
@@ -358,3 +370,15 @@ class GraphVAELogger(pl.Callback):
             imgs[cm>0] = cm[cm>0]
 
         return imgs
+
+    def normalise_metrics(self, metrics, device=torch.device("cpu")):
+
+        for key in metrics.keys():
+            if key in self.label_descriptors_config.keys():
+                if isinstance(metrics[key], list):
+                    metrics[key] = torch.tensor(metrics[key]).to(device, torch.float)
+                metrics[key] /= self.label_descriptors_config[key].normalisation_factor
+                if isinstance(metrics[key], torch.Tensor):
+                    metrics[key] = metrics[key].tolist()
+
+        return metrics
