@@ -6,7 +6,7 @@ from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 
 from data_loaders import GridNav_Dataset
-from util.transforms import SelectChannelsTransform
+import util.transforms as tr
 from util.util import *
 from models.VAE import *
 
@@ -51,7 +51,7 @@ elif data_type == 'graph':
 
 if transform_data is True:
     t = transforms.Compose([
-        SelectChannelsTransform(*layout_channels),
+        tr.SelectChannelsTransform(*layout_channels),
         transforms.ToTensor(),])
 else:
     t = None
@@ -70,16 +70,16 @@ test_data = GridNav_Dataset(
 #     transform=torchvision.transforms.Compose([
 #         torchvision.transforms.Resize((img_size,img_size)),
 #         torchvision.transforms.ToTensor(),
-#         FlattenTransform(1,-1),
-#         BinaryTransform(0.6),
+#         tr.FlattenTransform(1,-1),
+#         tr.BinaryTransform(0.6),
 #         ]))
 # test_data = torchvision.datasets.MNIST(
 #     mnist_dir, train=False,
 #     transform=torchvision.transforms.Compose([
 #         torchvision.transforms.Resize((img_size,img_size)),
 #         torchvision.transforms.ToTensor(),
-#         FlattenTransform(1, -1),
-#         BinaryTransform(0.6),
+#         tr.FlattenTransform(1, -1),
+#         tr.BinaryTransform(0.6),
 #         ]))
 
 if data_type == 'graph':

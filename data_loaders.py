@@ -8,12 +8,10 @@ import torch
 import pytorch_lightning as pl
 import dgl
 
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import random_split
 from torchvision.datasets.utils import check_integrity
 from torchvision.datasets.vision import VisionDataset
 from dgl.dataloading import GraphDataLoader
-
-from util.transforms import ToDeviceTransform
 
 logger = logging.getLogger(__name__)
 

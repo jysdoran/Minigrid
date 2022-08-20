@@ -10,11 +10,8 @@ import wandb
 import einops
 import pandas as pd
 
-from data_generators import Batch, OBJECT_TO_CHANNEL_AND_IDX
-encode_graph_to_gridworld = Batch.encode_graph_to_gridworld
-encode_reduced_adj_to_gridworld_layout = Batch.encode_reduced_adj_to_gridworld_layout
-encode_decoder_mode_to_graph = Batch.encode_decoder_mode_to_graph
-from util.transforms import DilationTransform, FlipBinaryTransform
+from data_generators import OBJECT_TO_CHANNEL_AND_IDX
+import util.transforms as tr
 from util.graph_metrics import compute_metrics
 from copy import deepcopy
 
@@ -26,6 +23,7 @@ class GraphVAELogger(pl.Callback):
                  samples: Dict[str, Tuple[dgl.DGLGraph, torch.Tensor]],
                  attributes: List[str],
                  used_attributes: List[str],
+                 force_valid_reconstructions: bool = True,
                  label_descriptors_config: Dict = None,
                  num_samples: int = 32,
                  max_cached_batches: int = 0,
@@ -35,6 +33,7 @@ class GraphVAELogger(pl.Callback):
         device = torch.device("cuda" if accelerator == "gpu" else "cpu")
         self.label_contents = label_contents
         self.label_descriptors_config = label_descriptors_config
+        self.force_valid_reconstructions = force_valid_reconstructions
         self.num_samples = num_samples
         self.max_cached_batches = max_cached_batches
         self.attributes = attributes
@@ -43,7 +42,7 @@ class GraphVAELogger(pl.Callback):
         self.labels = {}
         self.gw = {}
         self.imgs = {}
-        self.node_to_gw_mapping = DilationTransform(1)
+        self.node_to_gw_mapping = tr.DilationTransform(1)
         self.validation_batch = {
             "graph": [],
             "label_ids": [],
@@ -250,27 +249,41 @@ class GraphVAELogger(pl.Callback):
 
         assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0]
 
+        input_gws = self.encode_graph_to_gridworld(graphs, self.attributes)
+        input_imgs = self.gridworld_to_img(input_gws)
+        del input_gws, graphs
+
         Z = Z.cpu().numpy()
 
-        mode_probs_A, mode_probs_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
-        reconstructed_graphs = encode_decoder_mode_to_graph(mode_probs_A, mode_probs_Fx, make_valid=False,
-                                                            device=torch.device("cpu"))
-        reconstruction_metrics = compute_metrics(
-            reconstructed_graphs,
-            desired_metrics=["valid","solvable","shortest_path", "resistance", "navigable_nodes"],
-            start_dim=pl_module.decoder.attributes.index("start"),
-            goal_dim=pl_module.decoder.attributes.index("goal"))
+        reconstructed_graphs, start_nodes, goal_nodes, is_valid = \
+            tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, pl_module.decoder, correct_A=True)
 
-        if self.label_descriptors_config is not None:
-            reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
+        reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
+        reconstruction_metrics["valid"] = is_valid.tolist()
+        reconstruction_metrics, rec_graphs_nx = \
+            compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes, goal_nodes)
+        del is_valid, reconstructed_graphs
 
         reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
 
-        del logits_A, logits_Fx, mode_probs_A, mode_probs_Fx, reconstructed_graphs
+        if self.force_valid_reconstructions:
+            logits_Fx[..., pl_module.decoder.attributes.index("goal")], goal_nodes_valid = \
+                tr.Nav2DTransforms.force_valid_goal(
+                rec_graphs_nx,
+                logits_Fx[..., pl_module.decoder.attributes.index("goal")])
 
-        input_gws = self.encode_graph_to_gridworld(graphs, self.attributes)
-        input_imgs = self.gridworld_to_img(input_gws)
-        del input_gws
+        reconstruction_metrics_force_valid = {k: [] for k in ["shortest_path", "resistance", "navigable_nodes"]}
+        reconstruction_metrics_force_valid["valid"] = [True] * len(logits_Fx)
+        reconstruction_metrics_force_valid["solvable"] = [True] * len(logits_Fx)
+        reconstruction_metrics_force_valid, _, = compute_metrics(rec_graphs_nx, reconstruction_metrics_force_valid,
+                                                                 start_nodes, goal_nodes_valid)
+        del rec_graphs_nx, start_nodes, goal_nodes, goal_nodes_valid
+        reconstructed_imgs_force_valid = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+        del logits_A, logits_Fx
+
+        if self.label_descriptors_config is not None:
+            reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
+            reconstruction_metrics_force_valid = self.normalise_metrics(reconstruction_metrics_force_valid, device=pl_module.device)
 
         col_names = ["Z"+str(i) for i in range(Z.shape[-1])]
         df = pd.DataFrame(Z, columns=col_names)
@@ -287,8 +300,14 @@ class GraphVAELogger(pl.Callback):
             df.insert(0, f"Reconstruction_{key}", reconstruction_metrics[key])
         del reconstruction_metrics
 
+        # Store Reconstruction metrics
+        for key in ["shortest_path", "resistance", "navigable_nodes"]:
+            df.insert(0, f"ForceValid_{key}", reconstruction_metrics_force_valid[key])
+        del reconstruction_metrics_force_valid
+
         df.insert(0, "Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
         df.insert(0, "Reconstructions", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs])
+        df.insert(0, "RecForceValid", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs_force_valid])
         df.insert(0, "Label_ids", labels.tolist())
 
         trainer.logger.experiment.log({
@@ -329,10 +348,10 @@ class GraphVAELogger(pl.Callback):
         # TODO: to revise for non reduced formulations
         probs_A = probs_A.reshape(probs_A.shape[0], -1, 2)
 
-        flip_bits = FlipBinaryTransform()
+        flip_bits = tr.FlipBinaryTransform()
         threshold = .5
         layout_dim = int(grid_dim * 2 + 1)
-        layout_gw = encode_reduced_adj_to_gridworld_layout(probs_A, (layout_dim, layout_dim), probalistic_mode=True, prob_threshold=threshold)
+        layout_gw = tr.Nav2DTransforms.encode_reduced_adj_to_gridworld_layout(probs_A, (layout_dim, layout_dim), probalistic_mode=True, prob_threshold=threshold)
 
         heat_map = torch.zeros((*layout_gw.shape, 4)).to(layout_gw)  # (B, H, W, C), C=RGBA
         heat_map[..., 0][layout_gw >= threshold] = 1 #val >= threshold go to red channel
@@ -345,7 +364,7 @@ class GraphVAELogger(pl.Callback):
 
 
     def encode_graph_to_gridworld(self, graphs, attributes):
-        return encode_graph_to_gridworld(graphs, attributes, self.used_attributes)
+        return tr.Nav2DTransforms.encode_graph_to_gridworld(graphs, attributes, self.used_attributes)
 
     def gridworld_to_img(self, gws):
         colors = {

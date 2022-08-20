@@ -8,12 +8,11 @@ from torch import nn
 import torch.nn.functional as F
 from typing import Iterable
 
-from data_generators import Batch
 from models.gnn_networks import GIN
 from models.networks import FC_ReLU_Network
 from util.distributions import sample_gaussian_with_reparametrisation, compute_kld_with_standard_gaussian, \
     evaluate_logprob_bernoulli, evaluate_logprob_one_hot_categorical, evaluate_logprob_diagonal_gaussian
-from util.transforms import BinaryTransform
+import util.transforms as tr
 
 
 def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, permutations=None):
@@ -58,7 +57,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
         A_in = A_in.reshape(A_in.shape[0]*A_in.shape[1],*A_in.shape[2:]) #B*P, N, N
         logits_A = logits_A.repeat_interleave(permutations.shape[0], dim=1) # (M, B, n_nodes-1, 2) -> (M, B*P, n_nodes-1, 2)
 
-    A_in = Batch.encode_adj_to_reduced_adj(A_in) #B*P, n_nodes - 1, 2
+    A_in = tr.Nav2DTransforms.encode_adj_to_reduced_adj(A_in) #B*P, n_nodes - 1, 2
 
     # Compute ~E_{q(z|x)}[ p(x | z) ]
     # Important: the samples are "propagated" all the way to the decoder output,
@@ -490,7 +489,7 @@ class GraphMLPDecoder(nn.Module):
             mA (Tensor): mode of reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
         """
 
-        binary_transform = BinaryTransform(threshold)
+        binary_transform = tr.BinaryTransform(threshold)
         return binary_transform(self.param_pA(logits_A))
 
     def param_mFx(self, logits_Fx, threshold: float = 0.5):
@@ -507,7 +506,7 @@ class GraphMLPDecoder(nn.Module):
             mFx (Tensor): mode of probabilistic feature attributes matrix, shape (*, B, max_nodes, D)
         """
 
-        binary_transform = BinaryTransform(threshold)
+        binary_transform = tr.BinaryTransform(threshold)
         pFx = self.param_pFx(logits_Fx)
 
         mFx = []
@@ -541,7 +540,7 @@ class GraphVAE(nn.Module):
 
         if self.configuration.model.augmented_inputs:
             transforms = torch.tensor(self.configuration.model.transforms, dtype=torch.int)
-            self.permutations = Batch.augment_adj(self.configuration.shared_parameters.graph_max_nodes,
+            self.permutations = tr.Nav2DTransforms.augment_adj(self.configuration.shared_parameters.graph_max_nodes,
                                                   transforms).long()
         else: self.permutations = None
         self.device = torch.device("cuda" if configuration.model.cuda else "cpu")
@@ -599,7 +598,7 @@ class LightningGraphVAE(pl.LightningModule):
 
         if self.hparams.config_model.model.augmented_inputs:
             transforms = torch.tensor(self.hparams.config_model.model.transforms, dtype=torch.int)
-            self.permutations = Batch.augment_adj(self.hparams.config_model.shared_parameters.graph_max_nodes,
+            self.permutations = tr.Nav2DTransforms.augment_adj(self.hparams.config_model.shared_parameters.graph_max_nodes,
                                                   transforms).long()
         else: self.permutations = None
 

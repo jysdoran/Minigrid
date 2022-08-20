@@ -18,10 +18,10 @@ import json
 from omegaconf import OmegaConf
 
 from data_loaders import WrappedDataLoader
-from util.transforms import FlipBinaryTransform, ToDeviceTransform
+import util.transforms as tr
 
-#grid_to_gridworld = Batch.encode_grid_to_gridworld
-#graph_to_gridworld = Batch.encode_graph_to_gridworld
+#grid_to_gridworld = tr.Nav2DTransforms.encode_grid_to_gridworld
+#graph_to_gridworld = tr.Nav2DTransforms.encode_graph_to_gridworld
 
 #WIP section
 
@@ -416,7 +416,7 @@ def cdist_polar(x1, x2, eps=1e-08):
 
 
 def gridworld_to_img(gridworlds):
-    flip_bits = FlipBinaryTransform()
+    flip_bits = tr.FlipBinaryTransform()
     resize = torchvision.transforms.Resize((100, 100), interpolation=torchvision.transforms.InterpolationMode.NEAREST)
     gridworlds[:, 0, ...] = flip_bits(gridworlds[:, 0, ...]) * 0.25
     gridworlds = torch.permute(gridworlds, (0, 1, 3, 2))
@@ -480,13 +480,13 @@ def create_dataloader(data, batch_size, device, shuffle=True):
         kwargs = {'num_workers': 1, 'pin_memory': True} if device else {}  # Bug here but whatever should be arg.cuda
         data_loader = torch.utils.data.DataLoader(
             data, batch_size=batch_size, shuffle=shuffle, **kwargs)
-        data_loader = WrappedDataLoader(data_loader, ToDeviceTransform(device))
+        data_loader = WrappedDataLoader(data_loader, tr.ToDeviceTransform(device))
 
     return data_loader
 
 
 def fit_model(model, optimizer, train_data, args, *, test_data=None, tensorboard=None, latent_eval_freq=10):
-    flip_bits = FlipBinaryTransform()
+    flip_bits = tr.FlipBinaryTransform()
     resize = torchvision.transforms.Resize((100, 100), interpolation=torchvision.transforms.InterpolationMode.NEAREST)
     # Create data loaders
     train_loader = create_dataloader(train_data, args, shuffle=True)

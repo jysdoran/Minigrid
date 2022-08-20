@@ -6,11 +6,10 @@ import torch.nn as nn
 from util.distributions import evaluate_logprob_continuous_bernoulli, evaluate_logprob_bernoulli, \
     evaluate_logprob_diagonal_gaussian, compute_kld_with_standard_gaussian, sample_gaussian_with_reparametrisation, \
     sample_gaussian_without_reparametrisation
-from util.transforms import BinaryTransform
+import util.transforms as tr
 from models.networks import FC_ReLU_Network, CNN_Factory
 from models.gnn_networks import GIN
 from models.layers import Reshape
-from data_generators import Batch
 
 from typing import Iterable
 import numpy as np
@@ -116,7 +115,7 @@ def elbo_with_pathwise_gradients_gnn(X, *, encoder, decoder, num_samples, data_d
         A_in = [A_in[:,permutations[i]][:,:, permutations[i]] for i in range(permutations.shape[0])]
         A_in = torch.stack(A_in, dim=1).to(logits.device)  # B, P, N, N
         A_in = A_in.reshape(A_in.shape[0]*A_in.shape[1],*A_in.shape[2:]) #B*P, N, N
-        A_in = Batch.encode_adj_to_reduced_adj(A_in) #B*P, n_nodes - 1, 2
+        A_in = tr.Nav2DTransforms.encode_adj_to_reduced_adj(A_in) #B*P, n_nodes - 1, 2
         logits = logits.repeat_interleave(permutations.shape[0], dim=1) # (M, B, n_nodes-1, 2) -> (M, B*P, n_nodes-1, 2)
 
     # Compute KLD( q(z|x) || p(z) )
@@ -511,7 +510,7 @@ class Decoder(nn.Module):
             b (Tensor):  Binary transformation of the distribution parameters, shape (*, B, D)
         """
 
-        binary_transform = BinaryTransform(threshold)
+        binary_transform = tr.BinaryTransform(threshold)
         return binary_transform(self.param_p(logits))
 
 
@@ -672,7 +671,7 @@ class VAE(nn.Module):
                                                [[-1, 0], [0, -1]],
                                                [[0, -1], [1, 0]],
                                                [[0, -1], [-1, 0]]], dtype=torch.int)
-                self.permutations = Batch.augment_adj(self.hparams.num_nodes, transforms).long()
+                self.permutations = tr.Nav2DTransforms.augment_adj(self.hparams.num_nodes, transforms).long()
 
         else:
             raise argparse.ArgumentError(f"VAE Architecture argument {self.hparams.architecture} not recognised.")
