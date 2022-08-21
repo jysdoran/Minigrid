@@ -447,6 +447,67 @@ class GraphMLPDecoder(nn.Module):
 
         return pFx
 
+    def entropy(self, logits:tuple):
+        """
+        Returns the distributions entropy
+
+        Args:
+            logits (Tuple): probabilistic graph representation (logits_A, logits_Fx)
+                logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
+                logits_Fx (Tensor): shape (*, B, max_nodes, D)
+
+        Returns:
+            H_A (Tensor): Entropy of the distribution, shape (1)
+            H_Fx (Tensor): Entropy of the distribution, shape (D)
+        """
+
+        logits_A, logits_Fx = logits
+        H_A = self.entropy_A(logits_A)
+        if logits_Fx is not None:
+            H_Fx = self.entropy_Fx(logits_Fx)
+        else:
+            H_Fx = None
+
+        return H_A, H_Fx
+
+    def entropy_A(self, logits_A):
+        """
+        Returns the distributions parameters
+
+        Args:
+            logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
+
+        Returns:
+            H_A (Tensor): Entropy of the distribution, shape (1)
+        """
+
+        return torch.distributions.Bernoulli(logits=logits_A).entropy().mean()
+
+    def entropy_Fx(self, logits_Fx):
+        """
+        Returns the distributions parameters
+
+        Args:
+            logits_Fx (Tensor): shape (*, B, max_nodes, D)
+
+        Returns:
+            H_Fx (Tensor): Entropy of the distribution, shape (D)
+        """
+
+        H_Fx = []
+        for i in range(len(self.attribute_distributions)):
+            if self.attribute_distributions[i] == "bernoulli":
+                dist = torch.distributions.Bernoulli(logits=logits_Fx[..., i])
+            elif self.attribute_distributions[i] == "one_hot_categorical":
+                dist = torch.distributions.OneHotCategorical(logits=logits_Fx[..., i])
+            else:
+                raise NotImplementedError(f"Specified Data Distribution '{self.attribute_distributions[i]}'"
+                                          f" Invalid or Not Currently Implemented")
+            H_Fx.append(dist.entropy().mean())
+        H_Fx = torch.stack(H_Fx, dim=-1).to(logits_Fx)
+
+        return H_Fx
+
     def param_m(self, logits: tuple, threshold: float = 0.5):
         """
         Returns the mode given the distribution parameters. An optional threshold parameter
@@ -664,8 +725,10 @@ class LightningGraphVAE(pl.LightningModule):
         mean_of_abs_std /= var_unconstrained.shape[-1] #normalise by dimensionality of Z space
 
         self.log('loss/val', loss, on_step=False, on_epoch=True)
-        self.log('mean/std/val', std_of_abs_mean)
-        self.log('sigma/mean/val', mean_of_abs_std)
+        self.log('metric/mean/std/val', std_of_abs_mean)
+        self.log('metric/sigma/mean/val', mean_of_abs_std)
+        self.log('metric/entropy/A/val', self.decoder.entropy_A(logits_A))
+        self.log('metric/entropy/Fx/val', self.decoder.entropy_Fx(logits_Fx).sum())
 
         flattened_logits_A = torch.flatten(self.decoder.param_pA(logits_A))
         flattened_logits_Fx = torch.flatten(self.decoder.param_pFx(logits_Fx))

@@ -7,3 +7,4 @@ num_image_samples: 32
 num_embeddings_samples: 128
 max_cached_batches: null #auto
 force_valid_reconstructions: true
+num_generated_samples: 1024

@@ -43,12 +43,9 @@ def run_experiment(cfg: DictConfig) -> None:
     logging_callbacks = [
         GraphVAELogger(data_module.dataset.target_contents,
                        data_module.samples,
-                       cfg.data.dataset.node_attributes,
-                       cfg.results.attribute_to_gw_encoding,
-                       force_valid_reconstructions=cfg.results.force_valid_reconstructions,
+                       cfg.results,
+                       cfg.data.dataset,
                        label_descriptors_config=data_module.dataset.dataset_metadata['label_descriptors_config'],
-                       num_samples=cfg.results.num_image_samples,
-                       max_cached_batches=cfg.results.max_cached_batches,
                        accelerator=cfg.accelerator),
     ]
     trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs,

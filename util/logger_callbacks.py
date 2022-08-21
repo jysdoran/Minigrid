@@ -22,23 +22,25 @@ class GraphVAELogger(pl.Callback):
     def __init__(self,
                  label_contents: Dict[str, Any],
                  samples: Dict[str, Tuple[dgl.DGLGraph, torch.Tensor]],
-                 attributes: List[str],
-                 used_attributes: List[str],
-                 force_valid_reconstructions: bool = True,
+                 logging_cfg,
+                 dataset_cfg,
                  label_descriptors_config: Dict = None,
-                 num_samples: int = 32,
-                 max_cached_batches: int = 0,
                  accelerator: str = "cpu"):
 
         super().__init__()
         device = torch.device("cuda" if accelerator == "gpu" else "cpu")
+        self.logging_cfg = logging_cfg
+        self.dataset_cfg = dataset_cfg
+
         self.label_contents = label_contents
         self.label_descriptors_config = label_descriptors_config
-        self.force_valid_reconstructions = force_valid_reconstructions
-        self.num_samples = num_samples
-        self.max_cached_batches = max_cached_batches
-        self.attributes = attributes
-        self.used_attributes = used_attributes
+        self.force_valid_reconstructions = logging_cfg.force_valid_reconstructions
+        self.num_samples = logging_cfg.num_samples
+        self.num_generated_samples = logging_cfg.num_generated_samples
+        self.num_variational_samples_logging = logging_cfg.num_variational_samples_logging
+        self.max_cached_batches = logging_cfg.max_cached_batches
+        self.attributes = dataset_cfg.node_attributes
+        self.used_attributes = logging_cfg.attribute_to_gw_encoding
         self.graphs = {}
         self.labels = {}
         self.gw = {}
@@ -63,8 +65,8 @@ class GraphVAELogger(pl.Callback):
             for key in ["train", "val", "test"]:
                 self.graphs[key], self.labels[key] = samples[key]
                 self.graphs[key] = dgl.unbatch(self.graphs[key])
-                self.graphs[key] = self.graphs[key][:num_samples]
-                self.labels[key] = self.labels[key][:num_samples]
+                self.graphs[key] = self.graphs[key][:self.num_samples]
+                self.labels[key] = self.labels[key][:self.num_samples]
                 self.graphs[key] = dgl.batch(self.graphs[key]).to(device)
                 self.labels[key] = self.labels[key].to(device)
         except KeyError:
@@ -99,11 +101,8 @@ class GraphVAELogger(pl.Callback):
             self.log_images(trainer, "reconstructions/val", reconstructed_imgs_val, self.labels["val"])
             self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/val", logits_A=logits_A, logits_Fx=logits_Fx)
 
-        prior_samples = torch.randn(mean.shape).to(device=pl_module.device)
-        logits_A_prior, logits_Fx_prior = pl_module.decoder(prior_samples)
-        generated_imgs = self.obtain_imgs(logits_A_prior, logits_Fx_prior, pl_module)
-        self.log_images(trainer, "generated/prior", generated_imgs)
-        self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="generated/prior", logits_A=logits_A_prior, logits_Fx=logits_Fx_prior)
+        self.log_prior_sampling(trainer, pl_module, tag=f"{self.num_variational_samples_logging}_var_samples", num_var_samples=self.num_variational_samples_logging)
+        self.log_prior_sampling(trainer, pl_module, tag=f"1_var_samples", num_var_samples=1)
 
     def on_fit_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         GraphVAELogger.prepare_stored_batch(self.validation_batch, self.validation_step_outputs)
@@ -111,6 +110,7 @@ class GraphVAELogger(pl.Callback):
 
     def on_predict_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         GraphVAELogger.prepare_stored_batch(self.predict_batch, self.predict_step_outputs)
+        self.log_latent_embeddings(trainer, pl_module, "latent_space/prior_generation", mode="prior")
         self.log_latent_embeddings(trainer, pl_module, "latent_space/train", mode="predict")
 
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
@@ -236,7 +236,20 @@ class GraphVAELogger(pl.Callback):
         self.log_images(trainer, tag + "/prob_heatmap/goal", heatmap_goal, mode="RGBA")
         self.log_images(trainer, tag + "/prob_heatmap/layout", heatmap_layout, mode="RGBA")
 
+    def log_prior_sampling(self, trainer, pl_module, tag, num_var_samples):
+        Z_dim = self.validation_step_outputs["mean"].shape[-1]
+        prior_samples = torch.randn(num_var_samples, self.num_generated_samples, Z_dim).to(device=pl_module.device)
+        logits_A_prior, logits_Fx_prior = pl_module.decoder(prior_samples)
+        pl_module.log(f'metric/entropy/A/prior/{tag}', pl_module.decoder.entropy_A(logits_A_prior))
+        pl_module.log(f'metric/entropy/Fx/prior/{tag}', pl_module.decoder.entropy_Fx(logits_Fx_prior).sum())
+
+        generated_imgs = self.obtain_imgs(logits_A_prior[:self.num_samples], logits_Fx_prior[:self.num_samples], pl_module)
+        self.log_images(trainer, f"generated/prior/{tag}", generated_imgs)
+        self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=f"generated/prior/{tag}", logits_A=logits_A_prior[:self.num_samples], logits_Fx=logits_Fx_prior[:self.num_samples])
+
     def log_latent_embeddings(self, trainer, pl_module, tag, mode="val"):
+
+        graphs, labels, logits_A, logits_Fx = [None]*4
         if mode == "val":
             Z = self.validation_step_outputs["mean"]
             logits_A, logits_Fx = self.validation_step_outputs["logits_A"], self.validation_step_outputs["logits_Fx"]
@@ -247,14 +260,19 @@ class GraphVAELogger(pl.Callback):
             logits_A, logits_Fx = self.predict_step_outputs["logits_A"], self.predict_step_outputs["logits_Fx"]
             graphs = self.predict_batch["graph"]
             labels = self.predict_batch["label_ids"]
+        elif mode == "prior":
+            Z_dim = self.validation_step_outputs["mean"].shape[-1]
+            Z = torch.randn(self.num_variational_samples_logging, self.num_generated_samples, Z_dim).to(device=pl_module.device)
+            logits_A, logits_Fx = pl_module.decoder(Z)
 
         assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0]
 
-        input_gws = self.encode_graph_to_gridworld(graphs, self.attributes)
-        if not check_unique(input_gws).all():
-            logger.warning(f"Some of the sampled graphs in the {mode} dataset are not unique!")
-        input_imgs = self.gridworld_to_img(input_gws)
-        del input_gws, graphs
+        if graphs is not None:
+            input_gws = self.encode_graph_to_gridworld(graphs, self.attributes)
+            if not check_unique(input_gws).all():
+                logger.warning(f"Some of the sampled graphs in the {mode} dataset are not unique!")
+            input_imgs = self.gridworld_to_img(input_gws)
+            del input_gws, graphs
 
         Z = Z.cpu().numpy()
 
@@ -278,45 +296,58 @@ class GraphVAELogger(pl.Callback):
                 logits_Fx[..., pl_module.decoder.attributes.index("goal")],
                 start_nodes)
 
-        reconstruction_metrics_force_valid = {k: [] for k in ["shortest_path", "resistance", "navigable_nodes"]}
-        reconstruction_metrics_force_valid["valid"] = [True] * len(logits_Fx)
-        reconstruction_metrics_force_valid["solvable"] = [True] * len(logits_Fx)
-        reconstruction_metrics_force_valid, _, = compute_metrics(rec_graphs_nx, reconstruction_metrics_force_valid,
-                                                                 start_nodes, goal_nodes_valid)
-        mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
-        reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) & check_unique(mode_Fx)).tolist()
-        del rec_graphs_nx, start_nodes, goal_nodes, goal_nodes_valid, mode_A, mode_Fx
-        reconstructed_imgs_force_valid = self.obtain_imgs(logits_A, logits_Fx, pl_module)
-        del logits_A, logits_Fx
+            reconstruction_metrics_force_valid = {k: [] for k in ["shortest_path", "resistance", "navigable_nodes"]}
+            reconstruction_metrics_force_valid["valid"] = [True] * len(logits_Fx)
+            reconstruction_metrics_force_valid["solvable"] = [True] * len(logits_Fx)
+            reconstruction_metrics_force_valid, _, = compute_metrics(rec_graphs_nx, reconstruction_metrics_force_valid,
+                                                                     start_nodes, goal_nodes_valid)
+            mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
+            reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) & check_unique(mode_Fx)).tolist()
+            del goal_nodes_valid, mode_A, mode_Fx
+            reconstructed_imgs_force_valid = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+
+        del logits_A, logits_Fx, start_nodes, goal_nodes, rec_graphs_nx
 
         if self.label_descriptors_config is not None:
             reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
-            reconstruction_metrics_force_valid = self.normalise_metrics(reconstruction_metrics_force_valid, device=pl_module.device)
+            if self.force_valid_reconstructions:
+                reconstruction_metrics_force_valid = self.normalise_metrics(reconstruction_metrics_force_valid, device=pl_module.device)
+
+        for key in reconstruction_metrics.keys():
+            pl_module.log(f'metric/{key}/{tag}', reconstruction_metrics[key].mean())
+        if self.force_valid_reconstructions:
+            for key in ["unique", "shortest_path", "resistance", "navigable_nodes"]:
+                pl_module.log(f'metric/{key}_force_valid/{tag}', reconstruction_metrics_force_valid[key].mean())
 
         col_names = ["Z"+str(i) for i in range(Z.shape[-1])]
         df = pd.DataFrame(Z, columns=col_names)
-        # Store pre-computed Input metrics
-        for input_property in reversed(["shortest_path", "resistance", "navigable_nodes", "task_structure", "seed"]):
-            if isinstance(self.label_contents[input_property], list):
-                data = [self.label_contents[input_property][i] for i in labels]
-            else:
-                data = self.label_contents[input_property][labels]
-            df.insert(0, f"I_{input_property}", data)
 
-        # Store Reconstruction metrics
-        for key in reversed(["unique", "shortest_path", "resistance", "navigable_nodes"]):
-            df.insert(0, f"RV_{key}", reconstruction_metrics_force_valid[key])
-        del reconstruction_metrics_force_valid
+        if labels is not None:
+            # Store pre-computed Input metrics
+            for input_property in reversed(["shortest_path", "resistance", "navigable_nodes", "task_structure", "seed"]):
+                if isinstance(self.label_contents[input_property], list):
+                    data = [self.label_contents[input_property][i] for i in labels]
+                else:
+                    data = self.label_contents[input_property][labels]
+                df.insert(0, f"I_{input_property}", data)
+
+        # Store Force Valid Reconstruction metrics
+        if self.force_valid_reconstructions:
+            for key in reversed(["unique", "shortest_path", "resistance", "navigable_nodes"]):
+                df.insert(0, f"RV_{key}", reconstruction_metrics_force_valid[key])
+            del reconstruction_metrics_force_valid
 
         # Store Reconstruction metrics
         for key in reversed(["valid", "solvable", "unique", "shortest_path", "resistance", "navigable_nodes"]):
             df.insert(0, f"R_{key}", reconstruction_metrics[key])
         del reconstruction_metrics
 
-        df.insert(0, "RV:Reconstructions_Valid", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs_force_valid])
+        if self.force_valid_reconstructions:
+            df.insert(0, "RV:Reconstructions_Valid", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs_force_valid])
         df.insert(0, "R:Reconstructions", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs])
-        df.insert(0, "I:Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
-        df.insert(0, "Label_ids", labels.tolist())
+        if labels is not None:
+            df.insert(0, "I:Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
+            df.insert(0, "Label_ids", labels.tolist())
 
         trainer.logger.experiment.log({
             tag: wandb.Table(
