@@ -270,7 +270,8 @@ class GraphVAELogger(pl.Callback):
             logits_Fx[..., pl_module.decoder.attributes.index("goal")], goal_nodes_valid = \
                 tr.Nav2DTransforms.force_valid_goal(
                 rec_graphs_nx,
-                logits_Fx[..., pl_module.decoder.attributes.index("goal")])
+                logits_Fx[..., pl_module.decoder.attributes.index("goal")],
+                start_nodes)
 
         reconstruction_metrics_force_valid = {k: [] for k in ["shortest_path", "resistance", "navigable_nodes"]}
         reconstruction_metrics_force_valid["valid"] = [True] * len(logits_Fx)
@@ -288,26 +289,26 @@ class GraphVAELogger(pl.Callback):
         col_names = ["Z"+str(i) for i in range(Z.shape[-1])]
         df = pd.DataFrame(Z, columns=col_names)
         # Store pre-computed Input metrics
-        for input_property in reversed(["task_structure", "shortest_path", "resistance", "navigable_nodes", "seed"]):
+        for input_property in reversed(["shortest_path", "resistance", "navigable_nodes", "task_structure", "seed"]):
             if isinstance(self.label_contents[input_property], list):
                 data = [self.label_contents[input_property][i] for i in labels]
             else:
                 data = self.label_contents[input_property][labels]
-            df.insert(0, f"Input_{input_property}", data)
+            df.insert(0, f"I_{input_property}", data)
 
         # Store Reconstruction metrics
-        for key in reconstruction_metrics.keys():
-            df.insert(0, f"Reconstruction_{key}", reconstruction_metrics[key])
-        del reconstruction_metrics
-
-        # Store Reconstruction metrics
-        for key in ["shortest_path", "resistance", "navigable_nodes"]:
-            df.insert(0, f"ForceValid_{key}", reconstruction_metrics_force_valid[key])
+        for key in reversed(["shortest_path", "resistance", "navigable_nodes"]):
+            df.insert(0, f"RV_{key}", reconstruction_metrics_force_valid[key])
         del reconstruction_metrics_force_valid
 
-        df.insert(0, "Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
-        df.insert(0, "Reconstructions", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs])
-        df.insert(0, "RecForceValid", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs_force_valid])
+        # Store Reconstruction metrics
+        for key in reversed(["valid", "solvable", "shortest_path", "resistance", "navigable_nodes"]):
+            df.insert(0, f"R_{key}", reconstruction_metrics[key])
+        del reconstruction_metrics
+
+        df.insert(0, "RV:Reconstructions_Valid", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs_force_valid])
+        df.insert(0, "R:Reconstructions", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs])
+        df.insert(0, "I:Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
         df.insert(0, "Label_ids", labels.tolist())
 
         trainer.logger.experiment.log({
@@ -318,22 +319,13 @@ class GraphVAELogger(pl.Callback):
         })
 
     def prob_heatmap_fx(self, probs_fx, grid_dim):
-        #TODO: at some point good to look into using those directly
-        colors = {
-            "bright_red": [1, 0, 0, 1],
-            "light_red": [1, 0, 0, 0.1],
-            "bright_blue": [0, 0, 1, 1],
-            "light_blue": [0, 0, 1, 0.1],
-            "white": [0, 0, 0, 0],
-            "black": [0, 0, 0, 1],
-        }
 
         assert len(probs_fx.shape) == 2
 
         probs_fx = probs_fx / probs_fx.amax(dim=[i for i in range(1, len(probs_fx.shape))], keepdim=True)
         probs_fx = probs_fx.reshape(probs_fx.shape[0], grid_dim, grid_dim)
         heat_map = torch.zeros((*probs_fx.shape, 4)) # (B, H, W, C), C=RGBA
-        heat_map[..., 0] = 1  # all values will be shades of red #TODO: could do color according to start/goal config
+        heat_map[..., 0] = 1  # all values will be shades of red
         heat_map[..., 3] = probs_fx
         heat_map = einops.rearrange(heat_map, 'b h w c -> b c h w')
 
@@ -372,6 +364,10 @@ class GraphVAELogger(pl.Callback):
             'empty': [0., 0., 0., 0.],  #white
             'start': [0., 0., 1., 1.],  #blue
             'goal': [0., 1., 0., 1.],   #green
+            # "bright_red" : [1, 0, 0, 1],
+            # "light_red"  : [1, 0, 0, 0.1],
+            # "bright_blue": [0, 0, 1, 1],
+            # "light_blue" : [0, 0, 1, 0.1],
         }
 
         assert OBJECT_TO_CHANNEL_AND_IDX["wall"][1] != 0 or OBJECT_TO_CHANNEL_AND_IDX["empty"][1] != 0
