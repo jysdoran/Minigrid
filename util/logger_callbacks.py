@@ -13,6 +13,7 @@ import pandas as pd
 from data_generators import OBJECT_TO_CHANNEL_AND_IDX
 import util.transforms as tr
 from util.graph_metrics import compute_metrics
+from util.util import check_unique
 from copy import deepcopy
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ class GraphVAELogger(pl.Callback):
         dataloader_idx: int,
     ) -> None:
         if batch_idx < self.max_cached_batches:
-            GraphVAELogger.store_batch(self.validation_batch, self.validation_step_outputs, batch, outputs)
+            self.store_batch(self.validation_batch, self.validation_step_outputs, batch, outputs)
 
     def on_predict_batch_end(
         self,
@@ -250,6 +251,8 @@ class GraphVAELogger(pl.Callback):
         assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0]
 
         input_gws = self.encode_graph_to_gridworld(graphs, self.attributes)
+        if not check_unique(input_gws).all():
+            logger.warning(f"Some of the sampled graphs in the {mode} dataset are not unique!")
         input_imgs = self.gridworld_to_img(input_gws)
         del input_gws, graphs
 
@@ -262,6 +265,8 @@ class GraphVAELogger(pl.Callback):
         reconstruction_metrics["valid"] = is_valid.tolist()
         reconstruction_metrics, rec_graphs_nx = \
             compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes, goal_nodes)
+        mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
+        reconstruction_metrics["unique"] = (check_unique(mode_A) & check_unique(mode_Fx)).tolist()
         del is_valid, reconstructed_graphs
 
         reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
@@ -278,7 +283,9 @@ class GraphVAELogger(pl.Callback):
         reconstruction_metrics_force_valid["solvable"] = [True] * len(logits_Fx)
         reconstruction_metrics_force_valid, _, = compute_metrics(rec_graphs_nx, reconstruction_metrics_force_valid,
                                                                  start_nodes, goal_nodes_valid)
-        del rec_graphs_nx, start_nodes, goal_nodes, goal_nodes_valid
+        mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
+        reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) & check_unique(mode_Fx)).tolist()
+        del rec_graphs_nx, start_nodes, goal_nodes, goal_nodes_valid, mode_A, mode_Fx
         reconstructed_imgs_force_valid = self.obtain_imgs(logits_A, logits_Fx, pl_module)
         del logits_A, logits_Fx
 
@@ -297,12 +304,12 @@ class GraphVAELogger(pl.Callback):
             df.insert(0, f"I_{input_property}", data)
 
         # Store Reconstruction metrics
-        for key in reversed(["shortest_path", "resistance", "navigable_nodes"]):
+        for key in reversed(["unique", "shortest_path", "resistance", "navigable_nodes"]):
             df.insert(0, f"RV_{key}", reconstruction_metrics_force_valid[key])
         del reconstruction_metrics_force_valid
 
         # Store Reconstruction metrics
-        for key in reversed(["valid", "solvable", "shortest_path", "resistance", "navigable_nodes"]):
+        for key in reversed(["valid", "solvable", "unique", "shortest_path", "resistance", "navigable_nodes"]):
             df.insert(0, f"R_{key}", reconstruction_metrics[key])
         del reconstruction_metrics
 
