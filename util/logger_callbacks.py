@@ -158,94 +158,7 @@ class GraphVAELogger(pl.Callback):
         if batch_idx < self.max_cached_batches:
             self.store_batch(self.predict_batch, self.predict_step_outputs, batch, outputs)
 
-    # utility methods
-
-    def clear_stored_batches(self):
-        self.validation_batch = {
-            "graph": [],
-            "label_ids": [],
-        }
-        self.validation_step_outputs = {
-            "loss" : [],
-            "logits_A": [],
-            "logits_Fx": [],
-            "mean": [],
-            "var_unconstrained": [],
-        }
-        self.predict_batch = deepcopy(self.validation_batch)
-        self.predict_step_outputs = deepcopy(self.validation_step_outputs)
-
-    def obtain_model_outputs(self, graphs, pl_module):
-
-        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
-            pl_module.all_model_outputs_pathwise(graphs, num_samples=pl_module.hparams.config_logging.num_variational_samples)
-        return elbos, logits_A, logits_Fx, mean, var_unconstrained
-
-    @staticmethod
-    def prepare_stored_batch(batch_dict, output_dict):
-
-        def flatten(l):
-            return [item for sublist in l for item in sublist]
-
-        unbatched_graphs = [dgl.unbatch(g) for g in batch_dict["graph"]]
-        batch_dict["graph"] = flatten(unbatched_graphs)
-        batch_dict["label_ids"] = torch.cat(batch_dict["label_ids"])
-
-        for key in output_dict.keys():
-            output_dict[key] = torch.cat(output_dict[key])
-
-    @staticmethod
-    def store_batch(batch_dict, output_dict, batch, output):
-        loss, logits_A, logits_Fx, mean, var_unconstrained = output
-
-        batch_dict["graph"].append(batch[0])
-        batch_dict["label_ids"].append(batch[1])
-
-        output_dict["loss"].append(loss)
-        output_dict["logits_A"].append(logits_A)
-        output_dict["logits_Fx"].append(logits_Fx)
-        output_dict["mean"].append(mean)
-        output_dict["var_unconstrained"].append(var_unconstrained)
-
-    def obtain_imgs(self, logits_A, logits_Fx, pl_module):
-
-        mode_probs = pl_module.decoder.param_m((logits_A, logits_Fx))
-        reconstructed_gws = self.encode_graph_to_gridworld(mode_probs, attributes=self.used_attributes)
-        reconstructed_imgs = self.gridworld_to_img(reconstructed_gws)
-
-        return reconstructed_imgs
-
-    def log_images(self, trainer, tag, images, labels=None, mode=None):
-        if labels is not None:
-            captions = [f"Label:{y}" for y in labels]
-        else:
-            captions = [None] * len(images)
-        trainer.logger.experiment.log({
-            tag: [wandb.Image(x, caption=c, mode=mode)
-                         for x, c in zip(images, captions)],
-            "global_step": trainer.global_step
-        })
-
-    def log_prob_heatmaps(self, trainer, pl_module, tag, logits_A, logits_Fx):
-        logits_A, logits_Fx = pl_module.decoder.param_p((logits_A, logits_Fx))
-        grid_dim = int(np.sqrt(logits_Fx.shape[-2])) #sqrt(num_nodes)
-        heatmap_start = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("start")], grid_dim)
-        heatmap_goal = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("goal")], grid_dim)
-        heatmap_layout = self.prob_heatmap_A(logits_A, grid_dim)
-        self.log_images(trainer, tag + "/prob_heatmap/start", heatmap_start, mode="RGBA")
-        self.log_images(trainer, tag + "/prob_heatmap/goal", heatmap_goal, mode="RGBA")
-        self.log_images(trainer, tag + "/prob_heatmap/layout", heatmap_layout, mode="RGBA")
-
-    def log_prior_sampling(self, trainer, pl_module, tag, num_var_samples):
-        Z_dim = self.validation_step_outputs["mean"].shape[-1]
-        prior_samples = torch.randn(num_var_samples, self.num_generated_samples, Z_dim).to(device=pl_module.device)
-        logits_A_prior, logits_Fx_prior = pl_module.decoder(prior_samples)
-        pl_module.log(f'metric/entropy/A/prior/{tag}', pl_module.decoder.entropy_A(logits_A_prior))
-        pl_module.log(f'metric/entropy/Fx/prior/{tag}', pl_module.decoder.entropy_Fx(logits_Fx_prior).sum())
-
-        generated_imgs = self.obtain_imgs(logits_A_prior[:self.num_samples], logits_Fx_prior[:self.num_samples], pl_module)
-        self.log_images(trainer, f"generated/prior/{tag}", generated_imgs)
-        self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=f"generated/prior/{tag}", logits_A=logits_A_prior[:self.num_samples], logits_Fx=logits_Fx_prior[:self.num_samples])
+    # Logging logic
 
     def log_latent_embeddings(self, trainer, pl_module, tag, mode="val"):
 
@@ -356,6 +269,95 @@ class GraphVAELogger(pl.Callback):
             "global_step": trainer.global_step
         })
 
+    def log_prior_sampling(self, trainer, pl_module, tag, num_var_samples):
+        Z_dim = self.validation_step_outputs["mean"].shape[-1]
+        prior_samples = torch.randn(num_var_samples, self.num_generated_samples, Z_dim).to(device=pl_module.device)
+        logits_A_prior, logits_Fx_prior = pl_module.decoder(prior_samples)
+        pl_module.log(f'metric/entropy/A/prior/{tag}', pl_module.decoder.entropy_A(logits_A_prior))
+        pl_module.log(f'metric/entropy/Fx/prior/{tag}', pl_module.decoder.entropy_Fx(logits_Fx_prior).sum())
+
+        generated_imgs = self.obtain_imgs(logits_A_prior[:self.num_samples], logits_Fx_prior[:self.num_samples], pl_module)
+        self.log_images(trainer, f"generated/prior/{tag}", generated_imgs)
+        self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=f"generated/prior/{tag}", logits_A=logits_A_prior[:self.num_samples], logits_Fx=logits_Fx_prior[:self.num_samples])
+
+    # Utility methods
+
+    def clear_stored_batches(self):
+        self.validation_batch = {
+            "graph": [],
+            "label_ids": [],
+        }
+        self.validation_step_outputs = {
+            "loss" : [],
+            "logits_A": [],
+            "logits_Fx": [],
+            "mean": [],
+            "var_unconstrained": [],
+        }
+        self.predict_batch = deepcopy(self.validation_batch)
+        self.predict_step_outputs = deepcopy(self.validation_step_outputs)
+
+    def obtain_model_outputs(self, graphs, pl_module):
+
+        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+            pl_module.all_model_outputs_pathwise(graphs, num_samples=pl_module.hparams.config_logging.num_variational_samples)
+        return elbos, logits_A, logits_Fx, mean, var_unconstrained
+
+    @staticmethod
+    def prepare_stored_batch(batch_dict, output_dict):
+
+        def flatten(l):
+            return [item for sublist in l for item in sublist]
+
+        unbatched_graphs = [dgl.unbatch(g) for g in batch_dict["graph"]]
+        batch_dict["graph"] = flatten(unbatched_graphs)
+        batch_dict["label_ids"] = torch.cat(batch_dict["label_ids"])
+
+        for key in output_dict.keys():
+            output_dict[key] = torch.cat(output_dict[key])
+
+    @staticmethod
+    def store_batch(batch_dict, output_dict, batch, output):
+        loss, logits_A, logits_Fx, mean, var_unconstrained = output
+
+        batch_dict["graph"].append(batch[0])
+        batch_dict["label_ids"].append(batch[1])
+
+        output_dict["loss"].append(loss)
+        output_dict["logits_A"].append(logits_A)
+        output_dict["logits_Fx"].append(logits_Fx)
+        output_dict["mean"].append(mean)
+        output_dict["var_unconstrained"].append(var_unconstrained)
+
+    def obtain_imgs(self, logits_A, logits_Fx, pl_module):
+
+        mode_probs = pl_module.decoder.param_m((logits_A, logits_Fx))
+        reconstructed_gws = self.encode_graph_to_gridworld(mode_probs, attributes=self.used_attributes)
+        reconstructed_imgs = self.gridworld_to_img(reconstructed_gws)
+
+        return reconstructed_imgs
+
+    def log_images(self, trainer, tag, images, labels=None, mode=None):
+        if labels is not None:
+            captions = [f"Label:{y}" for y in labels]
+        else:
+            captions = [None] * len(images)
+        trainer.logger.experiment.log({
+            tag: [wandb.Image(x, caption=c, mode=mode)
+                         for x, c in zip(images, captions)],
+            "global_step": trainer.global_step
+        })
+
+    def log_prob_heatmaps(self, trainer, pl_module, tag, logits_A, logits_Fx):
+        logits_A, logits_Fx = pl_module.decoder.param_p((logits_A, logits_Fx))
+        grid_dim = int(np.sqrt(logits_Fx.shape[-2])) #sqrt(num_nodes)
+        heatmap_start = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("start")], grid_dim)
+        heatmap_goal = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("goal")], grid_dim)
+        heatmap_layout = self.prob_heatmap_A(logits_A, grid_dim)
+        self.log_images(trainer, tag + "/prob_heatmap/start", heatmap_start, mode="RGBA")
+        self.log_images(trainer, tag + "/prob_heatmap/goal", heatmap_goal, mode="RGBA")
+        self.log_images(trainer, tag + "/prob_heatmap/layout", heatmap_layout, mode="RGBA")
+
     def prob_heatmap_fx(self, probs_fx, grid_dim):
 
         assert len(probs_fx.shape) == 2
@@ -391,7 +393,6 @@ class GraphVAELogger(pl.Callback):
         heat_map = einops.rearrange(heat_map, 'b h w c -> b c h w')
 
         return heat_map
-
 
     def encode_graph_to_gridworld(self, graphs, attributes):
         return tr.Nav2DTransforms.encode_graph_to_gridworld(graphs, attributes, self.used_attributes)
