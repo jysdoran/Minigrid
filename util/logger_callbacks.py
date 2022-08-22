@@ -52,6 +52,7 @@ class GraphVAELogger(pl.Callback):
         }
         self.validation_step_outputs = {
             "loss" : [],
+            "unweighted_elbos": [],
             "logits_A": [],
             "logits_Fx": [],
             "mean": [],
@@ -89,16 +90,17 @@ class GraphVAELogger(pl.Callback):
 
     def on_validation_epoch_end(self, trainer, pl_module):
         if "train" in self.graphs.keys():
-            elbos, logits_A, logits_Fx, mean, var_unconstrained = self.obtain_model_outputs(self.graphs["train"], pl_module)
+            elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = self.obtain_model_outputs(self.graphs["train"], pl_module)
             reconstructed_imgs_train = self.obtain_imgs(logits_A, logits_Fx, pl_module)
-
-            self.log_images(trainer, "reconstructions/train", reconstructed_imgs_train, self.labels["train"])
+            captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["train"], unweighted_elbos)]
+            self.log_images(trainer, "reconstructions/train", reconstructed_imgs_train, captions=captions)
             self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/train", logits_A=logits_A, logits_Fx=logits_Fx)
 
         if "val" in self.graphs.keys():
-            elbos, logits_A, logits_Fx, mean, var_unconstrained = self.obtain_model_outputs(self.graphs["val"], pl_module)
+            elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = self.obtain_model_outputs(self.graphs["val"], pl_module)
             reconstructed_imgs_val = self.obtain_imgs(logits_A, logits_Fx, pl_module)
-            self.log_images(trainer, "reconstructions/val", reconstructed_imgs_val, self.labels["val"])
+            captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["val"], unweighted_elbos)]
+            self.log_images(trainer, "reconstructions/val", reconstructed_imgs_val, captions=captions)
             self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/val", logits_A=logits_A, logits_Fx=logits_Fx)
 
         self.log_prior_sampling(trainer, pl_module, tag=f"{self.num_variational_samples_logging}_var_samples", num_var_samples=self.num_variational_samples_logging)
@@ -115,10 +117,11 @@ class GraphVAELogger(pl.Callback):
 
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         if "test" in self.graphs.keys():
-            elbos, logits_A, logits_Fx, mean, var_unconstrained = self.obtain_model_outputs(self.graphs["train"],
+            elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = self.obtain_model_outputs(self.graphs["test"],
                                                                                             pl_module)
             reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
-            self.log_images(trainer, "reconstructions/test", reconstructed_imgs, self.labels["test"])
+            captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["test"], unweighted_elbos)]
+            self.log_images(trainer, "reconstructions/test", reconstructed_imgs, captions=captions)
 
     # Boiler plate code
 
@@ -168,15 +171,19 @@ class GraphVAELogger(pl.Callback):
             logits_A, logits_Fx = self.validation_step_outputs["logits_A"], self.validation_step_outputs["logits_Fx"]
             graphs = self.validation_batch["graph"]
             labels = self.validation_batch["label_ids"]
+            unweighted_elbos = self.validation_batch["unweighted_elbos"]
         elif mode == "predict":
             Z = self.predict_step_outputs["mean"]
             logits_A, logits_Fx = self.predict_step_outputs["logits_A"], self.predict_step_outputs["logits_Fx"]
             graphs = self.predict_batch["graph"]
             labels = self.predict_batch["label_ids"]
+            unweighted_elbos = self.predict_batch["unweighted_elbos"]
         elif mode == "prior":
             Z_dim = self.validation_step_outputs["mean"].shape[-1]
             Z = torch.randn(self.num_variational_samples_logging, self.num_generated_samples, Z_dim).to(device=pl_module.device)
             logits_A, logits_Fx = pl_module.decoder(Z)
+            unweighted_elbos = None
+            labels = None
 
         assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0]
 
@@ -248,12 +255,27 @@ class GraphVAELogger(pl.Callback):
         if self.force_valid_reconstructions:
             for key in reversed(["unique", "shortest_path", "resistance", "navigable_nodes"]):
                 df.insert(0, f"RV_{key}", reconstruction_metrics_force_valid[key])
+                if key in ["shortest_path", "resistance", "navigable_nodes"]:
+                    trainer.logger.experiment.log(
+                        {
+                            f"metrics/{tag}/RV/{key}/{mode}": wandb.Histogram(reconstruction_metrics_force_valid[key]),
+                            "global_step" : trainer.global_step
+                            })
             del reconstruction_metrics_force_valid
 
         # Store Reconstruction metrics
         for key in reversed(["valid", "solvable", "unique", "shortest_path", "resistance", "navigable_nodes"]):
             df.insert(0, f"R_{key}", reconstruction_metrics[key])
+            if key in ["shortest_path", "resistance", "navigable_nodes"]:
+                trainer.logger.experiment.log(
+                    {
+                        f"metrics/{tag}/R/{key}/{mode}": wandb.Histogram(reconstruction_metrics[key]),
+                        "global_step"                   : trainer.global_step
+                        })
         del reconstruction_metrics
+
+        if unweighted_elbos is not None:
+            df.insert(0, "Unweighted_elbos", unweighted_elbos.tolist())
 
         if self.force_valid_reconstructions:
             df.insert(0, "RV:Reconstructions_Valid", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs_force_valid])
@@ -289,6 +311,7 @@ class GraphVAELogger(pl.Callback):
         }
         self.validation_step_outputs = {
             "loss" : [],
+            "unweighted_elbos": [],
             "logits_A": [],
             "logits_Fx": [],
             "mean": [],
@@ -299,9 +322,9 @@ class GraphVAELogger(pl.Callback):
 
     def obtain_model_outputs(self, graphs, pl_module):
 
-        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = \
             pl_module.all_model_outputs_pathwise(graphs, num_samples=pl_module.hparams.config_logging.num_variational_samples)
-        return elbos, logits_A, logits_Fx, mean, var_unconstrained
+        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained
 
     @staticmethod
     def prepare_stored_batch(batch_dict, output_dict):
@@ -329,7 +352,7 @@ class GraphVAELogger(pl.Callback):
         output_dict["mean"].append(mean)
         output_dict["var_unconstrained"].append(var_unconstrained)
 
-    def obtain_imgs(self, logits_A, logits_Fx, pl_module):
+    def obtain_imgs(self, logits_A:torch.Tensor, logits_Fx:torch.Tensor, pl_module:pl.LightningModule) -> torch.Tensor:
 
         mode_probs = pl_module.decoder.param_m((logits_A, logits_Fx))
         reconstructed_gws = self.encode_graph_to_gridworld(mode_probs, attributes=self.used_attributes)
@@ -337,11 +360,10 @@ class GraphVAELogger(pl.Callback):
 
         return reconstructed_imgs
 
-    def log_images(self, trainer, tag, images, labels=None, mode=None):
-        if labels is not None:
-            captions = [f"Label:{y}" for y in labels]
-        else:
+    def log_images(self, trainer:pl.Trainer, tag:str, images: torch.Tensor, captions:List[str]=None, mode:str=None):
+        if captions is None:
             captions = [None] * len(images)
+
         trainer.logger.experiment.log({
             tag: [wandb.Image(x, caption=c, mode=mode)
                          for x, c in zip(images, captions)],

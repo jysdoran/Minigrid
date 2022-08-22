@@ -65,37 +65,48 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
 
     A_in = A_in.reshape(A_in.shape[0], -1) # (B | B * P, d1, d2, ..., dn) -> (B | B*P, D=2*(n_nodes - 1))
     logits_A = logits_A.reshape(*logits_A.shape[0:2], -1) # (M, B, n_nodes-1, 2) -> (M, B, D=2*(n_nodes - 1))
-    neg_cross_entropy_A = evaluate_logprob_bernoulli(A_in, logits=logits_A).mean(dim=0)  # (B,) | (B*P,)
+    neg_cross_entropy_A = evaluate_logprob_bernoulli(A_in, logits=logits_A)  # (M, B, D)->(M,B) | (M, B*P, D)->(M,B*P)
+
+    if permutations is not None:
+        neg_cross_entropy_A = neg_cross_entropy_A.reshape(neg_cross_entropy_A.shape[0], -1, permutations.shape[0]) # (M,B*P,) -> (M,B,P)
+        neg_cross_entropy_A, _ = torch.max(neg_cross_entropy_A, dim=1) # (M,B,P,) -> (M,B)
 
     if logits_Fx is not None:
         neg_cross_entropy_Fx = []
         for i in range(len(decoder.attribute_distributions)):
             if decoder.attribute_distributions[i] == "bernoulli":
-                neg_cross_entropy_Fx.append(evaluate_logprob_bernoulli(Fx[..., i], logits=logits_Fx[..., i]).mean(dim=0)) # (B,)
-            # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. B,D),
+                neg_cross_entropy_Fx.append(evaluate_logprob_bernoulli(Fx[..., i], logits=logits_Fx[..., i])) # (M,B)
+            # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. M,B,D),
             # but requires modifying evaluate_logprob_one_hot_categorical()
             elif decoder.attribute_distributions[i] == "one_hot_categorical":
-                neg_cross_entropy_Fx.append(evaluate_logprob_one_hot_categorical(Fx[..., i], logits=logits_Fx[..., i]).mean(dim=0))
+                neg_cross_entropy_Fx.append(evaluate_logprob_one_hot_categorical(Fx[..., i], logits=logits_Fx[..., i]))
             else:
                 raise NotImplementedError(f"Specified Data Distribution '{decoder.attribute_distributions[i]}'"
                                           f" Invalid or Not Currently Implemented")
-        neg_cross_entropy_Fx = torch.stack(neg_cross_entropy_Fx, dim=-1).to(logits_Fx) # (B, D)
+        neg_cross_entropy_Fx = torch.stack(neg_cross_entropy_Fx, dim=-1).to(logits_Fx) # (M, B, D) [to allow for separate coeffs between start and goal]
     else:
         neg_cross_entropy_Fx = None
 
-    if permutations is not None:
-        neg_cross_entropy_A = neg_cross_entropy_A.reshape(-1, permutations.shape[0]) # (B*P,) -> (B,P)
-        neg_cross_entropy_A, _ = torch.max(neg_cross_entropy_A, dim=1) # (B,P,) -> (B,)
-
-    elbos = elbo_coeffs.A * neg_cross_entropy_A - elbo_coeffs.beta * kld  # (B,)
     # ELBO for adjacency matrix
     if logits_Fx is not None:
         elbos_Fx = torch.einsum('i, b i -> b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx)
-        elbos += elbos_Fx
     else:
-        pass
+        elbos_Fx = 0.
 
-    return elbos, logits_A.mean(dim=0), logits_Fx.mean(dim=0), mean, logvar
+    elbos = elbo_coeffs.A * neg_cross_entropy_A + elbos_Fx - elbo_coeffs.beta * kld  # (M,B,)
+    unweighted_elbos = neg_cross_entropy_A + neg_cross_entropy_Fx - kld
+
+    # ref: IWAE
+    # - https://arxiv.org/pdf/1509.00519.pdf
+    # - https://github.com/Gabriel-Macias/iwae_tutorial
+    if num_samples > 1:
+        elbos = torch.logsumexp(elbos, dim=0) - np.log(num_samples) # (M,B) -> (B), normalising by M to get logmeanexp()
+        unweighted_elbos = torch.logsumexp(unweighted_elbos, dim=0) - np.log(num_samples) # (M,B,) -> (B,)
+    else:
+        elbos = elbos.mean(dim=0)
+        unweighted_elbos = unweighted_elbos.mean(dim=0)
+
+    return elbos, unweighted_elbos, logits_A.mean(dim=0), logits_Fx.mean(dim=0), mean, logvar
 
 class GraphGCNEncoder(nn.Module):
 
@@ -625,15 +636,15 @@ class GraphVAE(nn.Module):
 
     def all_model_outputs_pathwise(self, X, num_samples: int = None):
         if num_samples is None: num_samples = self.configuration.model.num_variational_samples
-        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = \
             graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hyperparameters.loss.elbo_coeffs,
                                  permutations=self.permutations)
-        return elbos, logits_A, logits_Fx, mean, var_unconstrained
+        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained
 
     def elbo(self, X):
-        elbos, _, _, _, _ = self.all_model_outputs_pathwise(X)
+        elbos, _, _, _, _, _ = self.all_model_outputs_pathwise(X)
 
     @property
     def num_parameters(self):
@@ -671,15 +682,15 @@ class LightningGraphVAE(pl.LightningModule):
 
     def all_model_outputs_pathwise(self, X, num_samples: int = None):
         if num_samples is None: num_samples = self.hparams.config_model.model.num_variational_samples
-        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = \
             graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hparams.hparams_model.loss.elbo_coeffs,
                                  permutations=self.permutations)
-        return elbos, logits_A, logits_Fx, mean, var_unconstrained
+        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained
 
     def elbo(self, X):
-        elbos, _, _, _, _ = self.all_model_outputs_pathwise(X)
+        elbos, _, _, _, _, _ = self.all_model_outputs_pathwise(X)
         return elbos
 
     def elbo_to_loss(self, elbos):
@@ -700,23 +711,23 @@ class LightningGraphVAE(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         X, labels = batch
-        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = \
             self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_logging.num_variational_samples)
         loss = self.elbo_to_loss(elbos).reshape(1)
-        return loss, logits_A, logits_Fx, mean, var_unconstrained
+        return loss, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained
 
     def predict_step(self, batch, batch_idx):
         X, labels = batch
-        elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = \
             self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_logging.num_variational_samples)
         loss = self.elbo_to_loss(elbos).reshape(1)
-        return loss, logits_A, logits_Fx, mean, var_unconstrained
+        return loss, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained
 
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx)
 
     def validation_epoch_end(self, validation_step_outputs):
-        loss, logits_A, logits_Fx, mean, var_unconstrained = map(torch.cat, zip(*validation_step_outputs))
+        loss, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = map(torch.cat, zip(*validation_step_outputs))
         del validation_step_outputs
 
         std_of_abs_mean = torch.linalg.norm(mean, dim=-1).std().item()
@@ -725,8 +736,9 @@ class LightningGraphVAE(pl.LightningModule):
         mean_of_abs_std /= var_unconstrained.shape[-1] #normalise by dimensionality of Z space
 
         self.log('loss/val', loss, on_step=False, on_epoch=True)
-        self.log('metric/mean/std/val', std_of_abs_mean)
-        self.log('metric/sigma/mean/val', mean_of_abs_std)
+        self.log('unweighted_elbo/val', unweighted_elbos.mean(dim=0), on_step=False, on_epoch=True)
+        self.log('metric/mean/std/val', std_of_abs_mean, on_step=False, on_epoch=True)
+        self.log('metric/sigma/mean/val', mean_of_abs_std, on_step=False, on_epoch=True)
         self.log('metric/entropy/A/val', self.decoder.entropy_A(logits_A))
         self.log('metric/entropy/Fx/val', self.decoder.entropy_Fx(logits_Fx).sum())
 
