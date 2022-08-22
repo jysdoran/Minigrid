@@ -18,14 +18,14 @@ import util.transforms as tr
 def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, permutations=None):
     # TODO: permutations not functional at the moment, because not implemented for Fx
 
-    mean, logvar = encoder(X)  # (B, H), (B, H)
+    mean, std = encoder(X)  # (B, H), (B, H)
 
     # Sample the latents using the reparametrisation trick
     Z = sample_gaussian_with_reparametrisation(
-        mean, logvar, num_samples=num_samples)  # (M, B, H)
+        mean, std, num_samples=num_samples)  # (M, B, H)
 
     # Compute KLD( q(z|x) || p(z) )
-    kld = compute_kld_with_standard_gaussian(mean, logvar)  # (B,)
+    kld = compute_kld_with_standard_gaussian(mean, std)  # (B,)
 
     # Evaluate the decoder network to obtain the parameters of the
     # generative model p(x|z)
@@ -106,7 +106,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
         elbos = elbos.mean(dim=0)
         unweighted_elbos = unweighted_elbos.mean(dim=0)
 
-    return elbos, unweighted_elbos, logits_A.mean(dim=0), logits_Fx.mean(dim=0), mean, logvar
+    return elbos, unweighted_elbos, logits_A.mean(dim=0), logits_Fx.mean(dim=0), mean, std
 
 class GraphGCNEncoder(nn.Module):
 
@@ -129,7 +129,8 @@ class GraphGCNEncoder(nn.Module):
         #TODO: change to softplus
 
         self.mean = nn.Linear(self.config.mlp.layer_dim[-1], self.shared_params.latent_dim)
-        self.logvar = nn.Linear(self.config.mlp.layer_dim[-1], self.shared_params.latent_dim)
+        self.std = FC_ReLU_Network([self.config.mlp.layer_dim[-1], self.shared_params.latent_dim],
+                                   output_activation=nn.Softplus)
 
     def create_model(self):
         if self.config.gnn.architecture == "GIN":
@@ -159,7 +160,7 @@ class GraphGCNEncoder(nn.Module):
 
         Returns:
             mean (Tensor):   means of the variational distributions, shape (B, K)
-            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
+            std (Tensor): std of the diagonal Gaussian variational distribution, shape (B, K)
         """
 
         graph = X
@@ -171,28 +172,28 @@ class GraphGCNEncoder(nn.Module):
             features = net(features)
 
         mean = self.mean(features)
-        logvar = self.logvar(features)
+        std = self.std(features)
 
-        return mean, logvar
+        return mean, std
 
-    def sample_with_reparametrisation(self, mean, logvar, *, num_samples=1):
+    def sample_with_reparametrisation(self, mean, std, *, num_samples=1):
         # Reuse the implemented code
-        return sample_gaussian_with_reparametrisation(mean, logvar, num_samples=num_samples)
+        return sample_gaussian_with_reparametrisation(mean, std, num_samples=num_samples)
 
-    def log_prob(self, mean, logvar, Z):
+    def log_prob(self, mean, std, Z):
         """
         Evaluates the log_probability of Z given the parameters of the diagonal Gaussian
 
         Args:
             mean (Tensor):   means of the variational distributions, shape (*, B, K)
-            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (*, B, K)
+            std (Tensor): std of the diagonal Gaussian variational distribution, shape (*, B, K)
             Z (Tensor):      latent vectors, shape (*, B, K)
 
         Returns:
             logqz (Tensor):  log-probability of Z, a batch of shape (*, B)
         """
         # Reuse the implemented code
-        return evaluate_logprob_diagonal_gaussian(Z, mean=mean, logvar=logvar)
+        return evaluate_logprob_diagonal_gaussian(Z, mean=mean, std=std)
 
 class GraphMLPDecoder(nn.Module):
 
@@ -636,12 +637,12 @@ class GraphVAE(nn.Module):
 
     def all_model_outputs_pathwise(self, X, num_samples: int = None):
         if num_samples is None: num_samples = self.configuration.model.num_variational_samples
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
             graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hyperparameters.loss.elbo_coeffs,
                                  permutations=self.permutations)
-        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained
+        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std
 
     def elbo(self, X):
         elbos, _, _, _, _, _ = self.all_model_outputs_pathwise(X)
@@ -682,12 +683,12 @@ class LightningGraphVAE(pl.LightningModule):
 
     def all_model_outputs_pathwise(self, X, num_samples: int = None):
         if num_samples is None: num_samples = self.hparams.config_model.model.num_variational_samples
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
             graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hparams.hparams_model.loss.elbo_coeffs,
                                  permutations=self.permutations)
-        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained
+        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std
 
     def elbo(self, X):
         elbos, _, _, _, _, _ = self.all_model_outputs_pathwise(X)
@@ -711,29 +712,29 @@ class LightningGraphVAE(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         X, labels = batch
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
             self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_logging.num_variational_samples)
         loss = self.elbo_to_loss(elbos).reshape(1)
-        return loss, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained
+        return loss, unweighted_elbos, logits_A, logits_Fx, mean, std
 
     def predict_step(self, batch, batch_idx):
         X, labels = batch
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
             self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_logging.num_variational_samples)
         loss = self.elbo_to_loss(elbos).reshape(1)
-        return loss, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained
+        return loss, unweighted_elbos, logits_A, logits_Fx, mean, std
 
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx)
 
     def validation_epoch_end(self, validation_step_outputs):
-        loss, unweighted_elbos, logits_A, logits_Fx, mean, var_unconstrained = map(torch.cat, zip(*validation_step_outputs))
+        loss, unweighted_elbos, logits_A, logits_Fx, mean, std = map(torch.cat, zip(*validation_step_outputs))
         del validation_step_outputs
 
         std_of_abs_mean = torch.linalg.norm(mean, dim=-1).std().item()
         #TODO: change with softplus
-        mean_of_abs_std = var_unconstrained.exp().sum(axis=-1).sqrt().mean().item()
-        mean_of_abs_std /= var_unconstrained.shape[-1] #normalise by dimensionality of Z space
+        mean_of_abs_std = torch.square(std).sum(axis=-1).sqrt().mean().item()
+        mean_of_abs_std /= std.shape[-1] #normalise by dimensionality of Z space
 
         self.log('loss/val', loss, on_step=False, on_epoch=True)
         self.log('unweighted_elbo/val', unweighted_elbos.mean(dim=0), on_step=False, on_epoch=True)

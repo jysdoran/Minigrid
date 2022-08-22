@@ -31,13 +31,13 @@ def elbo_with_pathwise_gradients(X, *, encoder, decoder, num_samples, data_dist=
         elbos (Tensor):             the ELBOs for each input X, a tensor of shape (B,)
     """
     # Notes:
-    # - Variational distribution <=> q(z|x) (parametrised by Encoder : mean, logvar)
+    # - Variational distribution <=> q(z|x) (parametrised by Encoder : mean, std)
     # - Generative Model p(x|z) (parametrised by Decoder: logits)
     # - M <=> num_samples- B <=> minibatch size
     # - D <=> dimension of X
     # - H <=> dimension of Z
     # - logits <=> theta (parameters of p(x|z))
-    # - mean, logvar <=> phi (parameters of q(z|x))
+    # - mean, std <=> phi (parameters of q(z|x))
     # - Z ~ q(z|x), sampled with reparametrisation
     # - X ~ p(x|z) (generated X | Z) <=> N/A here (but would be cb.sample())
     #
@@ -49,17 +49,17 @@ def elbo_with_pathwise_gradients(X, *, encoder, decoder, num_samples, data_dist=
     # variational distribution (i.e q(z|x))
 
     # mean = torch.randn(X.shape[0], 10) for testing
-    # logvar = torch.randn(*mean.shape) for testing
+    # std = torch.randn(*mean.shape) for testing
 
     reshape = False
     if len(X.shape) > 2: # X is of dim (B, C, H, W) or (B, H, W)
         reshape = True
 
-    mean, logvar = encoder(X)  # (B, H), (B, H)
+    mean, std = encoder(X)  # (B, H), (B, H)
 
     # Sample the latents using the reparametrisation trick
     Z = sample_gaussian_with_reparametrisation(
-        mean, logvar, num_samples=num_samples)  # (M, B, H)
+        mean, std, num_samples=num_samples)  # (M, B, H)
 
     # Evaluate the decoder network to obtain the parameters of the
     # generative model p(x|z)
@@ -68,7 +68,7 @@ def elbo_with_pathwise_gradients(X, *, encoder, decoder, num_samples, data_dist=
     logits = decoder(Z)  # (M, B, C, H, W)
 
     # Compute KLD( q(z|x) || p(z) )
-    kld = compute_kld_with_standard_gaussian(mean, logvar)  # (B,)
+    kld = compute_kld_with_standard_gaussian(mean, std)  # (B,)
 
     # Compute ~E_{q(z|x)}[ p(x | z) ]
     # Important: the samples are "propagated" all the way to the decoder output,
@@ -92,11 +92,11 @@ def elbo_with_pathwise_gradients(X, *, encoder, decoder, num_samples, data_dist=
 
 def elbo_with_pathwise_gradients_gnn(X, *, encoder, decoder, num_samples, data_dist=None, permutations=None):
 
-    mean, logvar = encoder(X)  # (B, H), (B, H)
+    mean, std = encoder(X)  # (B, H), (B, H)
 
     # Sample the latents using the reparametrisation trick
     Z = sample_gaussian_with_reparametrisation(
-        mean, logvar, num_samples=num_samples)  # (M, B, H)
+        mean, std, num_samples=num_samples)  # (M, B, H)
 
     # Evaluate the decoder network to obtain the parameters of the
     # generative model p(x|z)
@@ -119,7 +119,7 @@ def elbo_with_pathwise_gradients_gnn(X, *, encoder, decoder, num_samples, data_d
         logits = logits.repeat_interleave(permutations.shape[0], dim=1) # (M, B, n_nodes-1, 2) -> (M, B*P, n_nodes-1, 2)
 
     # Compute KLD( q(z|x) || p(z) )
-    kld = compute_kld_with_standard_gaussian(mean, logvar)  # (B,)
+    kld = compute_kld_with_standard_gaussian(mean, std)  # (B,)
 
     # Compute ~E_{q(z|x)}[ p(x | z) ]
     # Important: the samples are "propagated" all the way to the decoder output,
@@ -163,11 +163,11 @@ def elbo_with_score_function_gradients(X, *, encoder, decoder, num_samples, data
     """
     # Evaluate the encoder network to obtain the parameters of the
     # variational distribution
-    mean, logvar = encoder(X)  # (B, H), (B, H)
+    mean, std = encoder(X)  # (B, H), (B, H)
 
     # Sample the latents _without_ the reparametrisation trick
     Z = sample_gaussian_without_reparametrisation(
-        mean, logvar, num_samples=num_samples)  # (M, B, H)
+        mean, std, num_samples=num_samples)  # (M, B, H)
 
     # Evaluate the decoder network to obtain the parameters of the
     # generative model p(x|z)
@@ -178,7 +178,7 @@ def elbo_with_score_function_gradients(X, *, encoder, decoder, num_samples, data
     #
 
     # KLD( q(z|x) || p(z) )
-    kld = compute_kld_with_standard_gaussian(mean, logvar)
+    kld = compute_kld_with_standard_gaussian(mean, std)
 
     # log p(x | z)
     if data_dist == 'Bernoulli':
@@ -199,7 +199,7 @@ def elbo_with_score_function_gradients(X, *, encoder, decoder, num_samples, data
     #
 
     # log q(z | x)
-    log_qz_given_x = evaluate_logprob_diagonal_gaussian(Z, mean=mean, logvar=logvar)
+    log_qz_given_x = evaluate_logprob_diagonal_gaussian(Z, mean=mean, std=std)
 
     # Surrogate loss for score function gradient estimator of the expectation parameters
     surrogate_loss = (log_qz_given_x * log_px_given_z.detach()).mean(dim=0)
@@ -239,7 +239,7 @@ class Encoder(nn.Module):
             bneck_out = enc_layer_dims[-1]
 
         self.mean = nn.Linear(*bneck_in, *bneck_out)
-        self.logvar = nn.Linear(*bneck_in, *bneck_out)
+        self.std = FC_ReLU_Network([*bneck_in, *bneck_out], output_activation=nn.Softplus)
 
     def create_model(self, dims: Iterable[int]):
         raise NotImplementedError
@@ -253,32 +253,32 @@ class Encoder(nn.Module):
 
         Returns:
             mean (Tensor):   means of the variational distributions, shape (B, K)
-            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
+            std (Tensor):    std of the diagonal Gaussian variational distribution, shape (B, K)
         """
         raise NotImplementedError
 
-    def sample_with_reparametrisation(self, mean, logvar, *, num_samples=1):
+    def sample_with_reparametrisation(self, mean, std, *, num_samples=1):
         # Reuse the implemented code
-        return sample_gaussian_with_reparametrisation(mean, logvar, num_samples=num_samples)
+        return sample_gaussian_with_reparametrisation(mean, std, num_samples=num_samples)
 
-    def sample_without_reparametrisation(self, mean, logvar, *, num_samples=1):
+    def sample_without_reparametrisation(self, mean, std, *, num_samples=1):
         # Reuse the implemented code
-        return sample_gaussian_without_reparametrisation(mean, logvar, num_samples=num_samples)
+        return sample_gaussian_without_reparametrisation(mean, std, num_samples=num_samples)
 
-    def log_prob(self, mean, logvar, Z):
+    def log_prob(self, mean, std, Z):
         """
         Evaluates the log_probability of Z given the parameters of the diagonal Gaussian
 
         Args:
             mean (Tensor):   means of the variational distributions, shape (*, B, K)
-            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (*, B, K)
+            std (Tensor):    std of the diagonal Gaussian variational distribution, shape (*, B, K)
             Z (Tensor):      latent vectors, shape (*, B, K)
 
         Returns:
             logqz (Tensor):  log-probability of Z, a batch of shape (*, B)
         """
         # Reuse the implemented code
-        return evaluate_logprob_diagonal_gaussian(Z, mean=mean, logvar=logvar)
+        return evaluate_logprob_diagonal_gaussian(Z, mean=mean, std=std)
 
 class FCEncoder(Encoder):
 
@@ -297,15 +297,15 @@ class FCEncoder(Encoder):
 
         Returns:
             mean (Tensor):   means of the variational distributions, shape (B, K)
-            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
+            std (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
         """
         features = X.flatten(1)
         for net in self.model:
             features = net(features)
         mean = self.mean(features)
-        logvar = self.logvar(features)
+        std = self.std(features)
 
-        return mean, logvar
+        return mean, std
 
 
 class CNNEncoder(Encoder):
@@ -336,7 +336,7 @@ class CNNEncoder(Encoder):
 
         Returns:
             mean (Tensor):   means of the variational distributions, shape (B, K)
-            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
+            std (Tensor): std of the diagonal Gaussian variational distribution, shape (B, K)
         """
 
         X = X.reshape(X.shape[0], *self.hparams.enc_layer_dims[0]) #(B, D) -> (B, C, H, W) #however already handled by default
@@ -345,9 +345,9 @@ class CNNEncoder(Encoder):
             features = net(features)
 
         mean = self.mean(features)
-        logvar = self.logvar(features)
+        std = self.std(features)
 
-        return mean, logvar
+        return mean, std
 
 
 class GNNEncoder(Encoder):
@@ -376,7 +376,7 @@ class GNNEncoder(Encoder):
 
         Returns:
             mean (Tensor):   means of the variational distributions, shape (B, K)
-            logvar (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
+            std (Tensor): log-variances of the diagonal Gaussian variational distribution, shape (B, K)
         """
 
         graph = X
@@ -387,9 +387,9 @@ class GNNEncoder(Encoder):
             features = net(features)
 
         mean = self.mean(features)
-        logvar = self.logvar(features)
+        std = self.std(features)
 
-        return mean, logvar
+        return mean, std
 
 
 class Decoder(nn.Module):
