@@ -3,6 +3,7 @@ import logging
 import dgl
 import networkx as nx
 import numpy as np
+import torchvision
 from typing import List, Union, Tuple, Optional, Any, Dict
 import torch
 import pytorch_lightning as pl
@@ -13,7 +14,7 @@ import pandas as pd
 from data_generators import OBJECT_TO_CHANNEL_AND_IDX
 import util.transforms as tr
 from util.graph_metrics import compute_metrics
-from util.util import check_unique
+from util.util import check_unique, cdist_polar, lerp, slerp, rgba2rgb
 from copy import deepcopy
 
 logger = logging.getLogger(__name__)
@@ -109,11 +110,16 @@ class GraphVAELogger(pl.Callback):
     def on_fit_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         GraphVAELogger.prepare_stored_batch(self.validation_batch, self.validation_step_outputs)
         self.log_latent_embeddings(trainer, pl_module, "latent_space/val", mode="val")
+        self.log_latent_interpolation(trainer, pl_module, "interpolation/polar", mode="val",
+                                      interpolation_scheme="polar")
 
     def on_predict_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         GraphVAELogger.prepare_stored_batch(self.predict_batch, self.predict_step_outputs)
         self.log_latent_embeddings(trainer, pl_module, "latent_space/prior_generation", mode="prior")
         self.log_latent_embeddings(trainer, pl_module, "latent_space/train", mode="predict")
+        self.log_latent_interpolation(trainer, pl_module, "interpolation/polar", mode="predict", interpolation_scheme="polar")
+        self.log_latent_interpolation(trainer, pl_module, "interpolation/polar", mode="prior",
+                                      interpolation_scheme="polar")
 
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         if "test" in self.graphs.keys():
@@ -291,46 +297,115 @@ class GraphVAELogger(pl.Callback):
             "global_step": trainer.global_step
         })
 
-    # def log_latent_interpolation(self, trainer:pl.Trainer,
-    #                              pl_module:pl.LightningModule,
-    #                              mode:str,
-    #                              tag:str,
-    #                              num_samples:int=16,
-    #                              interpolations_per_samples:int=8,
-    #                              dim_reduction_threshold:float=0.9,
-    #                              interpolation_scheme:str= 'linear',
-    #                              num_var_samples:int=1):
-    #
-    #     graphs, labels, logits_A, logits_Fx = [None]*4
-    #     if mode == "val":
-    #         mean = self.validation_step_outputs["mean"]
-    #         logits_A, logits_Fx = self.validation_step_outputs["logits_A"], self.validation_step_outputs["logits_Fx"]
-    #         graphs = self.validation_batch["graph"]
-    #         labels = self.validation_batch["label_ids"]
-    #         unweighted_elbos = self.validation_batch["unweighted_elbos"]
-    #     elif mode == "predict":
-    #         mean = self.predict_step_outputs["mean"]
-    #         sigma = self.predict_step_outputs["sigma"]
-    #         logits_A, logits_Fx = self.predict_step_outputs["logits_A"], self.predict_step_outputs["logits_Fx"]
-    #         graphs = self.predict_batch["graph"]
-    #         labels = self.predict_batch["label_ids"]
-    #         unweighted_elbos = self.predict_batch["unweighted_elbos"]
-    #     elif mode == "prior":
-    #         Z_dim = self.validation_step_outputs["mean"].shape[-1]
-    #         Z = torch.randn(self.num_variational_samples_logging, self.num_generated_samples, Z_dim).to(device=pl_module.device)
-    #         logits_A, logits_Fx = pl_module.decoder(Z)
-    #         unweighted_elbos = None
-    #         labels = None
-    #
-    #
-    #
-    #     if interpolation_scheme == 'linear':
-    #         latents_dist = torch.cdist(latents, latents, p=2)
-    #         eps = 5e-3
-    #     if interpolation_scheme == 'polar':
-    #         eps = 5e-3
-    #         latents_dist = cdist_polar(latents, latents)
+    def log_latent_interpolation(self, trainer:pl.Trainer,
+                                 pl_module:pl.LightningModule,
+                                 mode:str,
+                                 tag:str,
+                                 num_samples:int=16,
+                                 interpolations_per_samples:int=8,
+                                 remove_dims:bool=True,
+                                 dim_reduction_threshold:float=0.9,
+                                 interpolation_scheme:str= 'linear',
+                                 latent_sampling:bool=True,
+                                 num_var_samples:int=1):
 
+        # Get data
+        mean, std, Z = [None]*3
+        if mode == "val":
+            mean = self.validation_step_outputs["mean"][:num_samples]
+            std = self.validation_step_outputs["std"][:num_samples]
+            if latent_sampling:
+                rand = torch.randn(mean.shape)
+                Z = mean + std * rand
+            else:
+                Z = mean
+        elif mode == "predict":
+            mean = self.predict_step_outputs["mean"][:num_samples]
+            std = self.predict_step_outputs["std"][:num_samples]
+            if latent_sampling:
+                rand = torch.randn(mean.shape)
+                Z = mean + std * rand
+            else:
+                Z = mean
+        elif mode == "prior":
+            Z_dim = self.validation_step_outputs["mean"].shape[-1]
+            Z = torch.randn(num_samples, Z_dim).to(device=pl_module.device)
+
+        # Remove dimensions with average standard deviation of 1 (e.g. uninformative)
+        if remove_dims:
+            kept_dims = torch.where(std < dim_reduction_threshold)[0].cpu().numpy()
+            pl_module.log(f'metric/informative_latent_dimensions/{tag}/{mode}', kept_dims)
+            original_Z = Z.clone()
+            Z = Z[..., kept_dims]
+            std_red = std[kept_dims]
+            mean_red = mean[kept_dims]
+        else:
+            std_red = std.clone()
+            mean_red = mean.clone()
+
+
+        # Calculate and sort distances between latents
+        if interpolation_scheme == 'linear':
+            latents_dist = torch.cdist(Z, Z, p=2)
+            eps = 5e-3
+        if interpolation_scheme == 'polar':
+            latents_dist = cdist_polar(Z, Z)
+            eps = 5e-3
+
+        latents_dist[latents_dist <= eps] = float('inf')
+        dist, pair_indices = latents_dist.min(axis=0)
+        dist = dist.cpu().numpy()
+        pair_indices = pair_indices.cpu().numpy()
+        distances = {}
+        for ind_a, ind_b in enumerate(pair_indices):
+            assert ind_a != ind_b
+            key = (min(ind_a, ind_b), max(ind_a, ind_b))
+            distances[key] = dist[ind_a]
+
+        # sort the distances in ascending order
+        sorted_distances = {k: v for k, v in sorted(distances.items(), key=lambda item: item[1])}
+
+        interpolation_points = np.linspace(0, 1, interpolations_per_samples + 2)[1:-1]
+        interpolated_latents_dict = {}
+        for pair in sorted_distances.keys():
+            interpolated_latents = [Z[pair[0]], ]
+            for loc in interpolation_points:
+                if interpolation_scheme == 'linear':
+                    interp = lerp(loc, Z[pair[0]], Z[pair[1]])
+                elif interpolation_scheme == 'polar':
+                    interp = slerp(loc, Z[pair[0]], Z[pair[1]])
+                else:
+                    raise RuntimeError(f"Interpolation scheme {interpolation_scheme} not recognised.")
+                interpolated_latents.append(interp)
+            interpolated_latents.append(Z[pair[1]])
+            interpolated_latents_dict[pair] = interpolated_latents
+
+        # convert back to tensor
+        l_t = [torch.stack(i) for i in list(interpolated_latents_dict.values())]
+        interpolated_latents_grid = torch.stack(l_t).to(Z)
+
+        # Go back to original sample
+        interpolated_latents_grid = (interpolated_latents_grid * std_red) + mean_red
+
+        # reassembly
+        if dim_reduction_threshold:
+            interpolated_latents_grid_r = torch.zeros(*interpolated_latents_grid.shape[:-1], original_Z.shape[-1],
+                                                      dtype=torch.float).to(Z)
+            interpolated_latents_grid_r[..., kept_dims] = interpolated_latents_grid
+        else:
+            interpolated_latents_grid_r = interpolated_latents_grid
+        interpolated_latents_grid_r = interpolated_latents_grid_r.reshape(-1, interpolated_latents_grid_r.shape[-1])
+
+        # Obtain the interpolated samples
+        logits_A, logits_Fx = pl_module.decoder(interpolated_latents_grid_r)
+        imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+        imgs = rgba2rgb(imgs)
+
+        #TODO: add conversion to imgs, also should sitch the stored logits_A, logits_Fx (or not include them above)
+        # also only get up to num_samples array size for Z.
+        img_grid = torchvision.utils.make_grid(imgs, nrow=num_samples)
+
+        self.log_images(trainer, f"Interpolated_samples/{tag}/{mode}", [img_grid], mode="RGB")
 
     def log_prior_sampling(self, trainer, pl_module, tag, num_var_samples):
         Z_dim = self.validation_step_outputs["mean"].shape[-1]

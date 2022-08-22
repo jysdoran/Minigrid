@@ -229,6 +229,27 @@ def dict2obj(d):
 
     return obj
 
+def rgba2rgb(imgs:torch.Tensor, background=(1, 1, 1))->torch.Tensor:
+    """Converts a batch of RGB images to their RGBA equivalent."""
+
+    assert imgs.ndim == 4, "Input must be of dimensions (B, C, H, W)"
+
+    B, ch, row, col = imgs.shape
+
+    assert ch==4, "Input must be a batch of RGBA images, with 4 channels"
+
+    rgb = torch.zeros((B, 3, row, col), dtype=torch.float).to(imgs.device)
+
+    r, g, b, a = imgs[:, 0, ...], imgs[:, 1, ...], imgs[:, 2, ...], imgs[:, 3, ...]
+
+    R, G, B = background
+
+    rgb[:, 0, ...] = r * a + (1.0 - a) * R
+    rgb[:, 1, ...] = g * a + (1.0 - a) * G
+    rgb[:, 2, ...] = b * a + (1.0 - a) * B
+
+    return rgb
+
 
 def create_dataloader(data, batch_size, device, shuffle=True):
     data_type = data.dataset_metadata['data_type']
