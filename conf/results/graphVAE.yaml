@@ -5,6 +5,14 @@ attribute_to_gw_encoding: ["start", "goal"] #attributes used to encode a graph t
 num_variational_samples: 1000
 num_image_samples: 32
 num_embeddings_samples: 128
-max_cached_batches: null #auto
+max_cached_batches: null #AUTO
 force_valid_reconstructions: true
-num_generated_samples: 1024
+num_generated_samples: 128
+
+sample_interpolation:
+  num_samples: 32
+  num_interpolations: 8
+  remove_noninformative_dimensions: true
+  dimension_reduction_threshold: 0.9 #if std of this dimension is larger than 0.9, remove
+  sample_latents: true #if true, sample latents to be interpolated instead of interpolating their means
+  interpolation_scheme: "polar" #"linear" or "polar"

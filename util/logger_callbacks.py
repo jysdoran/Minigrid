@@ -36,9 +36,9 @@ class GraphVAELogger(pl.Callback):
         self.label_contents = label_contents
         self.label_descriptors_config = label_descriptors_config
         self.force_valid_reconstructions = logging_cfg.force_valid_reconstructions
-        self.num_samples = logging_cfg.num_samples
+        self.num_samples = logging_cfg.num_image_samples
         self.num_generated_samples = logging_cfg.num_generated_samples
-        self.num_variational_samples_logging = logging_cfg.num_variational_samples_logging
+        self.num_variational_samples_logging = logging_cfg.num_variational_samples
         self.max_cached_batches = logging_cfg.max_cached_batches
         self.attributes = dataset_cfg.node_attributes
         self.used_attributes = logging_cfg.attribute_to_gw_encoding
@@ -83,9 +83,9 @@ class GraphVAELogger(pl.Callback):
     def on_fit_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
 
         try:
-            self.log_images(trainer, "examples/train", self.imgs["train"], self.labels["train"])
-            self.log_images(trainer, "examples/val", self.imgs["val"], self.labels["val"])
-            self.log_images(trainer, "examples/test", self.imgs["test"], self.labels["test"])
+            self.log_images(trainer, "dataset/train", self.imgs["train"], self.labels["train"])
+            self.log_images(trainer, "dataset/val", self.imgs["val"], self.labels["val"])
+            self.log_images(trainer, "dataset/test", self.imgs["test"], self.labels["test"])
         except KeyError as e:
             logger.info(f"{e} dataset was not supplied in the samples provided to the GraphVAELogger")
 
@@ -110,16 +110,29 @@ class GraphVAELogger(pl.Callback):
     def on_fit_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         GraphVAELogger.prepare_stored_batch(self.validation_batch, self.validation_step_outputs)
         self.log_latent_embeddings(trainer, pl_module, "latent_space/val", mode="val")
-        self.log_latent_interpolation(trainer, pl_module, "interpolation/polar", mode="val",
+        self.log_latent_interpolation(trainer, pl_module, tag="interpolation/polar", mode="val",
                                       interpolation_scheme="polar")
 
     def on_predict_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         GraphVAELogger.prepare_stored_batch(self.predict_batch, self.predict_step_outputs)
         self.log_latent_embeddings(trainer, pl_module, "latent_space/prior_generation", mode="prior")
         self.log_latent_embeddings(trainer, pl_module, "latent_space/train", mode="predict")
-        self.log_latent_interpolation(trainer, pl_module, "interpolation/polar", mode="predict", interpolation_scheme="polar")
-        self.log_latent_interpolation(trainer, pl_module, "interpolation/polar", mode="prior",
-                                      interpolation_scheme="polar")
+        self.log_latent_interpolation(trainer, pl_module, "interpolation/polar",
+                                      mode="predict",
+                                      num_samples=self.logging_cfg.sample_interpolation.num_samples,
+                                      interpolations_per_samples=self.logging_cfg.sample_interpolation.num_interpolations,
+                                      remove_dims=self.logging_cfg.sample_interpolation.remove_noninformative_dimensions,
+                                      dim_reduction_threshold=self.logging_cfg.sample_interpolation.dimension_reduction_threshold,
+                                      latent_sampling=self.logging_cfg.sample_interpolation.sample_latents,
+                                      interpolation_scheme=self.logging_cfg.sample_interpolation.interpolation_scheme)
+        self.log_latent_interpolation(trainer, pl_module, "interpolation/polar",
+                                      mode="prior",
+                                      num_samples=self.logging_cfg.sample_interpolation.num_samples,
+                                      interpolations_per_samples=self.logging_cfg.sample_interpolation.num_interpolations,
+                                      remove_dims=self.logging_cfg.sample_interpolation.remove_noninformative_dimensions,
+                                      dim_reduction_threshold=self.logging_cfg.sample_interpolation.dimension_reduction_threshold,
+                                      latent_sampling=self.logging_cfg.sample_interpolation.sample_latents,
+                                      interpolation_scheme=self.logging_cfg.sample_interpolation.interpolation_scheme)
 
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         if "test" in self.graphs.keys():
@@ -177,17 +190,18 @@ class GraphVAELogger(pl.Callback):
             logits_A, logits_Fx = self.validation_step_outputs["logits_A"], self.validation_step_outputs["logits_Fx"]
             graphs = self.validation_batch["graph"]
             labels = self.validation_batch["label_ids"]
-            unweighted_elbos = self.validation_batch["unweighted_elbos"]
+            unweighted_elbos = self.validation_step_outputs["unweighted_elbos"]
         elif mode == "predict":
             Z = self.predict_step_outputs["mean"]
             logits_A, logits_Fx = self.predict_step_outputs["logits_A"], self.predict_step_outputs["logits_Fx"]
             graphs = self.predict_batch["graph"]
             labels = self.predict_batch["label_ids"]
-            unweighted_elbos = self.predict_batch["unweighted_elbos"]
+            unweighted_elbos = self.predict_step_outputs["unweighted_elbos"]
         elif mode == "prior":
-            Z_dim = self.validation_step_outputs["mean"].shape[-1]
+            Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
             Z = torch.randn(self.num_variational_samples_logging, self.num_generated_samples, Z_dim).to(device=pl_module.device)
-            logits_A, logits_Fx = pl_module.decoder(Z)
+            logits_A, logits_Fx = [f.mean(dim=0) for f in pl_module.decoder(Z)]
+            Z = Z.mean(dim=0)
             unweighted_elbos = None
             labels = None
 
@@ -216,20 +230,22 @@ class GraphVAELogger(pl.Callback):
         reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
 
         if self.force_valid_reconstructions:
-            logits_Fx[..., pl_module.decoder.attributes.index("goal")], goal_nodes_valid = \
-                tr.Nav2DTransforms.force_valid_goal(
+            logits_Fx[..., pl_module.decoder.attributes.index("start")],\
+            logits_Fx[..., pl_module.decoder.attributes.index("goal")], \
+            start_nodes_valid, goal_nodes_valid = \
+                tr.Nav2DTransforms.force_valid_layout(
                 rec_graphs_nx,
-                logits_Fx[..., pl_module.decoder.attributes.index("goal")],
-                start_nodes)
+                logits_Fx[..., pl_module.decoder.attributes.index("start")],
+                logits_Fx[..., pl_module.decoder.attributes.index("goal")])
 
             reconstruction_metrics_force_valid = {k: [] for k in ["shortest_path", "resistance", "navigable_nodes"]}
             reconstruction_metrics_force_valid["valid"] = [True] * len(logits_Fx)
             reconstruction_metrics_force_valid["solvable"] = [True] * len(logits_Fx)
             reconstruction_metrics_force_valid, _, = compute_metrics(rec_graphs_nx, reconstruction_metrics_force_valid,
-                                                                     start_nodes, goal_nodes_valid)
+                                                                     start_nodes_valid, goal_nodes_valid)
             mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
             reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) & check_unique(mode_Fx)).tolist()
-            del goal_nodes_valid, mode_A, mode_Fx
+            del start_nodes_valid, goal_nodes_valid, mode_A, mode_Fx
             reconstructed_imgs_force_valid = self.obtain_imgs(logits_A, logits_Fx, pl_module)
 
         del logits_A, logits_Fx, start_nodes, goal_nodes, rec_graphs_nx
@@ -239,11 +255,18 @@ class GraphVAELogger(pl.Callback):
             if self.force_valid_reconstructions:
                 reconstruction_metrics_force_valid = self.normalise_metrics(reconstruction_metrics_force_valid, device=pl_module.device)
 
+        to_log = {}
         for key in reconstruction_metrics.keys():
-            pl_module.log(f'metric/{key}/{tag}', reconstruction_metrics[key].mean())
+            data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
+            data = data[~torch.isnan(data)]
+            to_log[f'metric/{key}/{tag}'] = data.mean()
         if self.force_valid_reconstructions:
             for key in ["unique", "shortest_path", "resistance", "navigable_nodes"]:
-                pl_module.log(f'metric/{key}_force_valid/{tag}', reconstruction_metrics_force_valid[key].mean())
+                data = torch.tensor(reconstruction_metrics_force_valid[key]).to(pl_module.device, torch.float)
+                data = data[~torch.isnan(data)]
+                to_log[f'metric/{key}_force_valid/{tag}'] = data.mean()
+        trainer.logger.log_metrics(to_log, step=trainer.global_step)
+        del to_log
 
         col_names = ["Z"+str(i) for i in range(Z.shape[-1])]
         df = pd.DataFrame(Z, columns=col_names)
@@ -262,9 +285,11 @@ class GraphVAELogger(pl.Callback):
             for key in reversed(["unique", "shortest_path", "resistance", "navigable_nodes"]):
                 df.insert(0, f"RV_{key}", reconstruction_metrics_force_valid[key])
                 if key in ["shortest_path", "resistance", "navigable_nodes"]:
+                    hist_data = torch.tensor(reconstruction_metrics_force_valid[key]).to(pl_module.device, torch.float)
+                    hist_data = hist_data[~hist_data.isnan()].cpu().numpy()
                     trainer.logger.experiment.log(
                         {
-                            f"metrics/{tag}/RV/{key}/{mode}": wandb.Histogram(reconstruction_metrics_force_valid[key]),
+                            f"distributions/{tag}/RV/{key}/{mode}": wandb.Histogram(hist_data),
                             "global_step" : trainer.global_step
                             })
             del reconstruction_metrics_force_valid
@@ -273,12 +298,14 @@ class GraphVAELogger(pl.Callback):
         for key in reversed(["valid", "solvable", "unique", "shortest_path", "resistance", "navigable_nodes"]):
             df.insert(0, f"R_{key}", reconstruction_metrics[key])
             if key in ["shortest_path", "resistance", "navigable_nodes"]:
+                hist_data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
+                hist_data = hist_data[~hist_data.isnan()].cpu().numpy()
                 trainer.logger.experiment.log(
                     {
-                        f"metrics/{tag}/R/{key}/{mode}": wandb.Histogram(reconstruction_metrics[key]),
+                        f"distributions/{tag}/R/{key}/{mode}": wandb.Histogram(hist_data),
                         "global_step"                   : trainer.global_step
                         })
-        del reconstruction_metrics
+        del reconstruction_metrics, hist_data
 
         if unweighted_elbos is not None:
             df.insert(0, "Unweighted_elbos", unweighted_elbos.tolist())
@@ -291,7 +318,7 @@ class GraphVAELogger(pl.Callback):
             df.insert(0, "Label_ids", labels.tolist())
 
         trainer.logger.experiment.log({
-            tag: wandb.Table(
+            f"tables/{tag}": wandb.Table(
                 dataframe=df
             ),
             "global_step": trainer.global_step
@@ -299,23 +326,42 @@ class GraphVAELogger(pl.Callback):
 
     def log_latent_interpolation(self, trainer:pl.Trainer,
                                  pl_module:pl.LightningModule,
+                                 tag: str,
                                  mode:str,
-                                 tag:str,
                                  num_samples:int=16,
                                  interpolations_per_samples:int=8,
                                  remove_dims:bool=True,
                                  dim_reduction_threshold:float=0.9,
                                  interpolation_scheme:str= 'linear',
-                                 latent_sampling:bool=True,
-                                 num_var_samples:int=1):
+                                 latent_sampling:bool=True):
+
+        def interpolate_between_pairs(pairs:Tuple[int,int], data:torch.Tensor, num_interpolations:int,
+                                      scheme:str)->torch.Tensor:
+
+            interpolation_points = np.linspace(0, 1, num_interpolations + 2)[1:-1]
+            interpolations = [[] for _ in pairs]
+            for i, pair in enumerate(pairs):
+                interpolations[i].append(data[pair[0]])
+                for loc in interpolation_points:
+                    if scheme == 'linear':
+                        interp = lerp(loc, data[pair[0]], data[pair[1]])
+                    elif scheme == 'polar':
+                        interp = slerp(loc, data[pair[0]], data[pair[1]])
+                    else:
+                        raise RuntimeError(f"Interpolation scheme {interpolation_scheme} not recognised.")
+                    interpolations[i].append(interp)
+                interpolations[i].append(data[pair[1]])
+
+            return torch.stack([torch.stack(row).to(data) for row in interpolations]).to(data)
 
         # Get data
         mean, std, Z = [None]*3
+        Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
         if mode == "val":
             mean = self.validation_step_outputs["mean"][:num_samples]
             std = self.validation_step_outputs["std"][:num_samples]
             if latent_sampling:
-                rand = torch.randn(mean.shape)
+                rand = torch.randn(len(mean), Z_dim).to(mean)
                 Z = mean + std * rand
             else:
                 Z = mean
@@ -323,26 +369,22 @@ class GraphVAELogger(pl.Callback):
             mean = self.predict_step_outputs["mean"][:num_samples]
             std = self.predict_step_outputs["std"][:num_samples]
             if latent_sampling:
-                rand = torch.randn(mean.shape)
+                rand = torch.randn(len(mean), Z_dim).to(pl_module.device)
                 Z = mean + std * rand
             else:
                 Z = mean
         elif mode == "prior":
-            Z_dim = self.validation_step_outputs["mean"].shape[-1]
-            Z = torch.randn(num_samples, Z_dim).to(device=pl_module.device)
+            Z = torch.randn(num_samples, Z_dim).to(pl_module.device)
 
         # Remove dimensions with average standard deviation of 1 (e.g. uninformative)
-        if remove_dims:
-            kept_dims = torch.where(std < dim_reduction_threshold)[0].cpu().numpy()
-            pl_module.log(f'metric/informative_latent_dimensions/{tag}/{mode}', kept_dims)
-            original_Z = Z.clone()
+        if remove_dims and mode!="prior":
+            kept_dims = torch.where(std < dim_reduction_threshold)[-1]
+            kept_dims = torch.unique(kept_dims)
+            trainer.logger.log_metrics({f"metric/latent_space/dim_info/{tag}/{mode}": len(kept_dims)},
+                                       step=trainer.global_step)
             Z = Z[..., kept_dims]
-            std_red = std[kept_dims]
-            mean_red = mean[kept_dims]
-        else:
-            std_red = std.clone()
-            mean_red = mean.clone()
-
+            std = std[..., kept_dims]
+            mean = mean[..., kept_dims]
 
         # Calculate and sort distances between latents
         if interpolation_scheme == 'linear':
@@ -363,60 +405,54 @@ class GraphVAELogger(pl.Callback):
             distances[key] = dist[ind_a]
 
         # sort the distances in ascending order
-        sorted_distances = {k: v for k, v in sorted(distances.items(), key=lambda item: item[1])}
+        distances = {k: v for k, v in sorted(distances.items(), key=lambda item: item[1])}
 
-        interpolation_points = np.linspace(0, 1, interpolations_per_samples + 2)[1:-1]
-        interpolated_latents_dict = {}
-        for pair in sorted_distances.keys():
-            interpolated_latents = [Z[pair[0]], ]
-            for loc in interpolation_points:
-                if interpolation_scheme == 'linear':
-                    interp = lerp(loc, Z[pair[0]], Z[pair[1]])
-                elif interpolation_scheme == 'polar':
-                    interp = slerp(loc, Z[pair[0]], Z[pair[1]])
-                else:
-                    raise RuntimeError(f"Interpolation scheme {interpolation_scheme} not recognised.")
-                interpolated_latents.append(interp)
-            interpolated_latents.append(Z[pair[1]])
-            interpolated_latents_dict[pair] = interpolated_latents
-
-        # convert back to tensor
-        l_t = [torch.stack(i) for i in list(interpolated_latents_dict.values())]
-        interpolated_latents_grid = torch.stack(l_t).to(Z)
-
-        # Go back to original sample
-        interpolated_latents_grid = (interpolated_latents_grid * std_red) + mean_red
+        interp_Z = interpolate_between_pairs(distances.keys(), Z, interpolations_per_samples, interpolation_scheme)
+        if mode != "prior":
+            interp_mean = interpolate_between_pairs(distances.keys(), mean, interpolations_per_samples, 'linear')
+            interp_std = interpolate_between_pairs(distances.keys(), std, interpolations_per_samples, 'linear')
+            interp_Z = (interp_Z * interp_std) + interp_mean
+            del interp_mean, interp_std, std, mean
+        del Z
 
         # reassembly
-        if dim_reduction_threshold:
-            interpolated_latents_grid_r = torch.zeros(*interpolated_latents_grid.shape[:-1], original_Z.shape[-1],
-                                                      dtype=torch.float).to(Z)
-            interpolated_latents_grid_r[..., kept_dims] = interpolated_latents_grid
-        else:
-            interpolated_latents_grid_r = interpolated_latents_grid
-        interpolated_latents_grid_r = interpolated_latents_grid_r.reshape(-1, interpolated_latents_grid_r.shape[-1])
+        if remove_dims and mode!="prior":
+            temp = interp_Z.clone().to(device=pl_module.device)
+            interp_Z = torch.zeros(*interp_Z.shape[:-1], Z_dim,
+                                                      dtype=torch.float).to(pl_module.device)
+            interp_Z[..., kept_dims] = temp
+            del temp
+
+        interp_Z = interp_Z.reshape(-1, interp_Z.shape[-1])
 
         # Obtain the interpolated samples
-        logits_A, logits_Fx = pl_module.decoder(interpolated_latents_grid_r)
+        logits_A, logits_Fx = pl_module.decoder(interp_Z)
+        del interp_Z
+
         imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
         imgs = rgba2rgb(imgs)
 
         #TODO: add conversion to imgs, also should sitch the stored logits_A, logits_Fx (or not include them above)
         # also only get up to num_samples array size for Z.
-        img_grid = torchvision.utils.make_grid(imgs, nrow=num_samples)
+        resize = torchvision.transforms.Resize((100, 100),
+                                               interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+        img_grid = torchvision.utils.make_grid(resize(imgs), nrow=len(distances.keys()))
 
-        self.log_images(trainer, f"Interpolated_samples/{tag}/{mode}", [img_grid], mode="RGB")
+        self.log_images(trainer, f"interpolated_samples/{tag}/{mode}", [img_grid], mode="RGB")
 
     def log_prior_sampling(self, trainer, pl_module, tag, num_var_samples):
-        Z_dim = self.validation_step_outputs["mean"].shape[-1]
-        prior_samples = torch.randn(num_var_samples, self.num_generated_samples, Z_dim).to(device=pl_module.device)
-        logits_A_prior, logits_Fx_prior = pl_module.decoder(prior_samples)
-        pl_module.log(f'metric/entropy/A/prior/{tag}', pl_module.decoder.entropy_A(logits_A_prior))
-        pl_module.log(f'metric/entropy/Fx/prior/{tag}', pl_module.decoder.entropy_Fx(logits_Fx_prior).sum())
+        Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
+        Z = torch.randn(num_var_samples, self.num_generated_samples, Z_dim).to(device=pl_module.device)
+        logits_A, logits_Fx = [f.mean(dim=0) for f in pl_module.decoder(Z)]
+        del Z
+        trainer.logger.log_metrics({
+            f'metric/entropy/A/prior/{tag}': pl_module.decoder.entropy_A(logits_A),
+            f'metric/entropy/Fx/prior/{tag}': pl_module.decoder.entropy_Fx(logits_Fx).sum()},
+            trainer.global_step)
 
-        generated_imgs = self.obtain_imgs(logits_A_prior[:self.num_samples], logits_Fx_prior[:self.num_samples], pl_module)
+        generated_imgs = self.obtain_imgs(logits_A[:self.num_samples], logits_Fx[:self.num_samples], pl_module)
         self.log_images(trainer, f"generated/prior/{tag}", generated_imgs)
-        self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=f"generated/prior/{tag}", logits_A=logits_A_prior[:self.num_samples], logits_Fx=logits_Fx_prior[:self.num_samples])
+        self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=f"generated/prior/{tag}", logits_A=logits_A[:self.num_samples], logits_Fx=logits_Fx[:self.num_samples])
 
     # Utility methods
 
@@ -457,12 +493,13 @@ class GraphVAELogger(pl.Callback):
 
     @staticmethod
     def store_batch(batch_dict, output_dict, batch, output):
-        loss, logits_A, logits_Fx, mean, std = output
+        loss, unweighted_elbos, logits_A, logits_Fx, mean, std = output
 
         batch_dict["graph"].append(batch[0])
         batch_dict["label_ids"].append(batch[1])
 
         output_dict["loss"].append(loss)
+        output_dict["unweighted_elbos"].append(unweighted_elbos)
         output_dict["logits_A"].append(logits_A)
         output_dict["logits_Fx"].append(logits_Fx)
         output_dict["mean"].append(mean)
@@ -481,7 +518,7 @@ class GraphVAELogger(pl.Callback):
             captions = [None] * len(images)
 
         trainer.logger.experiment.log({
-            tag: [wandb.Image(x, caption=c, mode=mode)
+            f"images/{tag}": [wandb.Image(x, caption=c, mode=mode)
                          for x, c in zip(images, captions)],
             "global_step": trainer.global_step
         })

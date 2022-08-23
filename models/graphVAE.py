@@ -89,12 +89,12 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
 
     # ELBO for adjacency matrix
     if logits_Fx is not None:
-        elbos_Fx = torch.einsum('i, b i -> b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx)
+        elbos_Fx = torch.einsum('i, m b i -> m b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx)
     else:
         elbos_Fx = 0.
 
     elbos = elbo_coeffs.A * neg_cross_entropy_A + elbos_Fx - elbo_coeffs.beta * kld  # (M,B,)
-    unweighted_elbos = neg_cross_entropy_A + neg_cross_entropy_Fx - kld
+    unweighted_elbos = neg_cross_entropy_A + neg_cross_entropy_Fx.mean(dim=-1) - kld
 
     # ref: IWAE
     # - https://arxiv.org/pdf/1509.00519.pdf
@@ -746,10 +746,10 @@ class LightningGraphVAE(pl.LightningModule):
         flattened_logits_A = torch.flatten(self.decoder.param_pA(logits_A))
         flattened_logits_Fx = torch.flatten(self.decoder.param_pFx(logits_Fx))
         self.logger.experiment.log(
-            {"logits/A/val": wandb.Histogram(flattened_logits_A.to("cpu")),
+            {"distributions/logits/A/val": wandb.Histogram(flattened_logits_A.to("cpu")),
              "global_step": self.global_step})
         self.logger.experiment.log(
-            {"logits/Fx/val": wandb.Histogram(flattened_logits_Fx.to("cpu")),
+            {"distributions/logits/Fx/val": wandb.Histogram(flattened_logits_Fx.to("cpu")),
              "global_step": self.global_step})
 
     def test_epoch_end(self, test_step_outputs):
