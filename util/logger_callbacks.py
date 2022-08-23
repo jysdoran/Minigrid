@@ -400,9 +400,9 @@ class GraphVAELogger(pl.Callback):
         pair_indices = pair_indices.cpu().numpy()
         distances = {}
         for ind_a, ind_b in enumerate(pair_indices):
-            assert ind_a != ind_b
-            key = (min(ind_a, ind_b), max(ind_a, ind_b))
-            distances[key] = dist[ind_a]
+            if ind_a != ind_b:
+                key = (min(ind_a, ind_b), max(ind_a, ind_b))
+                distances[key] = dist[ind_a]
 
         # sort the distances in ascending order
         distances = {k: v for k, v in sorted(distances.items(), key=lambda item: item[1])}
