@@ -89,7 +89,8 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
 
     # ELBO for adjacency matrix
     if logits_Fx is not None:
-        elbos_Fx = torch.einsum('i, m b i -> m b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx)
+        #elbos_Fx = torch.einsum('i, m b i -> m b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx)
+        elbos_Fx = elbo_coeffs.Fx * neg_cross_entropy_Fx.mean(dim=-1) #(M, B, D) -> (M, B)
     else:
         elbos_Fx = 0.
 
@@ -128,15 +129,15 @@ class GraphGCNEncoder(nn.Module):
         # We use log-variance to unconstrain the optimisation of the positive-only variance parameters
         #TODO: change to softplus
 
-        self.mean = nn.Linear(self.config.mlp.layer_dim[-1], self.shared_params.latent_dim)
-        self.std = FC_ReLU_Network([self.config.mlp.layer_dim[-1], self.shared_params.latent_dim],
+        self.mean = nn.Linear(self.config.mlp.bottleneck_dim, self.shared_params.latent_dim)
+        self.std = FC_ReLU_Network([self.config.mlp.bottleneck_dim, self.shared_params.latent_dim],
                                    output_activation=nn.Softplus)
 
     def create_model(self):
         if self.config.gnn.architecture == "GIN":
             self.gcn = GIN(num_layers=self.config.gnn.num_layers, num_mlp_layers=self.config.gnn.num_mlp_layers,
                                input_dim=len(self.attributes_mapping), hidden_dim=self.config.gnn.layer_dim,
-                               output_dim=self.config.mlp.layer_dim[0], final_dropout=self.config.gnn.final_dropout,
+                               output_dim=self.config.mlp.hidden_dim, final_dropout=self.config.gnn.final_dropout,
                                learn_eps=self.config.gnn.learn_eps, graph_pooling_type=self.config.gnn.graph_pooling,
                                neighbor_pooling_type=self.config.gnn.neighbor_pooling,
                                n_nodes=self.shared_params.graph_max_nodes)
@@ -145,7 +146,10 @@ class GraphGCNEncoder(nn.Module):
                                       f" Invalid or Not Currently Implemented")
 
         self.flatten_layer = nn.Flatten()
-        self.mlp = FC_ReLU_Network([self.gcn.output_dim, *self.config.mlp.layer_dim], output_activation=nn.ReLU)
+        mlp_dims = [self.gcn.output_dim]
+        mlp_dims.extend([self.config.mlp.hidden_dim] * (self.config.mlp.num_layers - 1))
+        mlp_dims.extend([self.config.mlp.bottleneck_dim])
+        self.mlp = FC_ReLU_Network(mlp_dims, output_activation=nn.ReLU)
         model = [self.gcn, self.flatten_layer, self.mlp]
         model = list(filter(None, model))
 
@@ -212,22 +216,24 @@ class GraphMLPDecoder(nn.Module):
         self.attribute_distributions = self.config.distributions
 
         # model creation
-        self.model = self.create_model([self.shared_params.latent_dim, *self.config.layer_dim])
+        hidden_dims = [self.shared_params.latent_dim, self.config.bottleneck_dim]
+        hidden_dims.extend([self.config.hidden_dim] * (self.config.num_layers - 1))
+        self.model = self.create_model(hidden_dims)
         if self.config.adjacency is not None:
-            self.adjacency = nn.Linear(self.config.layer_dim[-1], self.config.output_dim.adjacency)
+            self.adjacency = nn.Linear(self.config.hidden_dim, self.config.output_dim.adjacency)
         else:
             self.adjacency = None
 
         if self.attributes is not None:
             self.attribute_heads = nn.ModuleList()
             for i in range(len(self.attributes)):
-                self.attribute_heads.append(nn.Linear(self.config.layer_dim[-1], self.config.output_dim.attributes))
+                self.attribute_heads.append(nn.Linear(self.config.hidden_dim, self.config.output_dim.attributes))
         else:
             self.attribute_heads = None
 
     def create_model(self, dims: Iterable[int]):
         self.bottleneck = FC_ReLU_Network(dims[0:2], output_activation=nn.ReLU)
-        self.fc_net = FC_ReLU_Network(dims[1:], output_activation=None)
+        self.fc_net = FC_ReLU_Network(dims[1:], output_activation=nn.ReLU)
         return [self.bottleneck, self.fc_net]
 
     def forward(self, Z):

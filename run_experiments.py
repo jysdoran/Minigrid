@@ -68,7 +68,7 @@ def get_dataset_dir(cfg, test_mode=False):
     data_type = cfg.data_type  # 'graph'
     data_dims = cfg.gridworld_data_dim
     data_dim = data_dims[-1]
-    task_structures = '-'.join(task_structures)
+    task_structures = '-'.join(sorted(task_structures))
 
     attributes_dim = len(cfg.node_attributes)
     encoding = cfg.encoding

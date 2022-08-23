@@ -2,10 +2,10 @@ name: null #AUTO
 dir_name: null #AUTO
 size: null #AUTO
 
-num_train_batches: 2
+num_train_batches: 10
 num_test_batches: 2
-size_train_batch: 100
-size_test_batch: 10
+size_train_batch: 10000
+size_test_batch: 1000
 train_batch_ids: null #AUTO
 test_batch_ids: null #AUTO
 

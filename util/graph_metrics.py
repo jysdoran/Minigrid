@@ -14,7 +14,7 @@ def shortest_paths(graph: nx.Graph, source: int, target: int, num_paths: int = 1
 
     # graph = nx.Graph(graph)
 
-    if not nx.has_path(graph, source, target):
+    if source == target or not nx.has_path(graph, source, target):
         return []
 
     if num_paths == 1:
@@ -27,20 +27,16 @@ def shortest_path_length(graph: nx.Graph, source: int, target: int) -> int:
     """
     Compute shortest path length from source to target in graph.
     """
-    # graph = nx.Graph(graph)
     return nx.shortest_path_length(graph, source, target)
-    # return len(shortest_paths(graph, source, target, num_paths=1)[0])
 
 
 def resistance_distance(graph: nx.Graph, source: int, target: int) -> int:
     """
     Compute resistance distance from source to target in graph. Graph must be strongly connectected (1 single component)
     """
-    # graph = nx.Graph(graph)
-    if not nx.has_path(graph, source, target):
+    if source == target or not nx.has_path(graph, source, target):
         return np.nan
     else:
-        # component = graph.subgraph(nx.node_connected_component(graph, source))
         return nx.resistance_distance(graph, source, target)
 
 
@@ -48,14 +44,12 @@ def active_node_count(graph: nx.Graph) -> int:
     """
     Compute active node count in graph.
     """
-    # graph = nx.Graph(graph)
     graph.remove_nodes_from(list(nx.isolates(graph)))
     return nx.number_of_nodes(graph)
 
 
 def len_connected_component(graph: nx.Graph, source, target) -> int:
-    # graph = nx.Graph(graph)
-    if not nx.has_path(graph, source, target):
+    if not source == target or nx.has_path(graph, source, target):
         return np.nan
 
     return len(nx.node_connected_component(graph, source))
@@ -65,7 +59,7 @@ def is_solvable(graph: nx.Graph, source, target) -> bool:
     """
     Check if the graph is solvable.
     """
-    return nx.has_path(graph, source, target)
+    return nx.has_path(graph, source, target) and source != target
 
 
 def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int, target: int):
@@ -78,7 +72,7 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int, target: int
     else:
         raise ValueError("graph must be a DGLGraph or nx.Graph")
     graph = nx.Graph(graph)
-    if not nx.has_path(graph, source, target):
+    if source == target or not nx.has_path(graph, source, target):
         connected = False
     else:
         connected = True
@@ -91,18 +85,20 @@ def compute_metrics(graphs: Union[dgl.DGLGraph, nx.Graph],
                     start_nodes: Iterable[int], goal_nodes: Iterable[int]) -> Dict[str, List[float]]:
     """
      Compute nx specific metrics. Also returns the always solvable graph.
+     If the graph is not solvable, the metrics are set to np.nan.
+     Assumes the metrics["valid"] as already been computed.
     """
 
     graphs_nx = []
     for i, graph in enumerate(graphs):
         start_node = int(start_nodes[i])
         goal_node = int(goal_nodes[i])
-        try:
-            solvable = metrics['solvable'][i]
-        except IndexError:
-            graph, solvable = prepare_graph(graph, start_node, goal_node)
-            metrics["solvable"].append(solvable)
+        graph, solvable = prepare_graph(graph, start_node, goal_node)
         graphs_nx.append(graph)
+        try:
+            _ = metrics['solvable'][i]
+        except IndexError:
+            metrics["solvable"].append(solvable)
         if not solvable:  # then this metrics do not make sense
             metrics["shortest_path"].append(np.nan)
             metrics["resistance"].append(np.nan)

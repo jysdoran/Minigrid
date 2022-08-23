@@ -232,15 +232,15 @@ class GraphVAELogger(pl.Callback):
         if self.force_valid_reconstructions:
             logits_Fx[..., pl_module.decoder.attributes.index("start")],\
             logits_Fx[..., pl_module.decoder.attributes.index("goal")], \
-            start_nodes_valid, goal_nodes_valid = \
+            start_nodes_valid, goal_nodes_valid, \
+                is_valid = \
                 tr.Nav2DTransforms.force_valid_layout(
                 rec_graphs_nx,
                 logits_Fx[..., pl_module.decoder.attributes.index("start")],
                 logits_Fx[..., pl_module.decoder.attributes.index("goal")])
 
-            reconstruction_metrics_force_valid = {k: [] for k in ["shortest_path", "resistance", "navigable_nodes"]}
-            reconstruction_metrics_force_valid["valid"] = [True] * len(logits_Fx)
-            reconstruction_metrics_force_valid["solvable"] = [True] * len(logits_Fx)
+            reconstruction_metrics_force_valid = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
+            reconstruction_metrics_force_valid["valid"] = is_valid
             reconstruction_metrics_force_valid, _, = compute_metrics(rec_graphs_nx, reconstruction_metrics_force_valid,
                                                                      start_nodes_valid, goal_nodes_valid)
             mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
@@ -261,7 +261,7 @@ class GraphVAELogger(pl.Callback):
             data = data[~torch.isnan(data)]
             to_log[f'metric/{key}/{tag}'] = data.mean()
         if self.force_valid_reconstructions:
-            for key in ["unique", "shortest_path", "resistance", "navigable_nodes"]:
+            for key in ["valid", "unique", "shortest_path", "resistance", "navigable_nodes"]:
                 data = torch.tensor(reconstruction_metrics_force_valid[key]).to(pl_module.device, torch.float)
                 data = data[~torch.isnan(data)]
                 to_log[f'metric/{key}_force_valid/{tag}'] = data.mean()
@@ -282,7 +282,7 @@ class GraphVAELogger(pl.Callback):
 
         # Store Force Valid Reconstruction metrics
         if self.force_valid_reconstructions:
-            for key in reversed(["unique", "shortest_path", "resistance", "navigable_nodes"]):
+            for key in reversed(["valid", "unique", "shortest_path", "resistance", "navigable_nodes"]):
                 df.insert(0, f"RV_{key}", reconstruction_metrics_force_valid[key])
                 if key in ["shortest_path", "resistance", "navigable_nodes"]:
                     hist_data = torch.tensor(reconstruction_metrics_force_valid[key]).to(pl_module.device, torch.float)

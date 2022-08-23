@@ -39,7 +39,9 @@ configuration:
       neighbor_pooling: sum
 
     mlp:
-      layer_dim: [ 1024, 128 ] #[ 1024, 256 ]
+      num_layers: 2
+      hidden_dim: 1024
+      bottleneck_dim: 128
 
   decoder:
     adjacency: reduced #[full, reduced, null]
@@ -49,15 +51,16 @@ configuration:
     distributions_domains: ["nodes", "nodes"]
     output_dim: #this should be computed according to adjacency, data.graph_max_nodes
       adjacency: null # Auto (max_node-1)*2
-      attributes: ${data.dataset.max_nodes} # Auto (max_nodes)
+      attributes: ${data.dataset.max_nodes}
     architecture: MLP
     num_layers: 2 #not counting the final multihead layer
-    layer_dim: [ 128, 256 ] # [ 256, 1024 ]
+    bottleneck_dim: 128 #not counting the final multihead layer
+    hidden_dim: 128 #not counting the final multihead layer
 
 # these can change between runs
 hyperparameters:
   loss:
     elbo_coeffs:
       A: 1
-      Fx: [.5, .5]
+      Fx: .25
       beta: 1
