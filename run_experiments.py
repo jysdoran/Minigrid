@@ -25,7 +25,8 @@ def run_experiment(cfg: DictConfig) -> None:
     data_module = GridNavDataModule(dataset_full_dir,
                                     batch_size=cfg.data.dataset.batch_size,
                                     predict_dataset_size=cfg.results.num_embeddings_samples,
-                                    transforms=cfg.data.dataset.transforms)
+                                    transforms=cfg.data.dataset.transforms,
+                                    num_workers=cfg.num_cpus)
 
     model = hydra.utils.instantiate(config=cfg.models,
                                     config_model=cfg.models.configuration,

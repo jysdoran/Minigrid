@@ -180,7 +180,7 @@ class GridNav_Dataset(VisionDataset):
 
 class GridNavDataModule(pl.LightningDataModule):
     def __init__(self, data_dir: str = "", batch_size: int = 32, predict_dataset_size: int = 2048,
-                 transform=None, **kwargs):
+                 transform=None, num_workers: int = 0, **kwargs):
         super().__init__()
         #sampler = dgl.dataloading.GraphDataLoader()
         self.data_dir = data_dir
@@ -189,6 +189,7 @@ class GridNavDataModule(pl.LightningDataModule):
         self.transform = transform
         self.samples = {}
         self.dataset = None
+        self.num_workers = num_workers
         logger.info("Initializing Gridworld Navigation DataModule")
 
     def setup(self, stage=None):
@@ -227,7 +228,7 @@ class GridNavDataModule(pl.LightningDataModule):
     def create_dataloader(self, data, batch_size, shuffle=True):
         data_type = self.dataset.dataset_metadata['data_type']
         if data_type == 'graph':
-            data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
+            data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle, num_workers=self.num_workers)
         else:
             raise NotImplementedError("Data Module not currently implemented for non Graph Data.")
         return data_loader
