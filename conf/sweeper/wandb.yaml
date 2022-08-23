@@ -32,7 +32,7 @@ hydra:
 
       # (Optional) Total number of agents to launch (must be >= num_agents)
       # Default is 1.
-      budget: 2
+      budget: 40
 
       # (Optional) Specify the entity for this sweep. Otherwise infer from the
       # environment.
@@ -92,7 +92,7 @@ hydra:
       models.configuration.shared_parameters.latent_dim: [ 64, 128, 256, 512 ]
 
       models.configuration.encoder.gnn.num_layers: [ 5, 8, 12 ]
-      models.configuration.encoder.gnn.layer_dim: [ 8,16 ]
+      models.configuration.encoder.gnn.layer_dim: [ 8, 12 ]
       models.configuration.encoder.mlp.num_layers: [ 2, 3 ]
       models.configuration.encoder.mlp.hidden_dim: [ 1024, 512 ]
       models.configuration.encoder.mlp.bottleneck_dim: [ 128, 256, 512 ]
@@ -108,7 +108,7 @@ hydra:
       optim.lr:
         distribution: log_uniform
         min: -9.21034 #log(0.0001)
-        max: -2.99573 # log(0.05)
+        max: -4.605170185988091 # log(0.01)
 
       # Objective configuration
 
