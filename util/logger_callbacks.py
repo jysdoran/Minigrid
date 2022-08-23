@@ -109,14 +109,14 @@ class GraphVAELogger(pl.Callback):
 
     def on_fit_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         GraphVAELogger.prepare_stored_batch(self.validation_batch, self.validation_step_outputs)
-        self.log_latent_embeddings(trainer, pl_module, "latent_space/val", mode="val")
+        self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="val")
         self.log_latent_interpolation(trainer, pl_module, tag="interpolation/polar", mode="val",
                                       interpolation_scheme="polar")
 
     def on_predict_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         GraphVAELogger.prepare_stored_batch(self.predict_batch, self.predict_step_outputs)
-        self.log_latent_embeddings(trainer, pl_module, "latent_space/prior_generation", mode="prior")
-        self.log_latent_embeddings(trainer, pl_module, "latent_space/train", mode="predict")
+        self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="prior")
+        self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="predict")
         self.log_latent_interpolation(trainer, pl_module, "interpolation/polar",
                                       mode="predict",
                                       num_samples=self.logging_cfg.sample_interpolation.num_samples,
@@ -259,12 +259,12 @@ class GraphVAELogger(pl.Callback):
         for key in reconstruction_metrics.keys():
             data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
             data = data[~torch.isnan(data)]
-            to_log[f'metric/{key}/{tag}'] = data.mean()
+            to_log[f'metric/{tag}/task_metric/R/{key}/{mode}'] = data.mean()
         if self.force_valid_reconstructions:
             for key in ["valid", "unique", "shortest_path", "resistance", "navigable_nodes"]:
                 data = torch.tensor(reconstruction_metrics_force_valid[key]).to(pl_module.device, torch.float)
                 data = data[~torch.isnan(data)]
-                to_log[f'metric/{key}_force_valid/{tag}'] = data.mean()
+                to_log[f'metric/{tag}/task_metric/RV/{key}/{mode}'] = data.mean()
         trainer.logger.log_metrics(to_log, step=trainer.global_step)
         del to_log
 
