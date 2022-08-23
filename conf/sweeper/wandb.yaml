@@ -28,7 +28,7 @@ hydra:
       # reached. Use a multi-processing launcher to have these agents execute
       # simultaneously, otherwise it's a useless option since they'll execute in
       # sequence. Default is 1.
-      num_agents: 1
+      num_agents: 4
 
       # (Optional) Total number of agents to launch (must be >= num_agents)
       # Default is 1.

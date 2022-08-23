@@ -16,11 +16,11 @@ hydra:
     # uses job array for submitting multiple tasks under a single job, each
     # having the below config and not sharing resources between each other
     _target_: hydra_plugins.launchers.my_submitit_launcher.MySlurmLauncher
-    timeout_min: 60
+    timeout_min: 10080
     partition: main  # place your SLURM partition here
-    cpus_per_task: 12  # task = process, cpus = threads if hyperthreading enabled
+    cpus_per_task: ${num_cpus}  # task = process, cpus = threads if hyperthreading enabled
     gres: gpu:1 # place your SLURM gres config here
-    nodes: 4
+    nodes: 1
 
     # num of tasks to spawn in each node (will repeat each task in a job array
     # in each node)
