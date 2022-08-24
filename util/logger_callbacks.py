@@ -230,8 +230,12 @@ class GraphVAELogger(pl.Callback):
 
         Z = Z.cpu().numpy()
 
+        logger.info(f"log_latent_embeddings(): Executed Z = Z.cpu().numpy().")
+
         reconstructed_graphs, start_nodes, goal_nodes, is_valid = \
             tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, pl_module.decoder, correct_A=True)
+
+        logger.info(f"log_latent_embeddings(): Executed tr.Nav2DTransforms.encode_decoder_output_to_graph.")
 
         logger.info(f"log_latent_embeddings(): successfully reconstructed the graphs from the decoder output.")
 
