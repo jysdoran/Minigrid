@@ -16,8 +16,10 @@ from util.logger_callbacks import GraphVAELogger
 
 @hydra.main(version_base=None, config_path="conf", config_name="config.yaml")
 def run_experiment(cfg: DictConfig) -> None:
-    logger = logging.getLogger(__name__)
+
+    logger = setup_logging(cfg.logging_level)
     logger.info("Working directory : {}".format(os.getcwd()))
+    logger.debug("debug test")
     process_cfg(cfg)
     seed_everything(cfg.seed)
     test_mode = True if cfg.run_name == "test" else False
@@ -63,6 +65,17 @@ def run_experiment(cfg: DictConfig) -> None:
                  ckpt_path=None)  # uses last-saved model
 
     logger.info("Done")
+
+def setup_logging(loglevel):
+    # assuming loglevel is bound to the string value obtained from the
+    # command line argument. Convert to upper case to allow the user to
+    # specify --log=DEBUG or --log=debug
+    numeric_level = getattr(logging, loglevel.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError('Invalid log level: %s' % loglevel)
+    logging.basicConfig(level=numeric_level)
+    logger = logging.getLogger(__name__)
+    return logger
 
 def get_dataset_dir(cfg, test_mode=False):
     base_dir = str(Path(__file__).resolve().parent)

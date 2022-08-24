@@ -18,6 +18,7 @@ hydra:
 
 # Global configurations shared between different modules
 run_name: change_me
+logging_level: INFO
 offline: false
 seed: 20211201
 accelerator: gpu
