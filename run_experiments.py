@@ -24,7 +24,7 @@ def run_experiment(cfg: DictConfig) -> None:
     dataset_full_dir, cfg.data.dataset.path = get_dataset_dir(cfg.data.dataset, test_mode)
     data_module = GridNavDataModule(dataset_full_dir,
                                     batch_size=cfg.data.dataset.batch_size,
-                                    predict_dataset_size=cfg.results.num_embeddings_samples,
+                                    predict_dataset_size=cfg.results.num_embedding_samples,
                                     transforms=cfg.data.dataset.transforms,
                                     num_workers=cfg.num_cpus)
 
@@ -90,8 +90,6 @@ def process_cfg(cfg):
             f = lambda x : (x - 1) / 2
             cfg.data.dataset.max_nodes = int(f(gw_data_dim[1]) * f(gw_data_dim[2]))
             cfg.models.configuration.decoder.output_dim.adjacency = int((cfg.data.dataset.max_nodes - 1)*2)
-
-    cfg.results.max_cached_batches = cfg.results.num_embeddings_samples // cfg.data.dataset.batch_size
 
 # #obsolete but keeping it in case we need more custom runnames
 # def get_run_name(tag, model_cfg, dataset_dir):

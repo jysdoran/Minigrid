@@ -4,8 +4,7 @@ plot_every: 1
 attribute_to_gw_encoding: ["start", "goal"] #attributes used to encode a graph to a gridworld
 num_variational_samples: 1000
 num_image_samples: 32
-num_embeddings_samples: 128
-max_cached_batches: null #AUTO
+num_embedding_samples: 128
 force_valid_reconstructions: true
 num_generated_samples: 128
 

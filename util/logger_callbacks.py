@@ -37,9 +37,11 @@ class GraphVAELogger(pl.Callback):
         self.label_descriptors_config = label_descriptors_config
         self.force_valid_reconstructions = logging_cfg.force_valid_reconstructions
         self.num_samples = logging_cfg.num_image_samples
+        self.num_embedding_samples = logging_cfg.num_embedding_samples
         self.num_generated_samples = logging_cfg.num_generated_samples
         self.num_variational_samples_logging = logging_cfg.num_variational_samples
-        self.max_cached_batches = logging_cfg.max_cached_batches
+        self.max_cached_batches = self.num_embedding_samples // self.dataset_cfg.batch_size
+        self.max_cached_batches = max(self.max_cached_batches, 1) #store at least one batch
         self.attributes = dataset_cfg.node_attributes
         self.used_attributes = logging_cfg.attribute_to_gw_encoding
         self.graphs = {}
@@ -108,13 +110,15 @@ class GraphVAELogger(pl.Callback):
         self.log_prior_sampling(trainer, pl_module, tag=f"1_var_samples", num_var_samples=1)
 
     def on_fit_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
-        GraphVAELogger.prepare_stored_batch(self.validation_batch, self.validation_step_outputs)
+        logger.info(f"Progression: Entering on_fit_end()")
+        GraphVAELogger.prepare_stored_batch(self.validation_batch, self.validation_step_outputs, self.num_embedding_samples)
         self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="val")
         self.log_latent_interpolation(trainer, pl_module, tag="interpolation/polar", mode="val",
                                       interpolation_scheme="polar")
 
     def on_predict_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
-        GraphVAELogger.prepare_stored_batch(self.predict_batch, self.predict_step_outputs)
+        logger.info(f"Progression: Entering on_predict_end()")
+        GraphVAELogger.prepare_stored_batch(self.predict_batch, self.predict_step_outputs, self.num_embedding_samples)
         self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="prior")
         self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="predict")
         self.log_latent_interpolation(trainer, pl_module, "interpolation/polar",
@@ -135,6 +139,7 @@ class GraphVAELogger(pl.Callback):
                                       interpolation_scheme=self.logging_cfg.sample_interpolation.interpolation_scheme)
 
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        logger.info(f"Progression: Entering on_test_end()")
         if "test" in self.graphs.keys():
             elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = self.obtain_model_outputs(self.graphs["test"],
                                                                                             pl_module)
@@ -145,15 +150,19 @@ class GraphVAELogger(pl.Callback):
     # Boiler plate code
 
     def on_validation_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        logger.info(f"Progression: Starting new validation epoch...")
         self.clear_stored_batches()
 
     def on_train_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        logger.info(f"Progression: Starting new train epoch...")
         self.clear_stored_batches()
 
     def on_predict_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        logger.info(f"Progression: Starting new predict epoch...")
         self.clear_stored_batches()
 
     def on_test_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        logger.info(f"Starting new test epoch...")
         self.clear_stored_batches()
 
     def on_validation_batch_end(
@@ -183,6 +192,8 @@ class GraphVAELogger(pl.Callback):
     # Logging logic
 
     def log_latent_embeddings(self, trainer, pl_module, tag, mode="val"):
+
+        logger.info(f"Progression: Entering log_latent_embeddings(), mode:{mode}")
 
         graphs, labels, logits_A, logits_Fx = [None]*4
         if mode == "val":
@@ -335,6 +346,8 @@ class GraphVAELogger(pl.Callback):
                                  interpolation_scheme:str= 'linear',
                                  latent_sampling:bool=True):
 
+        logger.info(f"Progression: Entering log_latent_interpolation(), mode:{mode}")
+
         def interpolate_between_pairs(pairs:Tuple[int,int], data:torch.Tensor, num_interpolations:int,
                                       scheme:str)->torch.Tensor:
 
@@ -441,6 +454,7 @@ class GraphVAELogger(pl.Callback):
         self.log_images(trainer, f"interpolated_samples/{tag}/{mode}", [img_grid], mode="RGB")
 
     def log_prior_sampling(self, trainer, pl_module, tag, num_var_samples):
+        logger.info(f"Progression: Entering log_prior_sampling(), tag:{tag}")
         Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
         Z = torch.randn(num_var_samples, self.num_generated_samples, Z_dim).to(device=pl_module.device)
         logits_A, logits_Fx = [f.mean(dim=0) for f in pl_module.decoder(Z)]
@@ -457,6 +471,8 @@ class GraphVAELogger(pl.Callback):
     # Utility methods
 
     def clear_stored_batches(self):
+        logger.info(f"Clearing all stored batches...")
+
         self.validation_batch = {
             "graph": [],
             "label_ids": [],
@@ -479,8 +495,11 @@ class GraphVAELogger(pl.Callback):
         return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std
 
     @staticmethod
-    def prepare_stored_batch(batch_dict, output_dict):
-
+    def prepare_stored_batch(batch_dict, output_dict, max_num_samples):
+        logger.info(f"Preparing the stored batches...")
+        assert len(batch_dict["graph"]) == len(output_dict["loss"]), "Error in prepare_stored_batches(). The number of stored batches and outputs must be the same"
+        logger.info(f"Number of stored batches: {len(batch_dict['graph'])}")
+        logger.info(f"Number of stored batched outputs: {len(output_dict['loss'])}")
         def flatten(l):
             return [item for sublist in l for item in sublist]
 
@@ -488,8 +507,15 @@ class GraphVAELogger(pl.Callback):
         batch_dict["graph"] = flatten(unbatched_graphs)
         batch_dict["label_ids"] = torch.cat(batch_dict["label_ids"])
 
+        logger.info(f"Preparing the stored outputs...")
         for key in output_dict.keys():
             output_dict[key] = torch.cat(output_dict[key])
+
+        for dict in batch_dict, output_dict:
+            for key in dict.keys():
+                dict[key] = dict[key][:max_num_samples]
+
+        logger.info(f"Successfully unpacked the batches and outputs. Number of stored datapoints: {len(batch_dict['graph'])}")
 
     @staticmethod
     def store_batch(batch_dict, output_dict, batch, output):
@@ -514,6 +540,7 @@ class GraphVAELogger(pl.Callback):
         return reconstructed_imgs
 
     def log_images(self, trainer:pl.Trainer, tag:str, images: torch.Tensor, captions:List[str]=None, mode:str=None):
+        logger.info(f"Progression: Entering log_images(), mode:{mode}, tag:{tag}")
         if captions is None:
             captions = [None] * len(images)
 
@@ -524,6 +551,7 @@ class GraphVAELogger(pl.Callback):
         })
 
     def log_prob_heatmaps(self, trainer, pl_module, tag, logits_A, logits_Fx):
+        logger.info(f"Progression: Entering log_prob_heatmaps(), tag:{tag}")
         logits_A, logits_Fx = pl_module.decoder.param_p((logits_A, logits_Fx))
         grid_dim = int(np.sqrt(logits_Fx.shape[-2])) #sqrt(num_nodes)
         heatmap_start = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("start")], grid_dim)
