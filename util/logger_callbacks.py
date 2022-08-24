@@ -216,7 +216,8 @@ class GraphVAELogger(pl.Callback):
             unweighted_elbos = None
             labels = None
 
-        assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0]
+        assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0], f"log_latent_embeddings(): Shape mismatch Z={Z.shape}, logits_A={logits_A.shape}, logits_Fx={logits_Fx.shape}"
+        logger.info(f"log_latent_embeddings(): successfully extracted quantities to be analysed.")
 
         if graphs is not None:
             input_gws = self.encode_graph_to_gridworld(graphs, self.attributes)
@@ -225,10 +226,14 @@ class GraphVAELogger(pl.Callback):
             input_imgs = self.gridworld_to_img(input_gws)
             del input_gws, graphs
 
+        logger.info(f"log_latent_embeddings(): successfully obtained input images.")
+
         Z = Z.cpu().numpy()
 
         reconstructed_graphs, start_nodes, goal_nodes, is_valid = \
             tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, pl_module.decoder, correct_A=True)
+
+        logger.info(f"log_latent_embeddings(): successfully reconstructed the graphs from the decoder output.")
 
         reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
         reconstruction_metrics["valid"] = is_valid.tolist()
@@ -238,7 +243,11 @@ class GraphVAELogger(pl.Callback):
         reconstruction_metrics["unique"] = (check_unique(mode_A) & check_unique(mode_Fx)).tolist()
         del is_valid, reconstructed_graphs
 
+        logger.info(f"log_latent_embeddings(): successfully obtained the graph metrics from the decoded graphs.")
+
         reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+
+        logger.info(f"log_latent_embeddings(): decoded graphs to img successfull.")
 
         if self.force_valid_reconstructions:
             logits_Fx[..., pl_module.decoder.attributes.index("start")],\
@@ -250,6 +259,8 @@ class GraphVAELogger(pl.Callback):
                 logits_Fx[..., pl_module.decoder.attributes.index("start")],
                 logits_Fx[..., pl_module.decoder.attributes.index("goal")])
 
+            logger.info(f"log_latent_embeddings(): successfully obtained forced valid reconstructions of the decoded graphs.")
+
             reconstruction_metrics_force_valid = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
             reconstruction_metrics_force_valid["valid"] = is_valid
             reconstruction_metrics_force_valid, _, = compute_metrics(rec_graphs_nx, reconstruction_metrics_force_valid,
@@ -257,14 +268,19 @@ class GraphVAELogger(pl.Callback):
             mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
             reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) & check_unique(mode_Fx)).tolist()
             del start_nodes_valid, goal_nodes_valid, mode_A, mode_Fx
+            logger.info(f"log_latent_embeddings(): successfully obtained metrics for the force valid decoded graphs.")
             reconstructed_imgs_force_valid = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+
+            logger.info(f"log_latent_embeddings(): force valid decoded graphs to img successful.")
 
         del logits_A, logits_Fx, start_nodes, goal_nodes, rec_graphs_nx
 
         if self.label_descriptors_config is not None:
             reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
+            logger.info(f"log_latent_embeddings(): decoded graph metrics normalised.")
             if self.force_valid_reconstructions:
                 reconstruction_metrics_force_valid = self.normalise_metrics(reconstruction_metrics_force_valid, device=pl_module.device)
+                logger.info(f"log_latent_embeddings(): force valid decoded graph metrics normalised.")
 
         to_log = {}
         for key in reconstruction_metrics.keys():
@@ -278,6 +294,7 @@ class GraphVAELogger(pl.Callback):
                 to_log[f'metric/{tag}/task_metric/RV/{key}/{mode}'] = data.mean()
         trainer.logger.log_metrics(to_log, step=trainer.global_step)
         del to_log
+        logger.info(f"log_latent_embeddings(): logged metrics to wandb.")
 
         col_names = ["Z"+str(i) for i in range(Z.shape[-1])]
         df = pd.DataFrame(Z, columns=col_names)
@@ -304,6 +321,7 @@ class GraphVAELogger(pl.Callback):
                             "global_step" : trainer.global_step
                             })
             del reconstruction_metrics_force_valid
+            logger.info(f"log_latent_embeddings(): logged force valid metrics distributions to wandb.")
 
         # Store Reconstruction metrics
         for key in reversed(["valid", "solvable", "unique", "shortest_path", "resistance", "navigable_nodes"]):
@@ -317,9 +335,11 @@ class GraphVAELogger(pl.Callback):
                         "global_step"                   : trainer.global_step
                         })
         del reconstruction_metrics, hist_data
+        logger.info(f"log_latent_embeddings(): logged reconstruction metrics distributions to wandb.")
 
         if unweighted_elbos is not None:
             df.insert(0, "Unweighted_elbos", unweighted_elbos.tolist())
+            logger.info(f"log_latent_embeddings(): unweighted_elbos added to dataframe.")
 
         if self.force_valid_reconstructions:
             df.insert(0, "RV:Reconstructions_Valid", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs_force_valid])
@@ -334,6 +354,7 @@ class GraphVAELogger(pl.Callback):
             ),
             "global_step": trainer.global_step
         })
+        logger.info(f"log_latent_embeddings(): Logged dataframe to wandb.")
 
     def log_latent_interpolation(self, trainer:pl.Trainer,
                                  pl_module:pl.LightningModule,

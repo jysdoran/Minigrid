@@ -7,7 +7,7 @@ hydra:
     # See https://docs.wandb.ai/guides/sweeps/configuration for types of configs
     wandb_sweep_config:
       # (Required) The name of the sweep, displayed in the W&B UI.
-      name: hydra_plugin_test
+      name: slurm_run
 
       # (Required) Specify the search strategy.
       method: random

@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import hydra
 from pathlib import Path #TODO replace by hydra?
 from omegaconf import DictConfig, OmegaConf
@@ -35,8 +36,11 @@ def run_experiment(cfg: DictConfig) -> None:
                                     config_logging =cfg.results,
                                     _recursive_=False)
 
-    wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd())
-    wandb_logger.experiment.name = cfg.run_name + "_" + wandb_logger.experiment.name
+    wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd(), offline=cfg.offline)
+    if wandb_logger.experiment.name is not None:
+        wandb_logger.experiment.name = cfg.run_name + "_" + wandb_logger.experiment.name
+    else:
+        wandb_logger.experiment.name = cfg.run_name
 
     logger.info("\n" + OmegaConf.to_yaml(cfg))
 
