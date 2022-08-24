@@ -17,6 +17,7 @@ hydra:
     # having the below config and not sharing resources between each other
     _target_: hydra_plugins.launchers.my_submitit_launcher.MySlurmLauncher
     timeout_min: 10080
+    time: 7:00:00
     partition: main  # place your SLURM partition here
     cpus_per_task: ${num_cpus}  # task = process, cpus = threads if hyperthreading enabled
     gres: gpu:1 # place your SLURM gres config here
