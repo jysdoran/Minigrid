@@ -318,7 +318,7 @@ class GraphVAELogger(pl.Callback):
             df.insert(0, "Label_ids", labels.tolist())
 
         trainer.logger.experiment.log({
-            f"tables/{tag}": wandb.Table(
+            f"tables/{tag}/{mode}": wandb.Table(
                 dataframe=df
             ),
             "global_step": trainer.global_step
