@@ -21,7 +21,6 @@ def run_experiment(cfg: DictConfig) -> None:
 
     logger = logging.getLogger(__name__)
     logger.info("Working directory : {}".format(os.getcwd()))
-    logger.debug("debug test")
     process_cfg(cfg)
     seed_everything(cfg.seed)
     test_mode = True if cfg.run_name == "test" else False
