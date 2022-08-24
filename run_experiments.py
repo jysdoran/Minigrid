@@ -1,7 +1,9 @@
 import logging
 import os
 import sys
+# TODO: to be removed later
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+os.environ["CUDA_LAUNCH_BLOCKING"] = 1
 import hydra
 from pathlib import Path #TODO replace by hydra?
 from omegaconf import DictConfig, OmegaConf
