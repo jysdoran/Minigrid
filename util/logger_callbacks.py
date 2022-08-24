@@ -186,7 +186,9 @@ class GraphVAELogger(pl.Callback):
         batch_idx: int,
         data_loader_idx: int = 0,
     ) -> None:
+        logger.debug(f"Processed predict batch {batch_idx}.")
         if batch_idx < self.max_cached_batches:
+            logger.debug(f"Storing predict batch {batch_idx} out of {self.max_cached_batches}.")
             self.store_batch(self.predict_batch, self.predict_step_outputs, batch, outputs)
 
     # Logging logic
@@ -513,8 +515,10 @@ class GraphVAELogger(pl.Callback):
         self.predict_batch = deepcopy(self.validation_batch)
         self.predict_step_outputs = deepcopy(self.validation_step_outputs)
 
-    def obtain_model_outputs(self, graphs, pl_module):
+        logger.info(f"Cleared all stored batches.")
 
+    def obtain_model_outputs(self, graphs, pl_module):
+        logger.debug(f"Progression: Entering obtain_model_outputs()")
         elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
             pl_module.all_model_outputs_pathwise(graphs, num_samples=pl_module.hparams.config_logging.num_variational_samples)
         return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std
@@ -555,6 +559,8 @@ class GraphVAELogger(pl.Callback):
         output_dict["logits_Fx"].append(logits_Fx)
         output_dict["mean"].append(mean)
         output_dict["std"].append(std)
+
+        logger.debug(f"Successfully stored batch.")
 
     def obtain_imgs(self, logits_A:torch.Tensor, logits_Fx:torch.Tensor, pl_module:pl.LightningModule) -> torch.Tensor:
 

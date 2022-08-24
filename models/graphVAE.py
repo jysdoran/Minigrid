@@ -738,7 +738,6 @@ class LightningGraphVAE(pl.LightningModule):
         del validation_step_outputs
 
         std_of_abs_mean = torch.linalg.norm(mean, dim=-1).std().item()
-        #TODO: change with softplus
         mean_of_abs_std = torch.square(std).sum(axis=-1).sqrt().mean().item()
         mean_of_abs_std /= std.shape[-1] #normalise by dimensionality of Z space
 
@@ -760,6 +759,9 @@ class LightningGraphVAE(pl.LightningModule):
 
     def test_epoch_end(self, test_step_outputs):
         return self.validation_epoch_end(test_step_outputs)
+
+    # def predict_epoch_end(self, predict_step_outputs):
+    #     return self.validation_epoch_end(predict_step_outputs)
 
     def configure_optimizers(self):
         optimizer = hydra.utils.instantiate(self.hparams.config_optim, params=self.parameters())
