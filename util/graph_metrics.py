@@ -72,7 +72,14 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int, target: int
     else:
         raise ValueError("graph must be a DGLGraph or nx.Graph")
     graph = nx.Graph(graph)
-    if source == target or not nx.has_path(graph, source, target):
+    nodes = set(graph.nodes)
+
+    # Catch any unwanted exceptions here
+    if source == target or source not in nodes or target not in nodes:
+        connected = False
+        return graph, connected
+
+    if not nx.has_path(graph, source, target):
         connected = False
     else:
         connected = True
@@ -96,8 +103,13 @@ def compute_metrics(graphs: Union[dgl.DGLGraph, nx.Graph],
         graph, solvable = prepare_graph(graph, start_node, goal_node)
         graphs_nx.append(graph)
         try:
+            nodes = set(graph.nodes)
+            assert start_node in nodes and goal_node in nodes
             _ = metrics['solvable'][i]
-        except IndexError:
+        except (IndexError, AssertionError) as e:
+            if isinstance(e, AssertionError):
+                metrics['valid'][i] = False
+                solvable = False
             metrics["solvable"].append(solvable)
         if not solvable:  # then this metrics do not make sense
             metrics["shortest_path"].append(np.nan)
