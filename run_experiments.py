@@ -5,6 +5,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.environ["CUDA_LAUNCH_BLOCKING"] = str(1)
 import hydra
+import wandb
 from pathlib import Path #TODO replace by hydra?
 from omegaconf import DictConfig, OmegaConf
 
@@ -64,6 +65,9 @@ def run_experiment(cfg: DictConfig) -> None:
     # evaluate the model on a test set
     trainer.test(datamodule=data_module,
                  ckpt_path=None)  # uses last-saved model
+
+    logger.info("Terminating wandb...")
+    wandb.finish()
 
     logger.info("Done")
 
