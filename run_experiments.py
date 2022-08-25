@@ -39,8 +39,8 @@ def run_experiment(cfg: DictConfig) -> None:
                                     hparams_model=cfg.models.hyperparameters,
                                     config_logging =cfg.results,
                                     _recursive_=False)
-
-    wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd(), offline=cfg.offline)
+    #wandb.login(key='x'*40)
+    wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd(), offline=cfg.offline, entity="francelico")
     if wandb_logger.experiment.name is not None:
         wandb_logger.experiment.name = cfg.run_name + "_" + wandb_logger.experiment.name
     else:

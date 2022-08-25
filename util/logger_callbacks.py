@@ -80,14 +80,17 @@ class GraphVAELogger(pl.Callback):
             self.gw[key] = self.encode_graph_to_gridworld(self.graphs[key], self.attributes).to(device)
             self.imgs[key] = self.gridworld_to_img(self.gw[key]).to(device)
 
+        self.resize_transform = torchvision.transforms.Resize((100, 100),
+                                               interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+
     # Main logging logic
 
     def on_fit_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
 
         try:
-            self.log_images(trainer, "dataset/train", self.imgs["train"], self.labels["train"])
-            self.log_images(trainer, "dataset/val", self.imgs["val"], self.labels["val"])
-            self.log_images(trainer, "dataset/test", self.imgs["test"], self.labels["test"])
+            self.log_images(trainer, "dataset/train", self.imgs["train"], self.labels["train"], mode="RGBA")
+            self.log_images(trainer, "dataset/val", self.imgs["val"], self.labels["val"], mode="RGBA")
+            self.log_images(trainer, "dataset/test", self.imgs["test"], self.labels["test"], mode="RGBA")
         except KeyError as e:
             logger.info(f"{e} dataset was not supplied in the samples provided to the GraphVAELogger")
 
@@ -96,14 +99,14 @@ class GraphVAELogger(pl.Callback):
             elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = self.obtain_model_outputs(self.graphs["train"], pl_module)
             reconstructed_imgs_train = self.obtain_imgs(logits_A, logits_Fx, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["train"], unweighted_elbos)]
-            self.log_images(trainer, "reconstructions/train", reconstructed_imgs_train, captions=captions)
+            self.log_images(trainer, "reconstructions/train", reconstructed_imgs_train, captions=captions, mode="RGBA")
             self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/train", logits_A=logits_A, logits_Fx=logits_Fx)
 
         if "val" in self.graphs.keys():
             elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = self.obtain_model_outputs(self.graphs["val"], pl_module)
             reconstructed_imgs_val = self.obtain_imgs(logits_A, logits_Fx, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["val"], unweighted_elbos)]
-            self.log_images(trainer, "reconstructions/val", reconstructed_imgs_val, captions=captions)
+            self.log_images(trainer, "reconstructions/val", reconstructed_imgs_val, captions=captions, mode="RGBA")
             self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/val", logits_A=logits_A, logits_Fx=logits_Fx)
 
         self.log_prior_sampling(trainer, pl_module, tag=f"{self.num_variational_samples_logging}_var_samples", num_var_samples=self.num_variational_samples_logging)
@@ -145,7 +148,7 @@ class GraphVAELogger(pl.Callback):
                                                                                             pl_module)
             reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["test"], unweighted_elbos)]
-            self.log_images(trainer, "reconstructions/test", reconstructed_imgs, captions=captions)
+            self.log_images(trainer, "reconstructions/test", reconstructed_imgs, captions=captions, mode="RGBA")
 
     # Boiler plate code
 
@@ -470,15 +473,8 @@ class GraphVAELogger(pl.Callback):
         del interp_Z
 
         imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
-        imgs = rgba2rgb(imgs)
 
-        #TODO: add conversion to imgs, also should sitch the stored logits_A, logits_Fx (or not include them above)
-        # also only get up to num_samples array size for Z.
-        resize = torchvision.transforms.Resize((100, 100),
-                                               interpolation=torchvision.transforms.InterpolationMode.NEAREST)
-        img_grid = torchvision.utils.make_grid(resize(imgs), nrow=len(distances.keys()))
-
-        self.log_images(trainer, f"interpolated_samples/{tag}/{mode}", [img_grid], mode="RGB")
+        self.log_images(trainer, f"interpolated_samples/{tag}/{mode}", imgs, mode="RGBA", nrow=len(distances.keys()))
 
     def log_prior_sampling(self, trainer, pl_module, tag, num_var_samples):
         logger.info(f"Progression: Entering log_prior_sampling(), tag:{tag}")
@@ -492,7 +488,7 @@ class GraphVAELogger(pl.Callback):
             trainer.global_step)
 
         generated_imgs = self.obtain_imgs(logits_A[:self.num_samples], logits_Fx[:self.num_samples], pl_module)
-        self.log_images(trainer, f"generated/prior/{tag}", generated_imgs)
+        self.log_images(trainer, f"generated/prior/{tag}", generated_imgs, mode="RGBA")
         self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=f"generated/prior/{tag}", logits_A=logits_A[:self.num_samples], logits_Fx=logits_Fx[:self.num_samples])
 
     # Utility methods
@@ -570,14 +566,21 @@ class GraphVAELogger(pl.Callback):
 
         return reconstructed_imgs
 
-    def log_images(self, trainer:pl.Trainer, tag:str, images: torch.Tensor, captions:List[str]=None, mode:str=None):
+    def log_images(self, trainer:pl.Trainer, tag:str, images: torch.Tensor, captions:List[str]=None, mode:str=None, nrow:int=8):
         logger.info(f"Progression: Entering log_images(), mode:{mode}, tag:{tag}")
+        if mode == "RGBA":
+            images = rgba2rgb(images)
+
+            # TODO: add conversion to imgs, also should sitch the stored logits_A, logits_Fx (or not include them above)
+            # also only get up to num_samples array size for Z.
+
+        img_grid = torchvision.utils.make_grid(self.resize_transform(images), nrow=nrow)
+        #TODO: reimplement captions
         if captions is None:
             captions = [None] * len(images)
 
         trainer.logger.experiment.log({
-            f"images/{tag}": [wandb.Image(x, caption=c, mode=mode)
-                         for x, c in zip(images, captions)],
+            f"images/{tag}": wandb.Image(img_grid), #[wandb.Image(img_grid, caption=c, mode=mode) for x, c in zip(images, captions)],
             "global_step": trainer.global_step
         })
 
