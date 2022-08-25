@@ -36,7 +36,7 @@ hydra:
 
       # (Optional) Specify the entity for this sweep. Otherwise infer from the
       # environment.
-      # entity: your_entity
+      entity: francelico
 
       # (Optional) Specify the project this sweep will be under. Projects are
       # used to organize models that can be compared, working on the same
