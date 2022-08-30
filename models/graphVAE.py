@@ -697,7 +697,7 @@ class LightningGraphVAE(pl.LightningModule):
         return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std
 
     def elbo(self, X):
-        elbos, _, _, _, _, _ = self.all_model_outputs_pathwise(X)
+        elbos, _, _, _, _, _ = self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_model.model.num_variational_samples)
         return elbos
 
     def elbo_to_loss(self, elbos):
@@ -719,46 +719,42 @@ class LightningGraphVAE(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         X, labels = batch
         elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
-            self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_logging.num_variational_samples)
+            self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_model.model.num_variational_samples)
         loss = self.elbo_to_loss(elbos).reshape(1)
         return loss, unweighted_elbos, logits_A, logits_Fx, mean, std
 
     def predict_step(self, batch, batch_idx):
-        X, labels = batch
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
-            self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_logging.num_variational_samples)
-        loss = self.elbo_to_loss(elbos).reshape(1)
-        return loss, unweighted_elbos, logits_A, logits_Fx, mean, std
+        return self.validation_step(batch, batch_idx)
 
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx)
 
-    def validation_epoch_end(self, validation_step_outputs):
-        loss, unweighted_elbos, logits_A, logits_Fx, mean, std = map(torch.cat, zip(*validation_step_outputs))
-        del validation_step_outputs
-
-        std_of_abs_mean = torch.linalg.norm(mean, dim=-1).std().item()
-        mean_of_abs_std = torch.square(std).sum(axis=-1).sqrt().mean().item()
-        mean_of_abs_std /= std.shape[-1] #normalise by dimensionality of Z space
-
-        self.log('loss/val', loss, on_step=False, on_epoch=True)
-        self.log('unweighted_elbo/val', unweighted_elbos.mean(dim=0), on_step=False, on_epoch=True)
-        self.log('metric/mean/std/val', std_of_abs_mean, on_step=False, on_epoch=True)
-        self.log('metric/sigma/mean/val', mean_of_abs_std, on_step=False, on_epoch=True)
-        self.log('metric/entropy/A/val', self.decoder.entropy_A(logits_A))
-        self.log('metric/entropy/Fx/val', self.decoder.entropy_Fx(logits_Fx).sum())
-
-        flattened_logits_A = torch.flatten(self.decoder.param_pA(logits_A))
-        flattened_logits_Fx = torch.flatten(self.decoder.param_pFx(logits_Fx))
-        self.logger.experiment.log(
-            {"distributions/logits/A/val": wandb.Histogram(flattened_logits_A.to("cpu")),
-             "global_step": self.global_step})
-        self.logger.experiment.log(
-            {"distributions/logits/Fx/val": wandb.Histogram(flattened_logits_Fx.to("cpu")),
-             "global_step": self.global_step})
-
-    def test_epoch_end(self, test_step_outputs):
-        return self.validation_epoch_end(test_step_outputs)
+    # def validation_epoch_end(self, validation_step_outputs):
+    #     loss, unweighted_elbos, logits_A, logits_Fx, mean, std = map(torch.cat, zip(*validation_step_outputs))
+    #     del validation_step_outputs
+    #
+    #     std_of_abs_mean = torch.linalg.norm(mean, dim=-1).std().item()
+    #     mean_of_abs_std = torch.square(std).sum(axis=-1).sqrt().mean().item()
+    #     mean_of_abs_std /= std.shape[-1] #normalise by dimensionality of Z space
+    #
+    #     self.log('loss/val', loss, on_step=False, on_epoch=True)
+    #     self.log('unweighted_elbo/val', unweighted_elbos.mean(dim=0), on_step=False, on_epoch=True)
+    #     self.log('metric/mean/std/val', std_of_abs_mean, on_step=False, on_epoch=True)
+    #     self.log('metric/sigma/mean/val', mean_of_abs_std, on_step=False, on_epoch=True)
+    #     self.log('metric/entropy/A/val', self.decoder.entropy_A(logits_A))
+    #     self.log('metric/entropy/Fx/val', self.decoder.entropy_Fx(logits_Fx).sum())
+    #
+    #     flattened_logits_A = torch.flatten(self.decoder.param_pA(logits_A))
+    #     flattened_logits_Fx = torch.flatten(self.decoder.param_pFx(logits_Fx))
+    #     self.logger.experiment.log(
+    #         {"distributions/logits/A/val": wandb.Histogram(flattened_logits_A.to("cpu")),
+    #          "global_step": self.global_step})
+    #     self.logger.experiment.log(
+    #         {"distributions/logits/Fx/val": wandb.Histogram(flattened_logits_Fx.to("cpu")),
+    #          "global_step": self.global_step})
+    #
+    # def test_epoch_end(self, test_step_outputs):
+    #     return self.validation_epoch_end(test_step_outputs)
 
     # def predict_epoch_end(self, predict_step_outputs):
     #     return self.validation_epoch_end(predict_step_outputs)

@@ -29,7 +29,7 @@ def run_experiment(cfg: DictConfig) -> None:
     dataset_full_dir, cfg.data.dataset.path = get_dataset_dir(cfg.data.dataset, test_mode)
     data_module = GridNavDataModule(dataset_full_dir,
                                     batch_size=cfg.data.dataset.batch_size,
-                                    predict_dataset_size=cfg.results.num_embedding_samples,
+                                    num_samples=cfg.results.num_stored_samples,
                                     transforms=cfg.data.dataset.transforms,
                                     num_workers=cfg.num_cpus)
 
@@ -59,8 +59,7 @@ def run_experiment(cfg: DictConfig) -> None:
     ]
     trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs,
                          logger=wandb_logger, callbacks=logging_callbacks)
-    trainer.fit(model, data_module)
-    # run prediction (latent space viz and interpolation) in inference mode
+    trainer.fit(model, data_module, val_dataloaders=[data_module.val_dataloader(), data_module.predict_dataloader()])    # run prediction (latent space viz and interpolation) in inference mode
     trainer.predict(dataloaders=data_module.predict_dataloader())
     # evaluate the model on a test set
     trainer.test(datamodule=data_module,

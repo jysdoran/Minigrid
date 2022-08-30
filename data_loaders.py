@@ -179,13 +179,13 @@ class GridNav_Dataset(VisionDataset):
 
 
 class GridNavDataModule(pl.LightningDataModule):
-    def __init__(self, data_dir: str = "", batch_size: int = 32, predict_dataset_size: int = 2048,
+    def __init__(self, data_dir: str = "", batch_size: int = 32, num_samples: int = 2048,
                  transform=None, num_workers: int = 0, **kwargs):
         super().__init__()
         #sampler = dgl.dataloading.GraphDataLoader()
         self.data_dir = data_dir
         self.batch_size = batch_size
-        self.predict_dataset_size = predict_dataset_size
+        self.num_samples = num_samples
         self.transform = transform
         self.samples = {}
         self.dataset = None
@@ -200,13 +200,17 @@ class GridNavDataModule(pl.LightningDataModule):
             self.dataset = train.dataset
             self.train = train
             self.val = val
-            split_predict = [self.predict_dataset_size, len(self.train) - self.predict_dataset_size]
+            split_predict = [self.num_samples, len(self.train) - self.num_samples]
             self.predict, _ = random_split(self.train, split_predict) #get a small amount of train data for predict step
-            self.samples["train"] = next(iter(self.predict_dataloader())) #"reference" train samples always from predict dataloader
-            self.samples["val"] = next(iter(self.val_dataloader()))
+            #TODO: figure out how to obtain num_samples (breaking the dependency to the batch_size, but still getting shuffled data)
+            n_samples = min(self.num_samples, len(self.predict))
+            self.samples["train"] = next(iter(self.create_dataloader(self.predict, batch_size=n_samples))) #"reference" train samples always from predict dataloader
+            n_samples = min(self.num_samples, len(self.val))
+            self.samples["val"] = next(iter(self.create_dataloader(self.val, batch_size=n_samples)))
         if stage == 'test' or stage is None:
             self.test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
-            self.samples["test"] = next(iter(self.test_dataloader()))
+            n_samples = min(self.num_samples, len(self.test))
+            self.samples["test"] = next(iter(self.create_dataloader(self.test, batch_size=n_samples)))
 
     def train_dataloader(self):
         loader = self.create_dataloader(self.train, batch_size=self.batch_size, shuffle=True)
