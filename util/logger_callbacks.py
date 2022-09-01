@@ -327,7 +327,7 @@ class GraphVAELogger(pl.Callback):
         reconstruction_metrics, rec_graphs_nx = \
             compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes, goal_nodes)
         mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
-        reconstruction_metrics["unique"] = (check_unique(mode_A) & check_unique(mode_Fx)).tolist()
+        reconstruction_metrics["unique"] = (check_unique(mode_A) | check_unique(mode_Fx)).tolist()
         del is_valid, reconstructed_graphs
 
         logger.info(f"log_latent_embeddings(): successfully obtained the graph metrics from the decoded graphs.")
@@ -353,7 +353,7 @@ class GraphVAELogger(pl.Callback):
             reconstruction_metrics_force_valid, _, = compute_metrics(rec_graphs_nx, reconstruction_metrics_force_valid,
                                                                      start_nodes_valid, goal_nodes_valid)
             mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
-            reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) & check_unique(mode_Fx)).tolist()
+            reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) | check_unique(mode_Fx)).tolist()
             del start_nodes_valid, goal_nodes_valid, mode_A, mode_Fx
             logger.info(f"log_latent_embeddings(): successfully obtained metrics for the force valid decoded graphs.")
             reconstructed_imgs_force_valid = self.obtain_imgs(logits_A, logits_Fx, pl_module)
