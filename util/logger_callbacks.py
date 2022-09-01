@@ -71,11 +71,15 @@ class GraphVAELogger(pl.Callback):
             for key in ["train", "val", "test"]:
                 self.graphs[key], self.labels[key] = samples[key]
                 self.graphs[key] = dgl.unbatch(self.graphs[key])
-                self.graphs[key] = self.graphs[key][:self.num_image_samples]
-                self.labels[key] = self.labels[key][:self.num_image_samples]
+                self.graphs[key] = self.graphs[key]
+                self.labels[key] = self.labels[key]
                 self.graphs[key] = dgl.batch(self.graphs[key]).to(device)
                 self.labels[key] = self.labels[key].to(device)
-        except KeyError:
+                if len(self.labels[key]) < self.num_stored_samples:
+                    raise ValueError(f"Not enough samples for {key} data module."
+                                     f"Number of samples available for storage in data module: {len(self.labels[key])}."
+                                     f"Number of samples to be stored: {self.num_stored_samples}.")
+        except KeyError as e: #TODO: why does it catch the value error?
             logger.info(f"{key} dataset was not supplied in the samples provided to the GraphVAELogger")
 
         for key in self.graphs.keys():
@@ -101,7 +105,6 @@ class GraphVAELogger(pl.Callback):
         self.batches_prepared = GraphVAELogger.prepare_stored_batch(self.validation_batch, self.validation_step_outputs, self.num_stored_samples)
         self.log_epoch_metrics(trainer, pl_module, self.predict_step_outputs, "predict")
         self.log_epoch_metrics(trainer, pl_module, self.validation_step_outputs, "val")
-        self.clear_stored_batches()
         if "train" in self.graphs.keys():
             _, unweighted_elbos, logits_A, logits_Fx, _, _  = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_image_samples, num_var_samples=1)
             reconstructed_imgs_train = self.obtain_imgs(logits_A, logits_Fx, pl_module)
@@ -133,7 +136,22 @@ class GraphVAELogger(pl.Callback):
 
     def log_epoch_metrics(self, trainer, pl_module, outputs, mode):
 
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = outputs
+        if isinstance(outputs, dict):
+            #TODO check loss
+            loss = outputs["loss"]
+            unweighted_elbos = outputs["unweighted_elbos"]
+            logits_A = outputs["logits_A"]
+            logits_Fx = outputs["logits_Fx"]
+            mean = outputs["mean"]
+            std = outputs["std"]
+        elif isinstance(outputs, tuple) or isinstance(outputs, list):
+            assert len(outputs) == 6, "GraphVAElogger.log_epoch_metrics() - incorrect number of outputs provided. " \
+                                      f"Expected {6} outputs (elbos, unweighted_elbos, logits_A, logits_Fx, mean, std)," \
+                                      f"got {len(outputs)} instead."
+            elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = outputs
+            loss = -elbos.mean()
+        else:
+            raise TypeError("GraphVAElogger.log_epoch_metrics() - output provided")
 
         to_log = {
                 f'unweighted_elbo/{mode}': unweighted_elbos.mean(dim=0),
@@ -143,7 +161,7 @@ class GraphVAELogger(pl.Callback):
                 f'metric/entropy/Fx/{mode}': pl_module.decoder.entropy_A(logits_Fx).sum(),
             }
         if mode not in ["train", "predict"]:
-            to_log[f"loss/{mode}"] = - elbos.mean()
+            to_log[f"loss/{mode}"] = loss
 
         trainer.logger.log_metrics(to_log, step=trainer.global_step)
 
@@ -157,9 +175,8 @@ class GraphVAELogger(pl.Callback):
              "global_step": trainer.global_step})
 
 
-    def on_fit_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
-        logger.info(f"Progression: Entering on_fit_end()")
-        self.batches_prepared = GraphVAELogger.prepare_stored_batch(self.validation_batch, self.validation_step_outputs, self.num_stored_samples)
+    def on_train_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        logger.info(f"Progression: Entering on_train_end()")
         self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="val")
         #TODO remove later
         outputs = self.obtain_model_outputs(self.graphs["val"], pl_module, num_samples=self.num_embedding_samples, num_var_samples=self.num_variational_samples_logging)
@@ -279,7 +296,7 @@ class GraphVAELogger(pl.Callback):
             unweighted_elbos = None
             labels = None
         elif mode == "custom":
-            _, unweighted_elbos, logits_A, logits_Fx, Z, _ = [f.mean(dim=0) for f in outputs]
+            _, unweighted_elbos, logits_A, logits_Fx, Z, _ = outputs
 
 
         assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0], f"log_latent_embeddings(): Shape mismatch Z={Z.shape}, logits_A={logits_A.shape}, logits_Fx={logits_Fx.shape}"
@@ -294,7 +311,7 @@ class GraphVAELogger(pl.Callback):
 
         logger.info(f"log_latent_embeddings(): successfully obtained input images.")
 
-        Z = Z.cpu().numpy()
+        Z = Z.detach().cpu().numpy()
 
         logger.info(f"log_latent_embeddings(): Executed Z = Z.cpu().numpy().")
 
@@ -543,7 +560,7 @@ class GraphVAELogger(pl.Callback):
         logger.info(f"Progression: Entering log_prior_sampling(), tag:{tag}")
         tag = f"generated/prior/{tag}" if tag is not None else "generated/prior"
         Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
-        Z = torch.randn(self.num_generated_samples, Z_dim).to(device=pl_module.device)
+        Z = torch.randn(1, self.num_generated_samples, Z_dim).to(device=pl_module.device)
         logits_A, logits_Fx = [f.mean(dim=0) for f in pl_module.decoder(Z)]
         del Z
         trainer.logger.log_metrics({
@@ -558,7 +575,6 @@ class GraphVAELogger(pl.Callback):
     # Utility methods
 
     def clear_stored_batches(self):
-        logger.info(f"Clearing all stored batches...")
         self.batches_prepared = False
 
         self.validation_batch = {
@@ -580,14 +596,15 @@ class GraphVAELogger(pl.Callback):
 
     def obtain_model_outputs(self, graphs, pl_module, num_samples, num_var_samples=1):
         logger.debug(f"Progression: Entering obtain_model_outputs()")
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
-            pl_module.all_model_outputs_pathwise(graphs[:num_samples], num_samples=num_var_samples)
+        outputs = \
+            pl_module.all_model_outputs_pathwise(graphs, num_samples=num_var_samples)
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = [out[:num_samples] for out in outputs]
         return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std
 
     @staticmethod
     def prepare_stored_batch(batch_dict, output_dict, max_num_samples) -> bool:
         logger.info(f"Preparing the stored batches...")
-        assert len(batch_dict["graph"]) == len(output_dict["loss"]), "Error in prepare_stored_batches(). The number of stored batches and outputs must be the same"
+        assert len(batch_dict["graph"]) == len(output_dict["logits_A"]), "Error in prepare_stored_batches(). The number of stored batches and outputs must be the same"
         logger.info(f"Number of stored batches: {len(batch_dict['graph'])}")
         logger.info(f"Number of stored batched outputs: {len(output_dict['loss'])}")
         def flatten(l):

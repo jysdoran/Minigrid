@@ -59,7 +59,7 @@ def run_experiment(cfg: DictConfig) -> None:
     ]
     trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs,
                          logger=wandb_logger, callbacks=logging_callbacks)
-    trainer.fit(model, data_module, val_dataloaders=[data_module.val_dataloader(), data_module.predict_dataloader()])    # run prediction (latent space viz and interpolation) in inference mode
+    trainer.fit(model, train_dataloaders=data_module.train_dataloader(), val_dataloaders=[data_module.val_dataloader(), data_module.predict_dataloader()])    # run prediction (latent space viz and interpolation) in inference mode
     trainer.predict(dataloaders=data_module.predict_dataloader())
     # evaluate the model on a test set
     trainer.test(datamodule=data_module,
