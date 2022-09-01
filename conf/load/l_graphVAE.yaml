@@ -1,0 +1,12 @@
+entity: francelico
+project: auto-curriculum-design
+run_id: zao240hh #2ngagssq
+
+wandb_run_path: ${load.entity}/${load.project}/${load.run_id}
+resources:
+  latent_spaceval:
+    artifact_name: ${load.entity}/${load.project}/run-${load.run_id}-tableslatent_spaceval:v0
+    filepath: tables/latent_space/val.table.json
+
+
+checkpoint_path: /home/francelico/dev/PhD/maze_representations/checkpoints/dump/epoch=4-step=3520.ckpt
