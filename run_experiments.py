@@ -3,7 +3,7 @@ import os
 import sys
 # TODO: to be removed later
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-os.environ["CUDA_LAUNCH_BLOCKING"] = str(1)
+# os.environ["CUDA_LAUNCH_BLOCKING"] = str(1)
 import hydra
 import wandb
 from pathlib import Path #TODO replace by hydra?
@@ -40,7 +40,7 @@ def run_experiment(cfg: DictConfig) -> None:
                                     config_logging =cfg.results,
                                     _recursive_=False)
     #wandb.login(key='x'*40)
-    wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd(), offline=cfg.offline, entity="francelico")
+    wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd(), offline=cfg.offline, entity="francelico", log_model=True)
     if wandb_logger.experiment.name is not None:
         wandb_logger.experiment.name = cfg.run_name + "_" + wandb_logger.experiment.name
     else:
@@ -123,5 +123,4 @@ def process_cfg(cfg):
 
 
 if __name__ == "__main__":
-    #sys.argv.append('run_name=gnn_features_sg')
     run_experiment()
