@@ -84,7 +84,7 @@ class GraphVAELogger(pl.Callback):
 
         for key in self.graphs.keys():
             self.gw[key] = self.encode_graph_to_gridworld(self.graphs[key], self.attributes).to(device)
-            self.imgs[key] = self.gridworld_to_img(self.gw[key]).to(device)
+            self.imgs[key] = self.gridworld_to_img(self.gw[key][:self.num_image_samples]).to(device)
 
         self.resize_transform = torchvision.transforms.Resize((100, 100),
                                                interpolation=torchvision.transforms.InterpolationMode.NEAREST)
@@ -438,6 +438,8 @@ class GraphVAELogger(pl.Callback):
             df.insert(0, "I:Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
             df.insert(0, "Label_ids", labels.tolist())
 
+        logger.info(f"log_latent_embeddings(): Storing dataframe with {len(reconstructed_imgs)} embeddings.")
+
         trainer.logger.experiment.log({
             f"tables/{tag}/{mode}": wandb.Table(
                 dataframe=df
@@ -596,7 +598,7 @@ class GraphVAELogger(pl.Callback):
         logger.info(f"Cleared all stored batches.")
 
     def obtain_model_outputs(self, graphs, pl_module, num_samples, num_var_samples=1):
-        logger.debug(f"Progression: Entering obtain_model_outputs()")
+        logger.debug(f"obtain_model_outputs(): num_samples:{num_samples}, num_var_samples:{num_var_samples}")
         outputs = \
             pl_module.all_model_outputs_pathwise(graphs, num_samples=num_var_samples)
         elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = [out[:num_samples] for out in outputs]
@@ -651,7 +653,7 @@ class GraphVAELogger(pl.Callback):
         return reconstructed_imgs
 
     def log_images(self, trainer:pl.Trainer, tag:str, images: torch.Tensor, captions:List[str]=None, mode:str=None, nrow:int=8):
-        logger.info(f"log_images(): Saving {len(images)} Images - mode:{mode}, tag:{tag}")
+        logger.info(f"log_images(): Saving {len(images)} images as {1} grid with {nrow} rows - mode:{mode}, tag:{tag}")
         if mode == "RGBA":
             images = rgba2rgb(images)
 
