@@ -161,7 +161,7 @@ class GraphVAELogger(pl.Callback):
                 f'metric/entropy/Fx/{mode}': pl_module.decoder.entropy_A(logits_Fx).sum(),
             }
         if mode not in ["train", "predict"]:
-            to_log[f"loss/{mode}"] = loss
+            to_log[f"loss/{mode}"] = loss.mean()
 
         trainer.logger.log_metrics(to_log, step=trainer.global_step)
 
