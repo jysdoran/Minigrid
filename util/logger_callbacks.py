@@ -115,7 +115,7 @@ class GraphVAELogger(pl.Callback):
             #TODO just to see. remove later possibly
             outputs = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_image_samples, num_var_samples=self.num_variational_samples_logging)
             _, unweighted_elbos, logits_A, logits_Fx, _, _ = outputs
-            self.log_epoch_metrics(trainer, pl_module, outputs, "predict_1000_var_samples")
+            self.log_epoch_metrics(trainer, pl_module, outputs, f"predict_{self.num_variational_samples_logging}_var_samples")
             del outputs
             reconstructed_imgs_train = self.obtain_imgs(logits_A, logits_Fx, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["train"], unweighted_elbos)]
@@ -651,7 +651,7 @@ class GraphVAELogger(pl.Callback):
         return reconstructed_imgs
 
     def log_images(self, trainer:pl.Trainer, tag:str, images: torch.Tensor, captions:List[str]=None, mode:str=None, nrow:int=8):
-        logger.info(f"Progression: Entering log_images(), mode:{mode}, tag:{tag}")
+        logger.info(f"log_images(): Saving {len(images)} Images - mode:{mode}, tag:{tag}")
         if mode == "RGBA":
             images = rgba2rgb(images)
 
