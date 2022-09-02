@@ -1,9 +1,13 @@
+import logging
+
 from typing import List, Any, Dict, Union, Iterable
 
 import torch
 import dgl
 import networkx as nx
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def shortest_paths(graph: nx.Graph, source: int, target: int, num_paths: int = 1) -> List[Any]:
@@ -74,22 +78,24 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int, target: int
     graph = nx.Graph(graph)
     nodes = set(graph.nodes)
 
-    # Catch any unwanted exceptions here
-    if source == target or source not in nodes or target not in nodes:
+    # Catch any unwanted exceptions here, but it should be handled if the graph supplied is valid
+    if len(nodes) < 2 or source == target or source not in nodes or target not in nodes:
+        valid = False
         connected = False
-        return graph, connected
+        return graph, valid, connected
 
-    if not nx.has_path(graph, source, target):
-        connected = False
-    else:
+    valid = True
+    if nx.has_path(graph, source, target):
         connected = True
+    else:
+        connected = False
     graph = graph.subgraph(nx.node_connected_component(graph, source))
-    return graph, connected
+    return graph, valid, connected
 
 
 def compute_metrics(graphs: Union[dgl.DGLGraph, nx.Graph],
                     metrics: Dict[str, List[float]],
-                    start_nodes: Iterable[int], goal_nodes: Iterable[int]) -> Dict[str, List[float]]:
+                    start_nodes: Iterable[int], goal_nodes: Iterable[int], labels=None) -> Dict[str, List[float]]:
     """
      Compute nx specific metrics. Also returns the always solvable graph.
      If the graph is not solvable, the metrics are set to np.nan.
@@ -100,7 +106,14 @@ def compute_metrics(graphs: Union[dgl.DGLGraph, nx.Graph],
     for i, graph in enumerate(graphs):
         start_node = int(start_nodes[i])
         goal_node = int(goal_nodes[i])
-        graph, solvable = prepare_graph(graph, start_node, goal_node)
+        graph, valid, solvable = prepare_graph(graph, start_node, goal_node)
+        if valid != metrics["valid"][i]:
+            if labels is None:
+                logger.warning(f"Graph {i}/{len(graphs)} was marked invalid, which contradicts the metric provided. "
+                               f"No labels were supplied.")
+            else:
+                logger.warning(
+                    f"Graph (label:{labels[i]}) was marked invalid, which contradicts the metric provided.")
         graphs_nx.append(graph)
         try:
             nodes = set(graph.nodes)
@@ -108,7 +121,6 @@ def compute_metrics(graphs: Union[dgl.DGLGraph, nx.Graph],
             _ = metrics['solvable'][i]
         except (IndexError, AssertionError) as e:
             if isinstance(e, AssertionError):
-                metrics['valid'][i] = False
                 solvable = False
             metrics["solvable"].append(solvable)
         if not solvable:  # then this metrics do not make sense

@@ -325,7 +325,7 @@ class GraphVAELogger(pl.Callback):
         reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
         reconstruction_metrics["valid"] = is_valid.tolist()
         reconstruction_metrics, rec_graphs_nx = \
-            compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes, goal_nodes)
+            compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes, goal_nodes, labels=labels)
         mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
         reconstruction_metrics["unique"] = (check_unique(mode_A) | check_unique(mode_Fx)).tolist()
         del is_valid, reconstructed_graphs
@@ -337,22 +337,23 @@ class GraphVAELogger(pl.Callback):
         logger.info(f"log_latent_embeddings(): decoded graphs to img successfull.")
 
         if self.force_valid_reconstructions:
-            logits_Fx[..., pl_module.decoder.attributes.index("start")],\
-            logits_Fx[..., pl_module.decoder.attributes.index("goal")], \
+            probs_Fx = pl_module.decoder.param_pFx(logits_Fx)
+            mode_Fx[..., pl_module.decoder.attributes.index("start")],\
+            mode_Fx[..., pl_module.decoder.attributes.index("goal")], \
             start_nodes_valid, goal_nodes_valid, \
                 is_valid = \
                 tr.Nav2DTransforms.force_valid_layout(
                 rec_graphs_nx,
-                logits_Fx[..., pl_module.decoder.attributes.index("start")],
-                logits_Fx[..., pl_module.decoder.attributes.index("goal")])
+                probs_Fx[..., pl_module.decoder.attributes.index("start")],
+                probs_Fx[..., pl_module.decoder.attributes.index("goal")])
 
             logger.info(f"log_latent_embeddings(): successfully obtained forced valid reconstructions of the decoded graphs.")
 
             reconstruction_metrics_force_valid = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
             reconstruction_metrics_force_valid["valid"] = is_valid
             reconstruction_metrics_force_valid, _, = compute_metrics(rec_graphs_nx, reconstruction_metrics_force_valid,
-                                                                     start_nodes_valid, goal_nodes_valid)
-            mode_A, mode_Fx = pl_module.decoder.param_m((logits_A, logits_Fx))
+                                                                     start_nodes_valid, goal_nodes_valid, labels=labels)
+            mode_A = pl_module.decoder.param_mA(logits_A)
             reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) | check_unique(mode_Fx)).tolist()
             del start_nodes_valid, goal_nodes_valid, mode_A, mode_Fx
             logger.info(f"log_latent_embeddings(): successfully obtained metrics for the force valid decoded graphs.")
