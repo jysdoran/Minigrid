@@ -10,7 +10,7 @@ conda activate curri
 #export PYTHONPATH=$HOME/
 cd $HOME/auto-curriculum-design/maze_representations/
 export WANDB_START_METHOD=thread
-wandb offline
-export WANDB_MODE=offline
+#wandb offline
+#export WANDB_MODE=offline
 # export WANDB_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-/home/sgar/miniconda3/envs/curri/bin/python run_experiments.py -m run_name=hparam_sweeping +sweeper=wandb +launcher=submitit_remote num_cpus=16 offline=true
+/home/sgar/miniconda3/envs/curri/bin/python run_experiments.py -m run_name=hparam_sweeping +sweeper=wandb +launcher=submitit_remote num_cpus=16 offline=false +sweeper.wandb_sweep_config.num_agents=1
