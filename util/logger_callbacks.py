@@ -62,6 +62,8 @@ class GraphVAELogger(pl.Callback):
             "logits_Fx": [],
             "mean": [],
             "std": [],
+            "y_hat": [],
+            "predictor_loss_unreg": [],
         }
 
         self.predict_batch = deepcopy(self.validation_batch)
@@ -106,7 +108,7 @@ class GraphVAELogger(pl.Callback):
         self.log_epoch_metrics(trainer, pl_module, self.predict_step_outputs, "predict")
         self.log_epoch_metrics(trainer, pl_module, self.validation_step_outputs, "val")
         if "train" in self.graphs.keys():
-            _, unweighted_elbos, logits_A, logits_Fx, _, _  = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_image_samples, num_var_samples=1)
+            _, unweighted_elbos, logits_A, logits_Fx, _, _, _, _ = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_image_samples, num_var_samples=1)
             reconstructed_imgs_train = self.obtain_imgs(logits_A, logits_Fx, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["train"], unweighted_elbos)]
             self.log_images(trainer, "reconstructions/train", reconstructed_imgs_train, captions=captions, mode="RGBA")
@@ -114,7 +116,7 @@ class GraphVAELogger(pl.Callback):
 
             #TODO just to see. remove later possibly
             outputs = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_image_samples, num_var_samples=self.num_variational_samples_logging)
-            _, unweighted_elbos, logits_A, logits_Fx, _, _ = outputs
+            _, unweighted_elbos, logits_A, logits_Fx, _, _, _, _ = outputs
             self.log_epoch_metrics(trainer, pl_module, outputs, f"predict_{self.num_variational_samples_logging}_var_samples")
             del outputs
             reconstructed_imgs_train = self.obtain_imgs(logits_A, logits_Fx, pl_module)
@@ -125,7 +127,7 @@ class GraphVAELogger(pl.Callback):
         if "val" in self.graphs.keys():
             outputs = self.obtain_model_outputs(self.graphs["val"], pl_module, num_samples=self.num_image_samples, num_var_samples=1)
 
-            _, unweighted_elbos, logits_A, logits_Fx, _, _ = outputs
+            _, unweighted_elbos, logits_A, logits_Fx, _, _, _, _ = outputs
             del outputs
             reconstructed_imgs_val = self.obtain_imgs(logits_A, logits_Fx, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["val"], unweighted_elbos)]
@@ -144,17 +146,21 @@ class GraphVAELogger(pl.Callback):
             logits_Fx = outputs["logits_Fx"]
             mean = outputs["mean"]
             std = outputs["std"]
+            y_hat = outputs["y_hat"]
+            predictor_loss_unreg = outputs["predictor_loss_unreg"]
         elif isinstance(outputs, tuple) or isinstance(outputs, list):
             assert len(outputs) == 6, "GraphVAElogger.log_epoch_metrics() - incorrect number of outputs provided. " \
                                       f"Expected {6} outputs (elbos, unweighted_elbos, logits_A, logits_Fx, mean, std)," \
                                       f"got {len(outputs)} instead."
-            elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = outputs
+            elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = outputs
             loss = -elbos.mean()
         else:
             raise TypeError("GraphVAElogger.log_epoch_metrics() - output provided")
 
         to_log = {
                 f'unweighted_elbo/{mode}': unweighted_elbos.mean(dim=0),
+                f'y_hat/{mode}': y_hat.mean(dim=0),
+                f'predictor_loss_unreg/{mode}': predictor_loss_unreg.mean(dim=0),
                 f"metric/mean/std/{mode}": torch.linalg.norm(mean, dim=-1).std().item(),
                 f"metric/sigma/mean/{mode}": torch.square(std).sum(axis=-1).sqrt().mean().item() / std.shape[-1],
                 f'metric/entropy/A/{mode}': pl_module.decoder.entropy_A(logits_A),
@@ -214,7 +220,7 @@ class GraphVAELogger(pl.Callback):
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         logger.info(f"Progression: Entering on_test_end()")
         if "test" in self.graphs.keys():
-            elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = self.obtain_model_outputs(self.graphs["test"],
+            elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = self.obtain_model_outputs(self.graphs["test"],
                                                                                             pl_module, num_samples=self.num_image_samples, num_var_samples=1)
             reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["test"], unweighted_elbos)]
@@ -282,12 +288,16 @@ class GraphVAELogger(pl.Callback):
             graphs = self.validation_batch["graph"][:self.num_embedding_samples]
             labels = self.validation_batch["label_ids"][:self.num_embedding_samples]
             unweighted_elbos = self.validation_step_outputs["unweighted_elbos"][:self.num_embedding_samples]
+            predictor_loss_unreg = self.validation_step_outputs["predictor_loss_unreg"][:self.num_embedding_samples]
+            y_hat = self.validation_step_outputs["y_hat"][:self.num_embedding_samples]
         elif mode == "predict":
             Z = self.predict_step_outputs["mean"][:self.num_embedding_samples]
             logits_A, logits_Fx = self.predict_step_outputs["logits_A"][:self.num_embedding_samples], self.predict_step_outputs["logits_Fx"][:self.num_embedding_samples]
             graphs = self.predict_batch["graph"][:self.num_embedding_samples]
             labels = self.predict_batch["label_ids"][:self.num_embedding_samples]
             unweighted_elbos = self.predict_step_outputs["unweighted_elbos"][:self.num_embedding_samples]
+            predictor_loss_unreg = self.predict_step_outputs["predictor_loss_unreg"][:self.num_embedding_samples]
+            y_hat = self.predict_step_outputs["y_hat"][:self.num_embedding_samples]
         elif mode == "prior":
             Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
             Z = torch.randn(1, self.num_generated_samples, Z_dim).to(device=pl_module.device)
@@ -295,8 +305,11 @@ class GraphVAELogger(pl.Callback):
             Z = Z.mean(dim=0)
             unweighted_elbos = None
             labels = None
+            predict_target = None #TODO: Implement this
+            y_hat = pl_module.predictor(Z)
+            predictor_loss_unreg = pl_module.predictor.loss_fn(y_hat, predict_target)
         elif mode == "custom":
-            _, unweighted_elbos, logits_A, logits_Fx, Z, _ = outputs
+            _, unweighted_elbos, logits_A, logits_Fx, Z, _, y_hat, predictor_loss_unreg = outputs
 
 
         assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0], f"log_latent_embeddings(): Shape mismatch Z={Z.shape}, logits_A={logits_A.shape}, logits_Fx={logits_Fx.shape}"
@@ -427,6 +440,11 @@ class GraphVAELogger(pl.Callback):
         del reconstruction_metrics, hist_data
         logger.info(f"log_latent_embeddings(): logged reconstruction metrics distributions to wandb.")
 
+        if predictor_loss_unreg is not None:
+            df.insert(0, "Predictor_loss_unreg", predictor_loss_unreg.tolist())
+            logger.info(f"log_latent_embeddings(): predictor_loss_unreg added to dataframe.")
+            df.insert(0, "y_hat", y_hat.tolist())
+            logger.info(f"log_latent_embeddings(): predict_target added to dataframe.")
         if unweighted_elbos is not None:
             df.insert(0, "Unweighted_elbos", unweighted_elbos.tolist())
             logger.info(f"log_latent_embeddings(): unweighted_elbos added to dataframe.")
@@ -591,6 +609,8 @@ class GraphVAELogger(pl.Callback):
             "logits_Fx": [],
             "mean": [],
             "std": [],
+            "y_hat": [],
+            "predictor_loss_unreg" : [],
         }
         self.predict_batch = deepcopy(self.validation_batch)
         self.predict_step_outputs = deepcopy(self.validation_step_outputs)
@@ -601,8 +621,8 @@ class GraphVAELogger(pl.Callback):
         logger.debug(f"obtain_model_outputs(): num_samples:{num_samples}, num_var_samples:{num_var_samples}")
         outputs = \
             pl_module.all_model_outputs_pathwise(graphs, num_samples=num_var_samples)
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = [out[:num_samples] for out in outputs]
-        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = [out[:num_samples] for out in outputs]
+        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
 
     @staticmethod
     def prepare_stored_batch(batch_dict, output_dict, max_num_samples) -> bool:

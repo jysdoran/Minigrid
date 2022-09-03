@@ -13,9 +13,10 @@ from models.networks import FC_ReLU_Network
 from util.distributions import sample_gaussian_with_reparametrisation, compute_kld_with_standard_gaussian, \
     evaluate_logprob_bernoulli, evaluate_logprob_one_hot_categorical, evaluate_logprob_diagonal_gaussian
 import util.transforms as tr
+import util.graph_metrics as gm
 
 
-def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, permutations=None):
+def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, predictor=None, labels=None, permutations=None):
     # TODO: permutations not functional at the moment, because not implemented for Fx
 
     mean, std = encoder(X)  # (B, H), (B, H)
@@ -66,6 +67,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
     A_in = A_in.reshape(A_in.shape[0], -1) # (B | B * P, d1, d2, ..., dn) -> (B | B*P, D=2*(n_nodes - 1))
     logits_A = logits_A.reshape(*logits_A.shape[0:2], -1) # (M, B, n_nodes-1, 2) -> (M, B, D=2*(n_nodes - 1))
     neg_cross_entropy_A = evaluate_logprob_bernoulli(A_in, logits=logits_A)  # (M, B, D)->(M,B) | (M, B*P, D)->(M,B*P)
+    logits_A = logits_A.mean(dim=0)
 
     if permutations is not None:
         neg_cross_entropy_A = neg_cross_entropy_A.reshape(neg_cross_entropy_A.shape[0], -1, permutations.shape[0]) # (M,B*P,) -> (M,B,P)
@@ -91,6 +93,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
     if logits_Fx is not None:
         #elbos_Fx = torch.einsum('i, m b i -> m b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx)
         elbos_Fx = elbo_coeffs.Fx * neg_cross_entropy_Fx.mean(dim=-1) #(M, B, D) -> (M, B)
+        logits_Fx = logits_Fx.mean(dim=0)
     else:
         elbos_Fx = 0.
 
@@ -107,7 +110,25 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, per
         elbos = elbos.mean(dim=0)
         unweighted_elbos = unweighted_elbos.mean(dim=0)
 
-    return elbos, unweighted_elbos, logits_A.mean(dim=0), logits_Fx.mean(dim=0), mean, std
+    # Add the prediction loss
+    if predictor is not None:
+        y_hat = predictor(Z)
+        if predictor.target_from == "input":
+            assert labels is not None, "Prediction from input requires labels."
+            # y =
+        else:
+            reconstructed_graphs, start_nodes, goal_nodes, is_valid = \
+                tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, decoder,
+                                                                  correct_A=True)
+            y = predictor.target_metric_fn(reconstructed_graphs, start_nodes, goal_nodes)
+        predictor_loss = predictor.loss(y_hat, y)
+        predictor_loss_unreg = predictor.loss_fn(y_hat, y)
+        elbos = elbos - predictor_loss
+    else:
+        predictor_loss_unreg = torch.tensor([0.])
+        y_hat = torch.tensor([0.])
+
+    return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
 
 class GraphGCNEncoder(nn.Module):
 
@@ -603,6 +624,62 @@ class GraphMLPDecoder(nn.Module):
         mFx = torch.stack(mFx, dim=-1).to(logits_Fx)
         return mFx
 
+class Predictor(nn.Module):
+
+    def __init__(self, config, shared_params) :
+
+        super().__init__()
+        self.config = config
+        self.shared_params = shared_params
+
+        # model creation
+        dims = [self.shared_params.latent_dim]
+        if self.config.hidden_dim is not None and self.config.num_layers > 1:
+            dims.extend([self.config.hidden_dim] * (self.config.num_layers - 1))
+        dims.append(1)
+        self.model = self.create_model(dims)
+        if self.config.target_metric == "resistance_distance":
+            self.target_metric_fn = self.get_resistance_distance
+            self.loss_fn = nn.MSELoss()
+        else:
+            raise NotImplementedError(f"Specified Target Metric '{self.config.target_metric}'"
+                                      f" Invalid or Not Currently Implemented.")
+        if self.config.target_from in ["input", "output"]:
+            self.target_from = self.config.target_from
+        else:
+            raise NotImplementedError(f"Specified Target Acquisition '{self.config.target_from}'"
+                                      f" Invalid or Not Currently Implemented.")
+
+    def create_model(self, dims: Iterable[ int ]) :
+        return FC_ReLU_Network(dims, output_activation=None)
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        return self.model(z)
+
+    def prediction_loss(self, z: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        y_hat = self.forward(z)
+        loss = self.loss_fn(y_hat, y)
+        if self.config.alpha_reg > 0:
+            l2_norm = sum(torch.linalg.norm(p, 2) for p in self.model.parameters())
+            loss += self.config.alpha_reg * l2_norm
+        return loss
+
+    def get_resistance_distance(self, graphs, start_nodes, goal_nodes):
+        if isinstance(graphs, dgl.DGLGraph):
+            graphs = dgl.unbatch(graphs)
+
+        metrics = []
+        for b in range(0, len(graphs)):
+            start = start_nodes[b]
+            goal = goal_nodes[b]
+            graph = gm.prepare_graph(graphs[b], start, goal)
+            metric = gm.resistance_distance(graph, start, goal)
+            if metric == np.Nan:
+                metric = 0
+            metrics.append(metric)
+
+        return torch.tensor(metrics).to(self.device)
+
 
 class GraphVAE(nn.Module):
     """
@@ -643,15 +720,16 @@ class GraphVAE(nn.Module):
 
     def all_model_outputs_pathwise(self, X, num_samples: int = None):
         if num_samples is None: num_samples = self.configuration.model.num_variational_samples
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = \
             graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hyperparameters.loss.elbo_coeffs,
                                  permutations=self.permutations)
-        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std
+        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
 
     def elbo(self, X):
-        elbos, _, _, _, _, _ = self.all_model_outputs_pathwise(X)
+        outputs = self.all_model_outputs_pathwise(X)
+        return outputs[0]
 
     @property
     def num_parameters(self):
@@ -674,6 +752,7 @@ class LightningGraphVAE(pl.LightningModule):
 
         self.encoder = GraphGCNEncoder(self.hparams.config_model.encoder, self.hparams.config_model.shared_parameters)
         self.decoder = GraphMLPDecoder(self.hparams.config_model.decoder, self.hparams.config_model.shared_parameters)
+        self.predictor = Predictor(self.hparams.config_model.predictor, self.hparams.config_model.shared_parameters)
 
         if self.hparams.config_model.model.augmented_inputs:
             transforms = torch.tensor(self.hparams.config_model.model.transforms, dtype=torch.int)
@@ -689,16 +768,16 @@ class LightningGraphVAE(pl.LightningModule):
 
     def all_model_outputs_pathwise(self, X, num_samples: int = None):
         if num_samples is None: num_samples = self.hparams.config_model.model.num_variational_samples
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = \
             graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hparams.hparams_model.loss.elbo_coeffs,
                                  permutations=self.permutations)
-        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std
+        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
 
     def elbo(self, X):
-        elbos, _, _, _, _, _ = self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_model.model.num_variational_samples)
-        return elbos
+        outputs = self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_model.model.num_variational_samples)
+        return outputs[0]
 
     def elbo_to_loss(self, elbos):
         # Compute the average ELBO over the mini-batch
@@ -718,10 +797,10 @@ class LightningGraphVAE(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx, dataloader_idx, **kwargs):
         X, labels = batch
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std = \
+        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = \
             self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_model.model.num_variational_samples)
         loss = self.elbo_to_loss(elbos).reshape(1)
-        return loss, unweighted_elbos, logits_A, logits_Fx, mean, std
+        return loss, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
 
     def predict_step(self, batch, batch_idx, **kwargs):
         dataloader_idx = 0
