@@ -73,11 +73,11 @@ hydra:
 
       # (Optional) Maximum authorized failure rate for a batch of wandb agents'
       # runs. Default is 0.0.
-      max_run_failure_rate: 0.5
+      max_run_failure_rate: 1.0
 
       # (Optional) Maximum authorized failure rate for a batch of wandb agents
       # launched by the launcher. Default is 0.0.
-      max_agent_failure_rate: 0.5
+      max_agent_failure_rate: 1.0
 
       # (Optional) Used for resuming from a previous sweep. Default is None.
       # sweep_id: your_sweep_id
