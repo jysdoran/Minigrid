@@ -368,9 +368,10 @@ class GraphVAELogger(pl.Callback):
                                                                      start_nodes_valid, goal_nodes_valid, labels=labels)
             mode_A = pl_module.decoder.param_mA(logits_A)
             reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) | check_unique(mode_Fx)).tolist()
-            del start_nodes_valid, goal_nodes_valid, mode_A, mode_Fx
+            del start_nodes_valid, goal_nodes_valid
             logger.info(f"log_latent_embeddings(): successfully obtained metrics for the force valid decoded graphs.")
-            reconstructed_imgs_force_valid = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+            reconstructed_imgs_force_valid = self.obtain_imgs(mode_A, mode_Fx, pl_module)
+            del mode_A, mode_Fx
 
             logger.info(f"log_latent_embeddings(): force valid decoded graphs to img successful.")
 
