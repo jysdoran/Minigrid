@@ -57,6 +57,14 @@ configuration:
     bottleneck_dim: 128 #not counting the final multihead layer
     hidden_dim: 128 #not counting the final multihead layer
 
+  predictor:
+    target_metric: resistance_distance
+    target_from: output
+    num_layers: 1
+    hidden_dim: 0 #n/a if num_layer = 1
+    alpha_reg: 0.0
+
+
 # these can change between runs
 hyperparameters:
   loss:
@@ -64,3 +72,4 @@ hyperparameters:
       A: 1
       Fx: .25
       beta: 1
+      predictor: 0.

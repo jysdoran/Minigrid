@@ -84,7 +84,11 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int, target: int
         connected = False
         return graph, valid, connected
 
-    valid = True
+    if graph.degree[source] == 0 or graph.degree[target] == 0:
+        valid = False
+    else:
+        valid = True
+
     if nx.has_path(graph, source, target):
         connected = True
     else:
@@ -109,11 +113,11 @@ def compute_metrics(graphs: Union[dgl.DGLGraph, nx.Graph],
         graph, valid, solvable = prepare_graph(graph, start_node, goal_node)
         if valid != metrics["valid"][i]:
             if labels is None:
-                logger.warning(f"Graph {i}/{len(graphs)} was marked invalid, which contradicts the metric provided. "
+                logger.warning(f"compute_metrics() - Graph {i}/{len(graphs)} was marked valid:{valid}, which contradicts the metric provided valid:{metrics['valid'][i]}."
                                f"No labels were supplied.")
             else:
                 logger.warning(
-                    f"Graph (label:{labels[i]}) was marked invalid, which contradicts the metric provided.")
+                    f"compute_metrics() - Graph (label:{labels[i]}) was marked valid:{valid}, which contradicts the metric provided valid:{metrics['valid'][i]}.")
         graphs_nx.append(graph)
         try:
             nodes = set(graph.nodes)

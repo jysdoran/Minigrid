@@ -123,12 +123,30 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, pre
             y = predictor.target_metric_fn(reconstructed_graphs, start_nodes, goal_nodes)
         predictor_loss = predictor.loss(y_hat, y)
         predictor_loss_unreg = predictor.loss_fn(y_hat, y)
-        elbos = elbos - predictor_loss
+        elbos = elbos - elbo_coeffs.predictor * predictor_loss
     else:
-        predictor_loss_unreg = torch.tensor([0.])
-        y_hat = torch.tensor([0.])
+        predictor_loss = torch.zeros([elbos.shape[0]])
+        predictor_loss_unreg = torch.zeros([elbos.shape[0]])
+        y_hat = torch.zeros([elbos.shape[0]])
 
-    return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
+    outputs = {
+        "loss": -elbos.mean().reshape(1),
+        "elbos": elbos,
+        "unweighted_elbos": unweighted_elbos,
+        "neg_cross_entropy_A": neg_cross_entropy_A,
+        "neg_cross_entropy_Fx": neg_cross_entropy_Fx,
+        "kld": kld,
+        "predictor_loss": predictor_loss,
+        "predictor_loss_unreg": predictor_loss_unreg,
+        "y_hat": y_hat,
+        "logits_A": logits_A,
+        "logits_Fx": logits_Fx,
+        "std": std,
+        "mean": mean,
+        }
+
+    #return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
+    return outputs
 
 class GraphGCNEncoder(nn.Module):
 
@@ -148,7 +166,6 @@ class GraphGCNEncoder(nn.Module):
 
         # Create separate final layers for each parameter (mean and log-variance)
         # We use log-variance to unconstrain the optimisation of the positive-only variance parameters
-        #TODO: change to softplus
 
         self.mean = nn.Linear(self.config.mlp.bottleneck_dim, self.shared_params.latent_dim)
         self.std = FC_ReLU_Network([self.config.mlp.bottleneck_dim, self.shared_params.latent_dim],
@@ -244,6 +261,7 @@ class GraphMLPDecoder(nn.Module):
             self.adjacency = nn.Linear(self.config.hidden_dim, self.config.output_dim.adjacency)
         else:
             self.adjacency = None
+
 
         if self.attributes is not None:
             self.attribute_heads = nn.ModuleList()
@@ -720,16 +738,16 @@ class GraphVAE(nn.Module):
 
     def all_model_outputs_pathwise(self, X, num_samples: int = None):
         if num_samples is None: num_samples = self.configuration.model.num_variational_samples
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = \
+        outputs = \
             graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hyperparameters.loss.elbo_coeffs,
                                  permutations=self.permutations)
-        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
+        return outputs
 
     def elbo(self, X):
         outputs = self.all_model_outputs_pathwise(X)
-        return outputs[0]
+        return outputs["elbos"]
 
     @property
     def num_parameters(self):
@@ -768,39 +786,33 @@ class LightningGraphVAE(pl.LightningModule):
 
     def all_model_outputs_pathwise(self, X, num_samples: int = None):
         if num_samples is None: num_samples = self.hparams.config_model.model.num_variational_samples
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = \
+        outputs = \
             graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hparams.hparams_model.loss.elbo_coeffs,
                                  permutations=self.permutations)
-        return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
+        return outputs
 
     def elbo(self, X):
         outputs = self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_model.model.num_variational_samples)
-        return outputs[0]
+        return outputs["elbos"]
 
-    def elbo_to_loss(self, elbos):
-        # Compute the average ELBO over the mini-batch
-        elbo = elbos.mean(0)
-        # We want to _maximise_ the ELBO, but the SGD implementations
-        # do minimisation by default, hence we multiply the ELBO by -1.
-        loss = -elbo
-
-        return loss
+    def loss(self, X):
+        outputs = self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_model.model.num_variational_samples)
+        return outputs["loss"]
 
     def training_step(self, batch, batch_idx):
         X, labels = batch
-        elbos = self.forward(X)
-        loss = self.elbo_to_loss(elbos)
+        loss = self.loss(X)
+
         self.log('loss/train', loss, on_step=True, on_epoch=False)
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx, **kwargs):
         X, labels = batch
-        elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = \
+        outputs = \
             self.all_model_outputs_pathwise(X, num_samples=self.hparams.config_model.model.num_variational_samples)
-        loss = self.elbo_to_loss(elbos).reshape(1)
-        return loss, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
+        return outputs
 
     def predict_step(self, batch, batch_idx, **kwargs):
         dataloader_idx = 0
