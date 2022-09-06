@@ -7,7 +7,7 @@ hydra:
     # See https://docs.wandb.ai/guides/sweeps/configuration for types of configs
     wandb_sweep_config:
       # (Required) The name of the sweep, displayed in the W&B UI.
-      name: slurm_run
+      name: predictor
 
       # (Required) Specify the search strategy.
       method: random
@@ -15,7 +15,7 @@ hydra:
       # (Optional) Specify the metric to optimize (only used by certain search
       # strategies and stopping criteria). Default is {}.
       metric:
-        name: loss/val
+        name: metric/predictor_loss/val
         goal: minimize
 
         # (Optional) Goal value for the metric you're optimizing. When any run
@@ -28,11 +28,11 @@ hydra:
       # reached. Use a multi-processing launcher to have these agents execute
       # simultaneously, otherwise it's a useless option since they'll execute in
       # sequence. Default is 1.
-      num_agents: 1 #4
+      num_agents: 7 #4
 
       # (Optional) Total number of agents to launch (must be >= num_agents)
       # Default is 1.
-      budget: 40
+      budget: 140
 
       # (Optional) Specify the entity for this sweep. Otherwise infer from the
       # environment.
@@ -89,37 +89,51 @@ hydra:
     params:
 
       # Model configuration
-      models.configuration.shared_parameters.latent_dim: [ 64, 128, 256, 512 ]
+      models.configuration.shared_parameters.latent_dim: 512
 
-      models.configuration.encoder.gnn.num_layers: [ 5, 8, 12 ]
-      models.configuration.encoder.gnn.layer_dim: [ 8, 12 ]
-      models.configuration.encoder.mlp.num_layers: [ 2, 3 ]
-      models.configuration.encoder.mlp.hidden_dim: [ 1024, 512 ]
-      models.configuration.encoder.mlp.bottleneck_dim: [ 128, 256, 512 ]
+      models.configuration.encoder.gnn.num_layers: 5
+      models.configuration.encoder.gnn.layer_dim: 8
+      models.configuration.encoder.mlp.num_layers: 2
+      models.configuration.encoder.mlp.hidden_dim: 512
+      models.configuration.encoder.mlp.bottleneck_dim: 256
 
-      models.configuration.decoder.num_layers: [ 2, 3, 4 ]
-      models.configuration.decoder.bottleneck_dim: [ 128, 256, 512 ]
-      models.configuration.decoder.hidden_dim: [ 256, 512, 1024 ]
+      models.configuration.decoder.num_layers: 2
+      models.configuration.decoder.bottleneck_dim: 512
+      models.configuration.decoder.hidden_dim: 256
+
+      models.configuration.predictor.num_layers: [1, 2, 3]
+      models.configuration.predictor.hidden_dim: [128, 256, 512, 1024]
+
+      models.configuration.predictor.alpha_reg:
+        distribution: log_uniform
+        min: -18.420680743952367 #log(1e-8)
+        max: -6.907755278982137 # log(1e-3)
+
 
       # Optimisation configuration
 
-      data.dataset.batch_size: [64, 128, 256, 512]
+      data.dataset.batch_size: 128
 
-      optim.lr:
-        distribution: log_uniform
-        min: -9.21034 #log(0.0001)
-        max: -4.605170185988091 # log(0.01)
+      optim.lr: 0.0011544987266700311
+#        distribution: log_uniform
+#        min: -9.21034 #log(0.0001)
+#        max: -4.605170185988091 # log(0.01)
 
       # Objective configuration
 
-      models.hyperparameters.loss.elbo_coeffs.Fx:
+      models.hyperparameters.loss.elbo_coeffs.Fx: 0.07927191414998647
+#        distribution: log_uniform
+#        min: -4.605170185988091 #log(0.01)
+#        max: -0.6931471805599453 #log(0.5)
+
+      models.hyperparameters.loss.elbo_coeffs.beta: 0.32781927648132736
+#        distribution: log_uniform
+#        min: -2.3025850929940455 #log(0.1)
+#        max: 0. #log(1.0)
+
+      models.hyperparameters.loss.elbo_coeffs.predictor:
         distribution: log_uniform
         min: -4.605170185988091 #log(0.01)
-        max: -0.6931471805599453 #log(0.5)
-
-      models.hyperparameters.loss.elbo_coeffs.beta:
-        distribution: log_uniform
-        min: -2.3025850929940455 #log(0.1)
         max: 0. #log(1.0)
 
       epochs: 5
