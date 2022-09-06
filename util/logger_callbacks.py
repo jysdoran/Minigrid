@@ -64,6 +64,7 @@ class GraphVAELogger(pl.Callback):
             "kld": [],
             "predictor_loss": [],
             "predictor_loss_unreg": [],
+            "y": [],
             "y_hat": [],
             "logits_A": [],
             "logits_Fx": [],
@@ -296,7 +297,8 @@ class GraphVAELogger(pl.Callback):
             labels = None
             y_hat = pl_module.predictor(Z)
             predict_target = torch.zeros(y_hat.shape) #TODO: Implement this
-            predictor_loss_unreg = pl_module.predictor.loss_fn(y_hat, predict_target)
+            predictor_loss_fn = pl_module.predictor.loss_fn(reduction="none")
+            predictor_loss_unreg = predictor_loss_fn(y_hat, predict_target)
         elif mode == "custom":
             unweighted_elbos = outputs["unweighted_elbos"]
             logits_A = outputs["logits_A"]

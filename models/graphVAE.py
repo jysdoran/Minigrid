@@ -1,6 +1,7 @@
 import dgl
 import numpy as np
 import torch
+import einops
 import pytorch_lightning as pl
 import hydra
 import wandb
@@ -112,7 +113,6 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, pre
 
     # Add the prediction loss
     if predictor is not None:
-        y_hat = predictor(Z)
         if predictor.target_from == "input":
             assert labels is not None, "Prediction from input requires labels."
             # y =
@@ -121,23 +121,32 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, pre
                 tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, decoder,
                                                                   correct_A=True)
             y = predictor.target_metric_fn(reconstructed_graphs, start_nodes, goal_nodes)
-        predictor_loss = predictor.loss(y_hat, y)
-        predictor_loss_unreg = predictor.loss_fn(y_hat, y)
+            y = einops.repeat(y, 'b -> m b 1', m=num_samples) # (B,) -> (M,B,1)
+        predictor_loss = predictor.loss(Z, y)
         elbos = elbos - elbo_coeffs.predictor * predictor_loss
+
+        # for logging only
+        y_hat = predictor(Z)
+        predictor_loss_fn = predictor.loss_fn(reduction="none")
+        predictor_loss_unreg = predictor_loss_fn(y_hat, y).mean(dim=0).squeeze() # (M, B, 1) -> (B,)
+        y_hat = y_hat.mean(dim=0).squeeze() # (M, B, 1) -> (B,)
+        y = y.mean(dim=0).squeeze()  # (M, B, 1) -> (B,)
     else:
-        predictor_loss = torch.zeros([elbos.shape[0]])
-        predictor_loss_unreg = torch.zeros([elbos.shape[0]])
-        y_hat = torch.zeros([elbos.shape[0]])
+        predictor_loss = torch.zeros(1).to(Z)
+        predictor_loss_unreg = torch.zeros(elbos.shape[0]).to(Z)
+        y_hat = torch.zeros(elbos.shape[0]).to(Z)
+        y = torch.zeros(elbos.shape[ 0 ]).to(Z)
 
     outputs = {
         "loss": -elbos.mean().reshape(1),
         "elbos": elbos,
         "unweighted_elbos": unweighted_elbos,
-        "neg_cross_entropy_A": neg_cross_entropy_A,
-        "neg_cross_entropy_Fx": neg_cross_entropy_Fx,
-        "kld": kld,
-        "predictor_loss": predictor_loss,
+        "neg_cross_entropy_A": neg_cross_entropy_A.mean(dim=0),
+        "neg_cross_entropy_Fx": neg_cross_entropy_Fx.mean(dim=0),
+        "kld": kld.mean().reshape(1),
+        "predictor_loss": predictor_loss.reshape(1),
         "predictor_loss_unreg": predictor_loss_unreg,
+        "y": y,
         "y_hat": y_hat,
         "logits_A": logits_A,
         "logits_Fx": logits_Fx,
@@ -658,7 +667,8 @@ class Predictor(nn.Module):
         self.model = self.create_model(dims)
         if self.config.target_metric == "resistance_distance":
             self.target_metric_fn = self.get_resistance_distance
-            self.loss_fn = nn.MSELoss()
+            self.loss_fn = nn.MSELoss
+            self._compute_loss_fn = self.loss_fn()
         else:
             raise NotImplementedError(f"Specified Target Metric '{self.config.target_metric}'"
                                       f" Invalid or Not Currently Implemented.")
@@ -674,9 +684,9 @@ class Predictor(nn.Module):
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         return self.model(z)
 
-    def prediction_loss(self, z: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def loss(self, z: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         y_hat = self.forward(z)
-        loss = self.loss_fn(y_hat, y)
+        loss = self._compute_loss_fn(y_hat, y)
         if self.config.alpha_reg > 0:
             l2_norm = sum(torch.linalg.norm(p, 2) for p in self.model.parameters())
             loss += self.config.alpha_reg * l2_norm
@@ -690,13 +700,16 @@ class Predictor(nn.Module):
         for b in range(0, len(graphs)):
             start = start_nodes[b]
             goal = goal_nodes[b]
-            graph = gm.prepare_graph(graphs[b], start, goal)
-            metric = gm.resistance_distance(graph, start, goal)
-            if metric == np.Nan:
-                metric = 0
+            graph, valid, connected = gm.prepare_graph(graphs[b], start, goal)
+            if valid and connected:
+                metric = gm.resistance_distance(graph, start, goal)
+                if metric == np.Nan:
+                    metric = 0.
+            else:
+                metric = 0.
             metrics.append(metric)
 
-        return torch.tensor(metrics).to(self.device)
+        return torch.tensor(metrics).to(graphs[0].device)
 
 
 class GraphVAE(nn.Module):
@@ -787,7 +800,7 @@ class LightningGraphVAE(pl.LightningModule):
     def all_model_outputs_pathwise(self, X, num_samples: int = None):
         if num_samples is None: num_samples = self.hparams.config_model.model.num_variational_samples
         outputs = \
-            graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder,
+        graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder, predictor=self.predictor,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hparams.hparams_model.loss.elbo_coeffs,
                                  permutations=self.permutations)

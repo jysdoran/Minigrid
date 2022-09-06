@@ -36,7 +36,7 @@ def shortest_path_length(graph: nx.Graph, source: int, target: int) -> int:
 
 def resistance_distance(graph: nx.Graph, source: int, target: int) -> int:
     """
-    Compute resistance distance from source to target in graph. Graph must be strongly connectected (1 single component)
+    Compute resistance distance from source to target in graph. Graph must be strongly connected (1 single component)
     """
     if source == target or not nx.has_path(graph, source, target):
         return np.nan
