@@ -709,7 +709,18 @@ class Predictor(nn.Module):
                 metric = 0.
             metrics.append(metric)
 
-        return torch.tensor(metrics).to(graphs[0].device)
+        metrics = self.transform_target(torch.tensor(metrics).to(graphs[0].device))
+
+        return metrics
+
+    def transform_target(self, target, eps=1e-5):
+        if self.config.target_transform == "log":
+            return torch.log(target + eps)
+        elif self.config.target_transform == "identity":
+            return target
+        else:
+            raise NotImplementedError(f"Specified Target Transform '{self.config.target_transform}'"
+                                      f" Invalid or Not Currently Implemented.")
 
 
 class GraphVAE(nn.Module):

@@ -177,9 +177,15 @@ class GraphVAELogger(pl.Callback):
         #TODO remove later
         outputs = self.obtain_model_outputs(self.graphs["val"], pl_module, num_samples=self.num_embedding_samples, num_var_samples=self.num_variational_samples_logging)
         self.log_latent_embeddings(trainer, pl_module, f"latent_space/{self.num_variational_samples_logging}_var_samples/val",
-                                   mode="custom", graphs=self.graphs["val"], labels=self.labels["val"], outputs=outputs)
-        self.log_latent_interpolation(trainer, pl_module, tag="interpolation/polar", mode="val",
-                                      interpolation_scheme="polar")
+                                   mode="custom", outputs=outputs)
+        self.log_latent_interpolation(trainer, pl_module, tag="interpolation/polar",
+                                      mode="val",
+                                      num_samples=self.logging_cfg.sample_interpolation.num_samples,
+                                      interpolations_per_samples=self.logging_cfg.sample_interpolation.num_interpolations,
+                                      remove_dims=self.logging_cfg.sample_interpolation.remove_noninformative_dimensions,
+                                      dim_reduction_threshold=self.logging_cfg.sample_interpolation.dimension_reduction_threshold,
+                                      latent_sampling=self.logging_cfg.sample_interpolation.sample_latents,
+                                      interpolation_scheme=self.logging_cfg.sample_interpolation.interpolation_scheme)
 
     def on_predict_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         logger.info(f"Progression: Entering on_predict_end()")
@@ -189,7 +195,7 @@ class GraphVAELogger(pl.Callback):
         #TODO remove later
         outputs = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_embedding_samples, num_var_samples=self.num_variational_samples_logging)
         self.log_latent_embeddings(trainer, pl_module, f"latent_space/{self.num_variational_samples_logging}_var_samples/train",
-                                   mode="custom", graphs=self.graphs["train"], labels=self.labels["train"], outputs=outputs)
+                                   mode="custom", outputs=outputs)
         self.log_latent_interpolation(trainer, pl_module, "interpolation/polar",
                                       mode="predict",
                                       num_samples=self.logging_cfg.sample_interpolation.num_samples,
@@ -267,12 +273,34 @@ class GraphVAELogger(pl.Callback):
 
     # Logging logic
 
-    def log_latent_embeddings(self, trainer, pl_module, tag, mode="val", graphs=None, labels=None, outputs=None):
+    def log_latent_embeddings(self, trainer, pl_module, tag, mode="val", outputs=None):
 
         logger.info(f"Progression: Entering log_latent_embeddings(), mode:{mode}")
 
         graphs, labels, logits_A, logits_Fx = [None]*4
-        if mode == "val":
+
+        if mode == "prior" or "interpolation" in tag:
+            try:
+                assert outputs is not None
+                Z = outputs["Z"]
+            except (KeyError, AssertionError) as e:
+                if "interpolation" in tag:
+                    raise e("log_latent_embeddings() - Latent interpolation requires outputs['Z'] to be specified.")
+                else:
+                    Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
+                    Z = torch.randn(self.num_generated_samples, Z_dim).to(device=pl_module.device)
+            logits_A, logits_Fx = pl_module.decoder(Z)
+            unweighted_elbos = None
+            labels = None
+            y_hat = pl_module.predictor(Z)
+            reconstructed_graphs, start_nodes, goal_nodes, is_valid = \
+                tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, pl_module.decoder,
+                                                                  correct_A=True)
+            y = pl_module.predictor.target_metric_fn(reconstructed_graphs, start_nodes, goal_nodes)
+            y = einops.repeat(y, 'b -> b 1') # (B,) -> (B,1)
+            predictor_loss_fn = pl_module.predictor.loss_fn(reduction="none")
+            predictor_loss_unreg = predictor_loss_fn(y_hat, y)
+        elif mode == "val":
             Z = self.validation_step_outputs["mean"][:self.num_embedding_samples]
             logits_A, logits_Fx = self.validation_step_outputs["logits_A"][:self.num_embedding_samples], self.validation_step_outputs["logits_Fx"][:self.num_embedding_samples]
             graphs = self.validation_batch["graphs"][:self.num_embedding_samples]
@@ -280,6 +308,7 @@ class GraphVAELogger(pl.Callback):
             unweighted_elbos = self.validation_step_outputs["unweighted_elbos"][:self.num_embedding_samples]
             predictor_loss_unreg = self.validation_step_outputs["predictor_loss_unreg"][:self.num_embedding_samples]
             y_hat = self.validation_step_outputs["y_hat"][:self.num_embedding_samples]
+            y = self.validation_step_outputs["y"][ :self.num_embedding_samples ]
         elif mode == "predict":
             Z = self.predict_step_outputs["mean"][:self.num_embedding_samples]
             logits_A, logits_Fx = self.predict_step_outputs["logits_A"][:self.num_embedding_samples], self.predict_step_outputs["logits_Fx"][:self.num_embedding_samples]
@@ -288,24 +317,17 @@ class GraphVAELogger(pl.Callback):
             unweighted_elbos = self.predict_step_outputs["unweighted_elbos"][:self.num_embedding_samples]
             predictor_loss_unreg = self.predict_step_outputs["predictor_loss_unreg"][:self.num_embedding_samples]
             y_hat = self.predict_step_outputs["y_hat"][:self.num_embedding_samples]
-        elif mode == "prior":
-            Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
-            Z = torch.randn(1, self.num_generated_samples, Z_dim).to(device=pl_module.device)
-            logits_A, logits_Fx = [f.mean(dim=0) for f in pl_module.decoder(Z)]
-            Z = Z.mean(dim=0)
-            unweighted_elbos = None
-            labels = None
-            y_hat = pl_module.predictor(Z)
-            predict_target = torch.zeros(y_hat.shape) #TODO: Implement this
-            predictor_loss_fn = pl_module.predictor.loss_fn(reduction="none")
-            predictor_loss_unreg = predictor_loss_fn(y_hat, predict_target)
+            y = self.predict_step_outputs["y"][:self.num_embedding_samples ]
         elif mode == "custom":
             unweighted_elbos = outputs["unweighted_elbos"]
             logits_A = outputs["logits_A"]
             logits_Fx = outputs["logits_Fx"]
             Z = outputs["mean"]
             y_hat = outputs["y_hat"]
+            y = outputs["y"]
             predictor_loss_unreg = outputs["predictor_loss_unreg"]
+        else:
+            raise RuntimeError(f"log_latent_embeddings() - Invalid mode: {mode}")
 
 
         assert Z.shape[0] == logits_A.shape[0] == logits_Fx.shape[0], f"log_latent_embeddings(): Shape mismatch Z={Z.shape}, logits_A={logits_A.shape}, logits_Fx={logits_Fx.shape}"
@@ -317,17 +339,8 @@ class GraphVAELogger(pl.Callback):
             input_imgs = self.gridworld_to_img(input_gws)
             del input_gws, graphs
 
-        # logger.info(f"log_latent_embeddings(): successfully obtained input images.")
-
-        # Z = Z.detach().cpu().numpy()
-        #
-        # # logger.info(f"log_latent_embeddings(): Executed Z = Z.cpu().numpy().")
-
         reconstructed_graphs, start_nodes, goal_nodes, is_valid = \
             tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, pl_module.decoder, correct_A=True)
-
-        # logger.info(f"log_latent_embeddings(): Executed tr.Nav2DTransforms.encode_decoder_output_to_graph.")
-        # logger.info(f"log_latent_embeddings(): successfully reconstructed the graphs from the decoder output.")
 
         reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
         reconstruction_metrics["valid"] = is_valid.tolist()
@@ -337,11 +350,7 @@ class GraphVAELogger(pl.Callback):
         reconstruction_metrics["unique"] = (check_unique(mode_A) | check_unique(mode_Fx)).tolist()
         del is_valid, reconstructed_graphs
 
-        # logger.info(f"log_latent_embeddings(): successfully obtained the graph metrics from the decoded graphs.")
-
         reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
-
-        # logger.info(f"log_latent_embeddings(): decoded graphs to img successfull.")
 
         if self.force_valid_reconstructions:
             probs_Fx = pl_module.decoder.param_pFx(logits_Fx)
@@ -369,10 +378,9 @@ class GraphVAELogger(pl.Callback):
 
         if self.label_descriptors_config is not None:
             reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
-            logger.info(f"log_latent_embeddings(): decoded graph metrics normalised.")
             if self.force_valid_reconstructions:
                 reconstruction_metrics_force_valid = self.normalise_metrics(reconstruction_metrics_force_valid, device=pl_module.device)
-                logger.info(f"log_latent_embeddings(): force valid decoded graph metrics normalised.")
+            logger.info(f"log_latent_embeddings(): graph metrics normalised.")
 
         to_log = {}
         for key in reconstruction_metrics.keys():
@@ -391,8 +399,6 @@ class GraphVAELogger(pl.Callback):
         logger.info(f"log_latent_embeddings(): logged metrics to wandb.")
 
         df = pd.DataFrame()
-        # col_names = ["Z"+str(i) for i in range(Z.shape[-1])]
-        # df = pd.DataFrame(Z.tolist(), columns="Z")
         df.insert(0, "Z", Z.tolist())
         if labels is not None:
             # Store pre-computed Input metrics
@@ -416,7 +422,6 @@ class GraphVAELogger(pl.Callback):
                             "global_step" : trainer.global_step
                             })
             del reconstruction_metrics_force_valid
-            logger.info(f"log_latent_embeddings(): logged force valid metrics distributions to wandb.")
 
         # Store Reconstruction metrics
         for key in reversed(["valid", "solvable", "unique", "shortest_path", "resistance", "navigable_nodes"]):
@@ -430,16 +435,14 @@ class GraphVAELogger(pl.Callback):
                         "global_step"                   : trainer.global_step
                         })
         del reconstruction_metrics, hist_data
-        logger.info(f"log_latent_embeddings(): logged reconstruction metrics distributions to wandb.")
+        logger.info(f"log_latent_embeddings(): logged graph metrics distributions to wandb.")
 
         if predictor_loss_unreg is not None:
             df.insert(0, "Predictor_loss_unreg", predictor_loss_unreg.tolist())
-            logger.info(f"log_latent_embeddings(): predictor_loss_unreg added to dataframe.")
             df.insert(0, "y_hat", y_hat.tolist())
-            logger.info(f"log_latent_embeddings(): predict_target added to dataframe.")
+            df.insert(0, "y", y.tolist())
         if unweighted_elbos is not None:
             df.insert(0, "Unweighted_elbos", unweighted_elbos.tolist())
-            logger.info(f"log_latent_embeddings(): unweighted_elbos added to dataframe.")
 
         if self.force_valid_reconstructions:
             df.insert(0, "RV:Reconstructions_Valid", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs_force_valid])
@@ -448,15 +451,13 @@ class GraphVAELogger(pl.Callback):
             df.insert(0, "I:Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
             df.insert(0, "Label_ids", labels.tolist())
 
-        logger.info(f"log_latent_embeddings(): Storing dataframe with {len(reconstructed_imgs)} embeddings.")
-
         trainer.logger.experiment.log({
             f"tables/{tag}/{mode}": wandb.Table(
                 dataframe=df
             ),
             "global_step": trainer.global_step
         })
-        logger.info(f"log_latent_embeddings(): Logged dataframe tables/{tag}/{mode} to wandb.")
+        logger.info(f"log_latent_embeddings(): Logged dataframe tables/{tag}/{mode} with {len(reconstructed_imgs)} embeddings to wandb.")
 
     def log_latent_interpolation(self, trainer:pl.Trainer,
                                  pl_module:pl.LightningModule,
@@ -560,6 +561,7 @@ class GraphVAELogger(pl.Callback):
             del temp
 
         interp_Z = interp_Z.reshape(-1, interp_Z.shape[-1])
+        self.log_latent_embeddings(trainer, pl_module, "latent_space/interpolation", mode="val", outputs={"Z":interp_Z})
 
         # Obtain the interpolated samples
         logits_A, logits_Fx = pl_module.decoder(interp_Z)
