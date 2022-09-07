@@ -308,7 +308,7 @@ class GraphVAELogger(pl.Callback):
             unweighted_elbos = self.validation_step_outputs["unweighted_elbos"][:self.num_embedding_samples]
             predictor_loss_unreg = self.validation_step_outputs["predictor_loss_unreg"][:self.num_embedding_samples]
             y_hat = self.validation_step_outputs["y_hat"][:self.num_embedding_samples]
-            y = self.validation_step_outputs["y"][ :self.num_embedding_samples ]
+            y = self.validation_step_outputs["y"][:self.num_embedding_samples]
         elif mode == "predict":
             Z = self.predict_step_outputs["mean"][:self.num_embedding_samples]
             logits_A, logits_Fx = self.predict_step_outputs["logits_A"][:self.num_embedding_samples], self.predict_step_outputs["logits_Fx"][:self.num_embedding_samples]
@@ -317,7 +317,7 @@ class GraphVAELogger(pl.Callback):
             unweighted_elbos = self.predict_step_outputs["unweighted_elbos"][:self.num_embedding_samples]
             predictor_loss_unreg = self.predict_step_outputs["predictor_loss_unreg"][:self.num_embedding_samples]
             y_hat = self.predict_step_outputs["y_hat"][:self.num_embedding_samples]
-            y = self.predict_step_outputs["y"][:self.num_embedding_samples ]
+            y = self.predict_step_outputs["y"][:self.num_embedding_samples]
         elif mode == "custom":
             unweighted_elbos = outputs["unweighted_elbos"]
             logits_A = outputs["logits_A"]

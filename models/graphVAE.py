@@ -698,12 +698,12 @@ class Predictor(nn.Module):
 
         metrics = []
         for b in range(0, len(graphs)):
-            start = start_nodes[b]
-            goal = goal_nodes[b]
+            start = start_nodes[b].item()
+            goal = goal_nodes[b].item()
             graph, valid, connected = gm.prepare_graph(graphs[b], start, goal)
             if valid and connected:
                 metric = gm.resistance_distance(graph, start, goal)
-                if metric == np.Nan:
+                if metric == np.NaN:
                     metric = 0.
             else:
                 metric = 0.
