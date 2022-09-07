@@ -709,7 +709,7 @@ class Predictor(nn.Module):
                 metric = 0.
             metrics.append(metric)
 
-        metrics = self.transform_target(torch.tensor(metrics).to(graphs[0].device))
+        metrics = self.transform_target(torch.tensor(metrics).to(graphs[0].device, dtype=torch.float32))
 
         return metrics
 
