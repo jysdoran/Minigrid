@@ -58,6 +58,7 @@ configuration:
     hidden_dim: 128 #not counting the final multihead layer
 
   predictor:
+    enable: False
     target_metric: resistance_distance
     target_from: output
     target_transform: log # log or identity

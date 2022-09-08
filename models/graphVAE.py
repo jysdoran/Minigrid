@@ -794,7 +794,10 @@ class LightningGraphVAE(pl.LightningModule):
 
         self.encoder = GraphGCNEncoder(self.hparams.config_model.encoder, self.hparams.config_model.shared_parameters)
         self.decoder = GraphMLPDecoder(self.hparams.config_model.decoder, self.hparams.config_model.shared_parameters)
-        self.predictor = Predictor(self.hparams.config_model.predictor, self.hparams.config_model.shared_parameters)
+        if self.hparams.config_model.predictor.enable:
+            self.predictor = Predictor(self.hparams.config_model.predictor, self.hparams.config_model.shared_parameters)
+        else:
+            self.predictor = None
 
         if self.hparams.config_model.model.augmented_inputs:
             transforms = torch.tensor(self.hparams.config_model.model.transforms, dtype=torch.int)

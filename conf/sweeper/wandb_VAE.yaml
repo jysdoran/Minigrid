@@ -32,7 +32,7 @@ hydra:
 
       # (Optional) Total number of agents to launch (must be >= num_agents)
       # Default is 1.
-      budget: 40
+      budget: 150
 
       # (Optional) Specify the entity for this sweep. Otherwise infer from the
       # environment.
@@ -89,17 +89,17 @@ hydra:
     params:
 
       # Model configuration
-      models.configuration.shared_parameters.latent_dim: [ 64, 128, 256, 512 ]
+      models.configuration.shared_parameters.latent_dim: [256, 512, 1024 ]
 
-      models.configuration.encoder.gnn.num_layers: [ 5, 8, 12 ]
+      models.configuration.encoder.gnn.num_layers: [ 2, 3, 4, 5, 6]
       models.configuration.encoder.gnn.layer_dim: [ 8, 12 ]
-      models.configuration.encoder.mlp.num_layers: [ 2, 3 ]
+      models.configuration.encoder.mlp.num_layers: [1, 2, 3 ]
       models.configuration.encoder.mlp.hidden_dim: [2048, 1024, 512 ]
-      models.configuration.encoder.mlp.bottleneck_dim: [ 128, 256, 512 ]
+      models.configuration.encoder.mlp.bottleneck_dim: [64, 128, 256, 512 ]
 
-      models.configuration.decoder.num_layers: [ 2, 3, 4 ]
-      models.configuration.decoder.bottleneck_dim: [ 128, 256, 512, 1024 ]
-      models.configuration.decoder.hidden_dim: [ 256, 512, 1024, 2048 ]
+      models.configuration.decoder.num_layers: [1, 2, 3]
+      models.configuration.decoder.bottleneck_dim: [ 512, 1024, 2048 ]
+      models.configuration.decoder.hidden_dim: [256, 512, 1024, 2048 ]
 
       # Optimisation configuration
 
@@ -120,6 +120,6 @@ hydra:
       models.hyperparameters.loss.elbo_coeffs.beta:
         distribution: log_uniform
         min: -2.302585092994045 #log(0.1)
-        max: 0. #log(1.0)
+        max: -0.397940009 #log(0.4)
 
       epochs: 5

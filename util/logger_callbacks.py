@@ -292,14 +292,19 @@ class GraphVAELogger(pl.Callback):
             logits_A, logits_Fx = pl_module.decoder(Z)
             unweighted_elbos = None
             labels = None
-            y_hat = pl_module.predictor(Z)
-            reconstructed_graphs, start_nodes, goal_nodes, is_valid = \
-                tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, pl_module.decoder,
-                                                                  correct_A=True)
-            y = pl_module.predictor.target_metric_fn(reconstructed_graphs, start_nodes, goal_nodes).to(Z.device)
-            y = einops.repeat(y, 'b -> b 1') # (B,) -> (B,1)
-            predictor_loss_fn = pl_module.predictor.loss_fn(reduction="none")
-            predictor_loss_unreg = predictor_loss_fn(y_hat, y)
+            if pl_module.predictor is not None:
+                y_hat = pl_module.predictor(Z)
+                reconstructed_graphs, start_nodes, goal_nodes, is_valid = \
+                    tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, pl_module.decoder,
+                                                                      correct_A=True)
+                y = pl_module.predictor.target_metric_fn(reconstructed_graphs, start_nodes, goal_nodes).to(Z.device)
+                y = einops.repeat(y, 'b -> b 1') # (B,) -> (B,1)
+                predictor_loss_fn = pl_module.predictor.loss_fn(reduction="none")
+                predictor_loss_unreg = predictor_loss_fn(y_hat, y)
+            else:
+                y_hat = None
+                y = None
+                predictor_loss_unreg = None
         elif mode == "val":
             Z = self.validation_step_outputs["mean"][:self.num_embedding_samples]
             logits_A, logits_Fx = self.validation_step_outputs["logits_A"][:self.num_embedding_samples], self.validation_step_outputs["logits_Fx"][:self.num_embedding_samples]
