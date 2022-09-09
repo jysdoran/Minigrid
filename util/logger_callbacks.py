@@ -500,25 +500,25 @@ class GraphVAELogger(pl.Callback):
         mean, std, Z = [None]*3
         Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
         if mode == "val":
-            mean = self.validation_step_outputs["mean"][:num_samples]
-            std = self.validation_step_outputs["std"][:num_samples]
+            mean = self.validation_step_outputs["mean"]
+            std = self.validation_step_outputs["std"]
             if latent_sampling:
                 rand = torch.randn(len(mean), Z_dim).to(mean)
                 Z = mean + std * rand
             else:
                 Z = mean
         elif mode == "predict":
-            mean = self.predict_step_outputs["mean"][:num_samples]
-            std = self.predict_step_outputs["std"][:num_samples]
+            mean = self.predict_step_outputs["mean"]
+            std = self.predict_step_outputs["std"]
             if latent_sampling:
                 rand = torch.randn(len(mean), Z_dim).to(pl_module.device)
                 Z = mean + std * rand
             else:
                 Z = mean
         elif mode == "prior":
-            Z = torch.randn(num_samples, Z_dim).to(pl_module.device)
+            Z = torch.randn(self.num_generated_samples, Z_dim).to(pl_module.device)
 
-        # Remove dimensions with average standard deviation of 1 (e.g. uninformative)
+        # Remove dimensions with average standard deviation of > dim_reduction_threshold (e.g. uninformative)
         if remove_dims and mode!="prior":
             kept_dims = torch.where(std < dim_reduction_threshold)[-1]
             kept_dims = torch.unique(kept_dims)
@@ -545,6 +545,11 @@ class GraphVAELogger(pl.Callback):
             if ind_a != ind_b:
                 key = (min(ind_a, ind_b), max(ind_a, ind_b))
                 distances[key] = dist[ind_a]
+
+        # Ensure we don't compute more interpolations than desired
+        if len(distances.keys()) > num_samples:
+            distances = {k : v for k, v in
+                         zip(list(distances.keys())[:num_samples], list(distances.values())[:num_samples])}
 
         # sort the distances in ascending order
         distances = {k: v for k, v in sorted(distances.items(), key=lambda item: item[1])}
@@ -573,8 +578,9 @@ class GraphVAELogger(pl.Callback):
         del interp_Z
 
         imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+        num_rows = int(imgs.shape[0] // len(distances.keys()))
 
-        self.log_images(trainer, f"interpolated_samples/{tag}/{mode}", imgs, mode="RGBA", nrow=len(distances.keys()))
+        self.log_images(trainer, f"interpolated_samples/{tag}/{mode}", imgs, mode="RGBA", nrow=num_rows)
 
     def log_prior_sampling(self, trainer, pl_module, tag=None):
         logger.info(f"Progression: Entering log_prior_sampling(), tag:{tag}")
