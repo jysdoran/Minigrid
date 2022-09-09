@@ -475,6 +475,16 @@ class GraphVAELogger(pl.Callback):
                                  interpolation_scheme:str= 'linear',
                                  latent_sampling:bool=True):
 
+        # Interpolate logic:
+        # I. Compute distances between points in latent space and sort samples into pairs of lowest to highest distance.
+        # II. For num_samples pairs:
+        #   1. normalise means to be unit vectors. mean_norm = mean / ||mean||
+        #   2. Spherical interpolation on the unit sphere : points = slerp(mean_norm1, mean_norm2)
+        #   3. Scale the points by the linear interpolation of the "radius" (mean): points = points * lerp(||mean1||, ||mean2||)
+        #   4. if latent sampling:
+        #       Sample points around each interpolated mean according to a linear interpolation of the stds
+        #       points = points + lerp(std1, std2) * randn()
+
         logger.info(f"Progression: Entering log_latent_interpolation(), mode:{mode}")
 
         def interpolate_between_pairs(pairs:Tuple[int,int], data:torch.Tensor, num_interpolations:int,
@@ -497,26 +507,16 @@ class GraphVAELogger(pl.Callback):
             return torch.stack([torch.stack(row).to(data) for row in interpolations]).to(data)
 
         # Get data
-        mean, std, Z = [None]*3
         Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
         if mode == "val":
             mean = self.validation_step_outputs["mean"]
             std = self.validation_step_outputs["std"]
-            if latent_sampling:
-                rand = torch.randn(len(mean), Z_dim).to(mean)
-                Z = mean + std * rand
-            else:
-                Z = mean
         elif mode == "predict":
             mean = self.predict_step_outputs["mean"]
             std = self.predict_step_outputs["std"]
-            if latent_sampling:
-                rand = torch.randn(len(mean), Z_dim).to(pl_module.device)
-                Z = mean + std * rand
-            else:
-                Z = mean
         elif mode == "prior":
-            Z = torch.randn(self.num_generated_samples, Z_dim).to(pl_module.device)
+            mean = torch.randn(self.num_generated_samples, Z_dim).to(pl_module.device)
+            std = None
 
         # Remove dimensions with average standard deviation of > dim_reduction_threshold (e.g. uninformative)
         if remove_dims and mode!="prior":
@@ -524,17 +524,18 @@ class GraphVAELogger(pl.Callback):
             kept_dims = torch.unique(kept_dims)
             trainer.logger.log_metrics({f"metric/latent_space/dim_info/{tag}/{mode}": len(kept_dims)},
                                        step=trainer.global_step)
-            Z = Z[..., kept_dims]
-            std = std[..., kept_dims]
             mean = mean[..., kept_dims]
+            std = std[..., kept_dims]
 
         # Calculate and sort distances between latents
         if interpolation_scheme == 'linear':
-            latents_dist = torch.cdist(Z, Z, p=2)
+            latents_dist = torch.cdist(mean, mean, p=2)
             eps = 5e-3
-        if interpolation_scheme == 'polar':
-            latents_dist = cdist_polar(Z, Z)
+        elif interpolation_scheme == 'polar':
+            latents_dist = cdist_polar(mean, mean)
             eps = 5e-3
+        else:
+            raise RuntimeError(f"Interpolation scheme {interpolation_scheme} not recognised.")
 
         latents_dist[latents_dist <= eps] = float('inf')
         dist, pair_indices = latents_dist.min(axis=0)
@@ -554,13 +555,24 @@ class GraphVAELogger(pl.Callback):
         # sort the distances in ascending order
         distances = {k: v for k, v in sorted(distances.items(), key=lambda item: item[1])}
 
-        interp_Z = interpolate_between_pairs(distances.keys(), Z, interpolations_per_samples, interpolation_scheme)
-        if mode != "prior":
-            interp_mean = interpolate_between_pairs(distances.keys(), mean, interpolations_per_samples, 'linear')
+        #1.
+        mean_norm = torch.linalg.norm(mean, dim=1)
+        mean_normalised = mean / mean_norm.unsqueeze(-1)
+
+        #2.
+        interp_Z = interpolate_between_pairs(distances.keys(), mean_normalised, interpolations_per_samples, interpolation_scheme)
+
+        #3.
+        interp_mean_norms = interpolate_between_pairs(distances.keys(), mean_norm, interpolations_per_samples, 'linear')
+        interp_Z = interp_Z * interp_mean_norms.unsqueeze(-1)
+
+        #4.
+        if latent_sampling and std is not None:
             interp_std = interpolate_between_pairs(distances.keys(), std, interpolations_per_samples, 'linear')
-            interp_Z = (interp_Z * interp_std) + interp_mean
-            del interp_mean, interp_std, std, mean
-        del Z
+            interp_Z = interp_Z + interp_std * torch.randn_like(interp_Z)
+            del interp_std
+
+        del interp_mean_norms, mean_norm, mean_normalised, mean, std
 
         # reassembly
         if remove_dims and mode!="prior":
@@ -569,6 +581,19 @@ class GraphVAELogger(pl.Callback):
                                                       dtype=torch.float).to(pl_module.device)
             interp_Z[..., kept_dims] = temp
             del temp
+
+        to_log = {
+            "distances": list(distances.values())
+            }
+
+        df = pd.DataFrame.from_dict(to_log)
+
+        trainer.logger.experiment.log({
+            f"tables/{tag}/distances/{mode}": wandb.Table(
+                dataframe=df
+            ),
+            "global_step": trainer.global_step
+        })
 
         interp_Z = interp_Z.reshape(-1, interp_Z.shape[-1])
         self.log_latent_embeddings(trainer, pl_module, "latent_space/interpolation", mode=mode, outputs={"Z":interp_Z})
