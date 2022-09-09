@@ -566,7 +566,7 @@ class GraphVAELogger(pl.Callback):
             del temp
 
         interp_Z = interp_Z.reshape(-1, interp_Z.shape[-1])
-        self.log_latent_embeddings(trainer, pl_module, "latent_space/interpolation", mode="val", outputs={"Z":interp_Z})
+        self.log_latent_embeddings(trainer, pl_module, "latent_space/interpolation", mode=mode, outputs={"Z":interp_Z})
 
         # Obtain the interpolated samples
         logits_A, logits_Fx = pl_module.decoder(interp_Z)
