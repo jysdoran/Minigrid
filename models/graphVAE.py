@@ -264,7 +264,11 @@ class GraphMLPDecoder(nn.Module):
 
         # model creation
         hidden_dims = [self.shared_params.latent_dim, self.config.bottleneck_dim]
-        hidden_dims.extend([self.config.hidden_dim] * (self.config.num_layers - 1))
+        if self.config.num_layers > 1:
+            hidden_dims.extend([self.config.hidden_dim] * (self.config.num_layers - 1))
+        # No hidden layer if the number of layers is 1
+        else:
+            self.config.hidden_dim = self.config.bottleneck_dim
         self.model = self.create_model(hidden_dims)
         if self.config.adjacency is not None:
             self.adjacency = nn.Linear(self.config.hidden_dim, self.config.output_dim.adjacency)
@@ -281,8 +285,11 @@ class GraphMLPDecoder(nn.Module):
 
     def create_model(self, dims: Iterable[int]):
         self.bottleneck = FC_ReLU_Network(dims[0:2], output_activation=nn.ReLU)
-        self.fc_net = FC_ReLU_Network(dims[1:], output_activation=nn.ReLU)
-        return [self.bottleneck, self.fc_net]
+        if len(dims) > 2:
+            self.fc_net = FC_ReLU_Network(dims[1:], output_activation=nn.ReLU)
+            return [self.bottleneck, self.fc_net]
+        else:
+            return [self.bottleneck]
 
     def forward(self, Z):
         """
