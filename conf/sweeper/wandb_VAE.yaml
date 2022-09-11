@@ -57,6 +57,8 @@ hydra:
       tags:
         - ${run_name}
         - ${data.dataset.name}
+        - shallow_gnn
+        - polar_interpolation
 
       # (Optional) Specify any early stopping criteria. Default is {}.
       # early_terminate:
@@ -91,8 +93,8 @@ hydra:
       # Model configuration
       models.configuration.shared_parameters.latent_dim: [256, 512, 1024 ]
 
-      models.configuration.encoder.gnn.num_layers: [ 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-      models.configuration.encoder.gnn.layer_dim: [ 8, 12 ]
+      models.configuration.encoder.gnn.num_layers: [1, 2, 3, 4]
+      models.configuration.encoder.gnn.layer_dim: [ 8, 12, 16]
       models.configuration.encoder.mlp.num_layers: [1, 2, 3 ]
       models.configuration.encoder.mlp.hidden_dim: [2048, 1024, 512 ]
       models.configuration.encoder.mlp.bottleneck_dim: [64, 128, 256, 512 ]
