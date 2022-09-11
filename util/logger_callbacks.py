@@ -475,7 +475,15 @@ class GraphVAELogger(pl.Callback):
                                  interpolation_scheme:str= 'linear',
                                  latent_sampling:bool=True):
 
-        # Interpolate logic:
+        ### Slerp interpolate logic:
+        # I. Compute distances between points in latent space and sort samples into pairs of lowest to highest distance.
+        # II. For num_samples pairs:
+        #   1. Spherical interpolation of the means : points = slerp(mean_1, mean_2)
+        #   2. if latent sampling:
+        #       Sample points around each interpolated mean according to a linear interpolation of the stds
+        #       points = points + lerp(std1, std2) * randn()
+
+        # New slerp interpolate logic:
         # I. Compute distances between points in latent space and sort samples into pairs of lowest to highest distance.
         # II. For num_samples pairs:
         #   1. normalise means to be unit vectors. mean_norm = mean / ||mean||
@@ -555,24 +563,37 @@ class GraphVAELogger(pl.Callback):
         # sort the distances in ascending order
         distances = {k: v for k, v in sorted(distances.items(), key=lambda item: item[1])}
 
-        #1.
-        mean_norm = torch.linalg.norm(mean, dim=1)
-        mean_normalised = mean / mean_norm.unsqueeze(-1)
+        if interpolation_scheme in ['linear','polar']:
+            #1.
+            interp_Z = interpolate_between_pairs(list(distances.keys()), mean, interpolations_per_samples, scheme=interpolation_scheme)
+            #2.
+            if latent_sampling and std is not None:
+                interp_std = interpolate_between_pairs(list(distances.keys()), std, interpolations_per_samples, 'linear')
+                interp_Z = interp_Z + interp_std * torch.randn_like(interp_Z)
+                del interp_std
+        # Not used at the moment
+        elif interpolation_scheme == 'unit_sphere':
+            #1.
+            mean_norm = torch.linalg.norm(mean, dim=1)
+            mean_normalised = mean / mean_norm.unsqueeze(-1)
 
-        #2.
-        interp_Z = interpolate_between_pairs(distances.keys(), mean_normalised, interpolations_per_samples, interpolation_scheme)
+            #2.
+            interp_Z = interpolate_between_pairs(distances.keys(), mean_normalised, interpolations_per_samples, interpolation_scheme)
 
-        #3.
-        interp_mean_norms = interpolate_between_pairs(distances.keys(), mean_norm, interpolations_per_samples, 'linear')
-        interp_Z = interp_Z * interp_mean_norms.unsqueeze(-1)
+            #3.
+            interp_mean_norms = interpolate_between_pairs(distances.keys(), mean_norm, interpolations_per_samples, 'linear')
+            interp_Z = interp_Z * interp_mean_norms.unsqueeze(-1)
 
-        #4.
-        if latent_sampling and std is not None:
-            interp_std = interpolate_between_pairs(distances.keys(), std, interpolations_per_samples, 'linear')
-            interp_Z = interp_Z + interp_std * torch.randn_like(interp_Z)
-            del interp_std
+            #4.
+            if latent_sampling and std is not None:
+                interp_std = interpolate_between_pairs(distances.keys(), std, interpolations_per_samples, 'linear')
+                interp_Z = interp_Z + interp_std * torch.randn_like(interp_Z)
+                del interp_std
 
-        del interp_mean_norms, mean_norm, mean_normalised, mean, std
+            del interp_mean_norms, mean_norm, mean_normalised
+        else:
+            raise RuntimeError(f"Interpolation scheme {interpolation_scheme} not recognised.")
+        del mean, std
 
         # reassembly
         if remove_dims and mode!="prior":
