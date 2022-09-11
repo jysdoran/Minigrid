@@ -151,6 +151,9 @@ def lerp(val, low, high):
     return (1.0-val) * low + val * high
 
 def slerp(val, low, high):
+    dot = torch.dot(low/torch.linalg.norm(low), high/torch.linalg.norm(high))
+    if torch.abs(dot) > 0.955:
+        return lerp(val, low, high)
     omega = torch.arccos(torch.clip(torch.dot(low/torch.linalg.norm(low), high/torch.linalg.norm(high)), -1, 1))
     so = torch.sin(omega)
     if so == 0:
