@@ -13,4 +13,4 @@ export WANDB_START_METHOD=thread
 #wandb offline
 #export WANDB_MODE=offline
 # export WANDB_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-/home/sgar/miniconda3/envs/curri/bin/python run_experiments.py -m run_name=new_interpolation +sweeper=wandb_VAE +launcher=submitit_remote num_cpus=16 offline=false
+/home/sgar/miniconda3/envs/curri/bin/python run_experiments.py -m run_name=new_interpolation +sweeper=wandb_VAE_10k +launcher=submitit_remote num_cpus=16 offline=false
