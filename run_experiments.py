@@ -31,7 +31,8 @@ def run_experiment(cfg: DictConfig) -> None:
                                     batch_size=cfg.data.dataset.batch_size,
                                     num_samples=cfg.results.num_stored_samples,
                                     transforms=cfg.data.dataset.transforms,
-                                    num_workers=cfg.num_cpus)
+                                    num_workers=cfg.num_cpus,
+                                    val_data=cfg.data.dataset.val_data)
 
     model = hydra.utils.instantiate(config=cfg.models,
                                     config_model=cfg.models.configuration,
@@ -50,7 +51,7 @@ def run_experiment(cfg: DictConfig) -> None:
 
     data_module.setup()
     logging_callbacks = [
-        GraphVAELogger(data_module.dataset.target_contents,
+        GraphVAELogger(data_module.target_contents,
                        data_module.samples,
                        cfg.results,
                        cfg.data.dataset,

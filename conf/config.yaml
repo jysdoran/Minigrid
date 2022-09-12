@@ -27,7 +27,7 @@ epochs: 10
 
 defaults:
   # + data/data_generation: gridworlds
-  - data/dataset: gridworlds
+  - data/dataset: gridworlds_10k
   - models: graphVAE
   - optim: adam
   - results: graphVAE

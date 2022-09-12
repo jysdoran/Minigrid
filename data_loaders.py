@@ -180,7 +180,7 @@ class GridNav_Dataset(VisionDataset):
 
 class GridNavDataModule(pl.LightningDataModule):
     def __init__(self, data_dir: str = "", batch_size: int = 32, num_samples: int = 2048,
-                 transform=None, num_workers: int = 0, **kwargs):
+                 transform=None, num_workers: int = 0, val_data: str = 'train', **kwargs):
         super().__init__()
         #sampler = dgl.dataloading.GraphDataLoader()
         self.data_dir = data_dir
@@ -190,14 +190,35 @@ class GridNavDataModule(pl.LightningDataModule):
         self.samples = {}
         self.dataset = None
         self.num_workers = num_workers
+        self.val_data = val_data # from train or test set
+        self.test = None
         logger.info("Initializing Gridworld Navigation DataModule")
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:
             dataset_full = GridNav_Dataset(self.data_dir, train=True, transform=self.transform)
-            split_size = [int(0.9 * len(dataset_full)), len(dataset_full) - int(0.9 * len(dataset_full))]
-            train, val = random_split(dataset_full, split_size)
-            self.dataset = train.dataset
+            self.target_contents = dataset_full.target_contents
+            if self.val_data == 'train':
+                split_size = [int(0.9 * len(dataset_full)), len(dataset_full) - int(0.9 * len(dataset_full))]
+                train, val = random_split(dataset_full, split_size)
+            elif self.val_data == 'test':
+                train = dataset_full
+                dataset_test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
+                for key in self.target_contents.keys():
+                    if isinstance(self.target_contents[key], list):
+                        self.target_contents[key].extend(dataset_test.target_contents[key])
+                    elif isinstance(self.target_contents[key], torch.Tensor):
+                        self.target_contents[key] = \
+                            torch.cat((self.target_contents[key], dataset_test.target_contents[key]))
+                    else:
+                        raise ValueError("Unsupported type for target_contents")
+                split_size = [int(0.5 * len(dataset_test)), len(dataset_test) - int(0.5 * len(dataset_test))]
+                val, test = random_split(dataset_test, split_size)
+                self.test = test
+            else:
+                raise ValueError(f"Incorrect val_data value: {self.val_data}. Must be either 'train' or 'test'")
+
+            self.dataset = dataset_full
             self.train = train
             self.val = val
             split_predict = [self.num_samples, len(self.train) - self.num_samples]
@@ -208,7 +229,8 @@ class GridNavDataModule(pl.LightningDataModule):
             n_samples = min(self.num_samples, len(self.val))
             self.samples["val"] = next(iter(self.create_dataloader(self.val, batch_size=n_samples)))
         if stage == 'test' or stage is None:
-            self.test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
+            if self.test is None:
+                self.test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
             n_samples = min(self.num_samples, len(self.test))
             self.samples["test"] = next(iter(self.create_dataloader(self.test, batch_size=n_samples)))
 
