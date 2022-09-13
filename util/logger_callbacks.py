@@ -11,7 +11,6 @@ import wandb
 import einops
 import pandas as pd
 
-from data_generators import OBJECT_TO_CHANNEL_AND_IDX
 import util.transforms as tr
 from util.graph_metrics import compute_metrics
 from util.util import check_unique, cdist_polar, lerp, slerp, rgba2rgb
@@ -789,8 +788,8 @@ class GraphVAELogger(pl.Callback):
             # "light_blue" : [0, 0, 1, 0.1],
         }
 
-        assert OBJECT_TO_CHANNEL_AND_IDX["wall"][1] != 0 or OBJECT_TO_CHANNEL_AND_IDX["empty"][1] != 0
-        if OBJECT_TO_CHANNEL_AND_IDX["empty"][1] != 0:
+        assert tr.OBJECT_TO_CHANNEL_AND_IDX["wall"][1] != 0 or tr.OBJECT_TO_CHANNEL_AND_IDX["empty"][1] != 0
+        if tr.OBJECT_TO_CHANNEL_AND_IDX["empty"][1] != 0:
             colors.pop("wall")
         else:
             colors.pop("empty")
@@ -798,7 +797,7 @@ class GraphVAELogger(pl.Callback):
         imgs = torch.zeros((gws.shape[0], 4, *gws.shape[-2:])).to(gws.device)
 
         for feat in colors.keys():
-            mask = gws[:, OBJECT_TO_CHANNEL_AND_IDX[feat][0], ...] == OBJECT_TO_CHANNEL_AND_IDX[feat][1]
+            mask = gws[:, tr.OBJECT_TO_CHANNEL_AND_IDX[feat][0], ...] == tr.OBJECT_TO_CHANNEL_AND_IDX[feat][1]
             color = torch.tensor(colors[feat]).to(gws)
             cm = torch.einsum('c, b h w -> b c h w', color, mask)
             imgs[cm>0] = cm[cm>0]

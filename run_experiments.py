@@ -55,7 +55,7 @@ def run_experiment(cfg: DictConfig) -> None:
                        data_module.samples,
                        cfg.results,
                        cfg.data.dataset,
-                       label_descriptors_config=data_module.dataset.dataset_metadata['label_descriptors_config'],
+                       label_descriptors_config=data_module.dataset_metadata['label_descriptors_config'],
                        accelerator=cfg.accelerator),
     ]
     trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs,
