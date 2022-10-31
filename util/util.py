@@ -11,8 +11,8 @@ from matplotlib.colors import LinearSegmentedColormap
 import argparse
 from typing import Tuple, List
 
-from data_loaders import WrappedDataLoader
-import util.transforms as tr
+from ..data_loaders import WrappedDataLoader
+from . import transforms as tr
 
 #WIP section
 

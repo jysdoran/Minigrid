@@ -1,6 +1,6 @@
 from torch import nn, Tensor
 from typing import Iterable, Tuple, Union
-from models.layers import *
+from .layers import *
 from math import prod
 import numpy as np
 

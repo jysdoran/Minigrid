@@ -9,13 +9,12 @@ from torch import nn
 import torch.nn.functional as F
 from typing import Iterable
 
-from models.gnn_networks import GIN
-from models.networks import FC_ReLU_Network
-from util.distributions import sample_gaussian_with_reparametrisation, compute_kld_with_standard_gaussian, \
+from .gnn_networks import GIN
+from .networks import FC_ReLU_Network
+from ..util.distributions import sample_gaussian_with_reparametrisation, compute_kld_with_standard_gaussian, \
     evaluate_logprob_bernoulli, evaluate_logprob_one_hot_categorical, evaluate_logprob_diagonal_gaussian
-import util.transforms as tr
-import util.graph_metrics as gm
-
+from ..util import transforms as tr
+from ..util import graph_metrics as gm
 
 def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, predictor=None, labels=None, permutations=None):
     # TODO: permutations not functional at the moment, because not implemented for Fx
