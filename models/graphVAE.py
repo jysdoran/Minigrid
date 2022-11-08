@@ -7,7 +7,7 @@ import hydra
 import wandb
 from torch import nn
 import torch.nn.functional as F
-from typing import Iterable
+from typing import Iterable, Union, List
 
 from .gnn_networks import GIN
 from .networks import FC_ReLU_Network
@@ -33,6 +33,11 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, pre
 
     # logits = torch.randn(num_samples, *X.shape) for testing
     logits_A, logits_Fx = decoder(Z)  # (M, B, n_nodes-1, 2)
+    if decoder.config.attribute_masking == "always":
+        Fx_mask = decoder.get_attribute_mask(X)
+        logits_Fx = decoder.mask_logits(logits_Fx, Fx_mask) # TODO: Or logits_Fx + float('-inf') * (1 - Fx_mask) to preserve gradients?
+    else:
+        Fx_mask = None
 
     graphs = dgl.unbatch(X)
     n_nodes = decoder.shared_params.graph_max_nodes
@@ -245,6 +250,7 @@ class GraphGCNEncoder(nn.Module):
         # Reuse the implemented code
         return evaluate_logprob_diagonal_gaussian(Z, mean=mean, std=std)
 
+
 class GraphMLPDecoder(nn.Module):
 
     def __init__(self, config, shared_params):
@@ -274,13 +280,14 @@ class GraphMLPDecoder(nn.Module):
         else:
             self.adjacency = None
 
-
         if self.attributes is not None:
             self.attribute_heads = nn.ModuleList()
             for i in range(len(self.attributes)):
                 self.attribute_heads.append(nn.Linear(self.config.hidden_dim, self.config.output_dim.attributes))
         else:
             self.attribute_heads = None
+
+        self.populate_methods()
 
     def create_model(self, dims: Iterable[int]):
         self.bottleneck = FC_ReLU_Network(dims[0:2], output_activation=nn.ReLU)
@@ -291,6 +298,44 @@ class GraphMLPDecoder(nn.Module):
             return [self.bottleneck]
 
     def forward(self, Z):
+        """
+        Evaluates the log_probability of X given the distributions parameters.
+
+        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
+        :param logits:
+        :param X:
+        :return:
+        """
+
+        raise NotImplementedError("Method was not initialised at init call")
+
+    def _forward_dense_graph(self, Z):
+        """
+        Computes the parameters of the generative distribution p(x | z)
+
+        Args:
+            Z (Tensor):  latent vectors, a batch of shape (M, B, K)
+
+        Returns:
+            f_out (Tensors): node feature probabilities, a batch of shape (M, B, num_nodes, D)
+        """
+
+        logits = Z
+        for net in self.model:
+            logits = net(logits)
+
+        if self.attribute_heads is not None:
+            f_out = []
+            for net in self.attribute_heads:
+                f_out.append(net(logits))
+            f_out = torch.stack(f_out, dim=-1)
+        else:
+            f_out = None
+
+        return f_out
+
+
+    def _forward_minimal_graph(self, Z):
         """
         Computes the parameters of the generative distribution p(x | z)
 
@@ -319,9 +364,140 @@ class GraphMLPDecoder(nn.Module):
 
         return adj_out, f_out
 
-    def log_prob(self, logits: tuple, X: tuple):
+    def populate_methods(self):
+
+        # Note : self.shared_params.data_encoding checks may break backward compatibility.
+        if self.adjacency is not None and self.shared_params.data_encoding == "minimal":
+            self.sample = self._sample_minimal_graph
+            self.log_prob = self._log_prob_minimal_graph
+            self.param_p = self._param_p_minimal_graph
+            self.param_m = self._param_m_minimal_graph
+            self.entropy = self._entropy_minimal_graph
+            self.to_graph = self._to_minimal_graph
+        elif self.adjacency is None and self.attributes is not None and self.shared_params.data_encoding == "dense":
+            self.sample = self.sample_Fx
+            self.log_prob = self.log_prob_Fx
+            self.param_p = self.param_p_Fx
+            self.param_m = self.param_m_Fx
+            self.entropy = self.entropy_Fx
+            self.to_graph = self.to_dense_graph
+        else:
+            raise NotImplementedError(f"Decoder setup with adjacency head {self.adjacency} and "
+                                      f"attribute heads {self.attributes} is not supported for data encoding"
+                                      f"{self.shared_params.data_encoding}.")
+
+    def log_prob(self, logits, X):
         """
-        Evaluates the log_probability of X given the distributions parameters
+        Evaluates the log_probability of X given the distributions parameters.
+
+        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
+        :param logits:
+        :param X:
+        :return:
+        """
+
+        raise NotImplementedError("Method was not initialised at init call")
+
+    def sample(self, logits, *, num_samples=1):
+        """
+        Samples from the generative distribution p(x | z)
+
+        Points to _sample_minimal_graph() or sample_Fx() depending on self.config.
+        :param num_samples:
+        :param logits:
+        :return:
+        """
+        raise NotImplementedError("Method was not initialised at init call")
+
+    def param_p(self, logits):
+        """
+        Evaluates the log_probability of X given the distributions parameters.
+
+        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
+        :param logits:
+        :return:
+        """
+        raise NotImplementedError("Method was not initialised at init call")
+
+    def param_m(self, logits):
+        """
+        Evaluates the log_probability of X given the distributions parameters.
+
+        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
+        :param logits:
+        :return:
+        """
+        raise NotImplementedError("Method was not initialised at init call")
+
+    def entropy(self, logits):
+        """
+        Evaluates the log_probability of X given the distributions parameters.
+
+        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
+        :param logits:
+        :return:
+        """
+        raise NotImplementedError("Method was not initialised at init call")
+
+    def to_graph(self, logits):
+        """
+        Evaluates the log_probability of X given the distributions parameters.
+
+        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
+        :param logits:
+        :return:
+        """
+        raise NotImplementedError("Method was not initialised at init call")
+
+    def get_attribute_mask(self, data: Union[dgl.DGLGraph, List[dgl.DGLGraph], torch.Tensor]) -> torch.Tensor:
+        """
+        Returns the attribute mask for the data.
+        :param data: either a DGLGraph, a list of DGLGraphs or a LOGITS tensor of shape (B, num_node, D). won't work
+            with probs tensor
+        :return: attribute_mask (Tensor): (B, max_nodes, D)
+        """
+
+        if self.config.data_encoding != "dense":
+            raise NotImplementedError("Attribute mask is only supported for dense data encoding.")
+            #TODO: change to warning or simply return None
+            return None
+
+        # More efficient to rebatch graph
+        if isinstance(data, list) and isinstance(data[0], dgl.DGLGraph):
+            data = dgl.batch(data).to(self.device)
+
+        if isinstance(data, dgl.DGLGraph):
+            attribute_mask = torch.ones(data.batch_size, data.number_of_nodes() // data.batch_size,
+                                    len(self.attributes), dtype=torch.bool).to(self.device)
+        elif isinstance(data, torch.Tensor):
+            attribute_mask = torch.ones(*data.shape, dtype=torch.bool).to(self.device)
+
+        for i, attr in enumerate(self.attributes):
+            if attr == "active":
+                continue #attribute_mask[..., i] = 1
+            elif attr == "start":
+                if isinstance(data, dgl.DGLGraph):
+                    attribute_mask[..., i] = (data.ndata["active"] >= 0.5).reshape(data.batch_size, -1)
+                elif isinstance(data, torch.Tensor):
+                    attribute_mask[..., i] = (data[..., self.attributes.index("active")] >= 0.0)
+            elif attr == "goal":
+                if isinstance(data, dgl.DGLGraph):
+                    attribute_mask[..., i] = (data.ndata["active"] >= 0.5).reshape(data.batch_size, -1)
+                    start_nodes = data.ndata["start"].reshape(data.batch_size, -1).argmax(dim=-1)
+                elif isinstance(data, torch.Tensor):
+                    attribute_mask[..., i] = (data[..., self.attributes.index("active")] >= 0.0)
+                    start_nodes = data[..., self.attributes.index("start")].argmax(dim=-1)
+                attribute_mask[:, start_nodes, i] = False
+
+        return attribute_mask
+
+    def mask_logits(self, logits, mask):
+
+        return logits.masked_fill(mask == 0, float('-inf'))
+
+    def _log_prob_minimal_graph(self, logits: tuple, X: tuple):
+        """
+        Evaluates the log_probability of X given the distributions parameters.
 
         Args:
             logits (Tuple): probabilistic graph representation (logits_A, logits_Fx)
@@ -393,7 +569,7 @@ class GraphMLPDecoder(nn.Module):
 
     # Some extra methods for analysis
 
-    def sample(self, logits: tuple, *, num_samples=1):
+    def _sample_minimal_graph(self, logits: tuple, *, num_samples=1):
         """
         Samples a graph representation from the probabilistic graph tuple
 
@@ -458,7 +634,7 @@ class GraphMLPDecoder(nn.Module):
 
         return Fx
 
-    def param_p(self, logits: tuple):
+    def _param_p_minimal_graph(self, logits: tuple):
         """
         Returns the distributions parameters
 
@@ -519,7 +695,7 @@ class GraphMLPDecoder(nn.Module):
 
         return pFx
 
-    def entropy(self, logits:tuple):
+    def _entropy_minimal_graph(self, logits:tuple):
         """
         Returns the distributions entropy
 
@@ -580,7 +756,7 @@ class GraphMLPDecoder(nn.Module):
 
         return H_Fx
 
-    def param_m(self, logits: tuple, threshold: float = 0.5):
+    def _param_m_minimal_graph(self, logits: tuple, threshold: float = 0.5):
         """
         Returns the mode given the distribution parameters. An optional threshold parameter
         can be specified to tune cutoff point between sampling 0 or 1 (only applied to Bernoulli distributions).
@@ -639,6 +815,12 @@ class GraphMLPDecoder(nn.Module):
             mFx (Tensor): mode of probabilistic feature attributes matrix, shape (*, B, max_nodes, D)
         """
 
+        if self.config.attribute_masking in ["always", "gen_only"]:
+            mask = self.get_attribute_mask(logits_Fx)
+            logits_Fx = self.mask_logits(logits_Fx, mask)
+        else:
+            mask = None
+
         binary_transform = tr.BinaryTransform(threshold)
         pFx = self.param_pFx(logits_Fx)
 
@@ -656,6 +838,14 @@ class GraphMLPDecoder(nn.Module):
 
         mFx = torch.stack(mFx, dim=-1).to(logits_Fx)
         return mFx
+
+    def _to_dense_graph(self, Fx:torch.Tensor) -> dgl.DGLGraph:
+
+        raise NotImplementedError("TODO")
+
+    def _to_minimal_graph(self, logits:tuple) -> dgl.DGLGraph:
+
+        raise NotImplementedError("TODO (low priority.)")
 
 class Predictor(nn.Module):
 
