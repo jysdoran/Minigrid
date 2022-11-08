@@ -1,4 +1,4 @@
-name: GraphVAE
+name: DenseGraphVAE
 _target_: models.graphVAE.LightningGraphVAE
 
 # these parameters should not change
@@ -27,7 +27,7 @@ configuration:
 #                           [[0, -1], [-1, 0]]]
 
   encoder:
-    attributes: ["empty", "start", "goal"]
+    attributes: ["active", "start", "goal"]
     #attributes_mapping: [0, 2, 3]
     gnn:
       architecture: GIN
@@ -45,14 +45,14 @@ configuration:
       bottleneck_dim: 128
 
   decoder:
-    adjacency: reduced #[full, reduced, null]
-    attributes: ["start", "goal"]#["empty", "start", "goal"]
-    attribute_masking: null #[null, always, test]
+    adjacency: null #[full, reduced, null]
+    attributes: ["active", "start", "goal"]
+    attribute_masking: always #[null, always, gen_only]
     #attributes_mapping: [2, 3] #predict start, goal
-    distributions: ["one_hot_categorical", "one_hot_categorical"]
-    distributions_domains: ["nodes", "nodes"]
+    distributions: ["bernoulli", "one_hot_categorical", "one_hot_categorical"]
+    #distributions_domains: ["node", "nodeset", "nodeset"] #Not implemented
     output_dim: #this should be computed according to adjacency, data.graph_max_nodes
-      adjacency: null # Auto (max_node-1)*2
+      adjacency: null
       attributes: ${data.dataset.max_nodes}
     architecture: MLP
     num_layers: 2 #not counting the final multihead layer
@@ -73,7 +73,7 @@ configuration:
 hyperparameters:
   loss:
     elbo_coeffs:
-      A: 1
-      Fx: .25
-      beta: 1
+      A: 0.
+      Fx: [1., .25, .25]
+      beta: 1.
       predictor: 0.
