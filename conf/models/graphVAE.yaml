@@ -10,6 +10,7 @@ configuration:
     node_attributes: ${data.dataset.node_attributes}
     batch_size: ${data.dataset.batch_size}
     data_encoding: ${data.dataset.encoding}
+    gridworld_data_dim: ${data.dataset.gridworld_data_dim}
 
   model:
     accelerator: ${accelerator}
