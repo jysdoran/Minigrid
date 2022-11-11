@@ -46,7 +46,13 @@ label_descriptors_config:
   generating_algorithm: [prims, multiroom]
   use_seed: true
 
-feature_descriptors:
+graph_feature_descriptors:
+  - empty
+  - wall
+  - start
+  - goal
+
+minigrid_feature_descriptors:
   - empty
   - wall
   - start

@@ -46,7 +46,13 @@ label_descriptors_config:
   generating_algorithm: [prims, multiroom] #Multiroom : changed min_room_size to 3, min_num_rooms to 1
   use_seed: true
 
-feature_descriptors:
+graph_feature_descriptors:
+  - empty
+  - wall
+  - start
+  - goal
+
+minigrid_feature_descriptors:
   - empty
   - wall
   - start

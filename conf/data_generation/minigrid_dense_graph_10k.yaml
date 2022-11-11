@@ -4,19 +4,20 @@ size: null #AUTO
 
 num_train_batches: 10
 num_test_batches: 2
-size_train_batch: 1000
-size_test_batch: 1000
+size_train_batch: 3
+size_test_batch: 3
 train_batch_ids: null #AUTO
 test_batch_ids: null #AUTO
 
 data_type: graph
 encoding: dense
+ensure_connected: true #make sure layouts have a single component
 normalise_metrics: true
 gridworld_data_dim: [3,15,15]
+generating_algorithm: [wave_function_collapse]
 task_type: navigate_to_goal
 task_structure_split: #Assumed similar across train and test batches
-  maze: 0.5
-  rooms_unstructured_layout: 0.5
+  cave: 1.0
 seed: 123456 #AUTO
 
 label_descriptors:
@@ -29,7 +30,10 @@ label_descriptors:
   - seed
 
 label_descriptors_config:
-  task_structures: [maze, rooms_unstructured_layout]
+  generating_algorithm: ${generating_algorithm}
+  task_structures: [
+                     cave,
+  ]
   shortest_path:
     min: 0.0
     max: 1.0
@@ -43,10 +47,14 @@ label_descriptors_config:
     max: 1.0
     normalisation_factor: null #AUTO
   num_optimal_trajectories: 1
-  generating_algorithm: [prims, multiroom] #Multiroom : changed min_room_size to 3, min_num_rooms to 1
   use_seed: true
 
-feature_descriptors:
+graph_feature_descriptors:
+  - active
+  - start
+  - goal
+
+minigrid_feature_descriptors:
   - empty
   - wall
   - start

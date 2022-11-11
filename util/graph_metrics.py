@@ -1,6 +1,6 @@
 import logging
 
-from typing import List, Any, Dict, Union, Iterable
+from typing import List, Any, Dict, Union, Iterable, Tuple
 
 import torch
 import dgl
@@ -66,8 +66,10 @@ def is_solvable(graph: nx.Graph, source, target) -> bool:
     return nx.has_path(graph, source, target) and source != target
 
 
-def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int, target: int):
-    """Convert DGLGraph to nx.Graph and reduces it to a single component."""
+def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target: int=None)\
+        ->Tuple[List[nx.Graph], bool, bool]:
+    """Convert DGLGraph to nx.Graph and reduces it to a single component. Containing the source node.
+    If the source node is not specified, the largest component is returned."""
 
     if isinstance(graph, dgl.DGLGraph):
         graph = graph.to_networkx()
@@ -78,22 +80,32 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int, target: int
     graph = nx.Graph(graph)
     nodes = set(graph.nodes)
 
-    # Catch any unwanted exceptions here, but it should be handled if the graph supplied is valid
-    if len(nodes) < 2 or source == target or source not in nodes or target not in nodes:
-        valid = False
-        connected = False
-        return graph, valid, connected
+    if source is not None:
+        # Catch any unwanted exceptions here, but it should be handled if the graph supplied is valid
+        if len(nodes) < 2 or source == target or source not in nodes or target not in nodes:
+            valid = False
+            connected = False
+            return graph, valid, connected
 
-    if graph.degree[source] == 0 or graph.degree[target] == 0:
-        valid = False
+        if graph.degree[source] == 0 or graph.degree[target] == 0:
+            valid = False
+        else:
+            valid = True
+
+        if nx.has_path(graph, source, target):
+            connected = True
+        else:
+            connected = False
+
+        component = nx.node_connected_component(graph, source)
     else:
+        components = [graph.subgraph(c).copy() for c in sorted(nx.connected_components(graph), key=len, reverse=True) if
+                      len(c) > 1]
+        component = components[0]
         valid = True
-
-    if nx.has_path(graph, source, target):
         connected = True
-    else:
-        connected = False
-    graph = graph.subgraph(nx.node_connected_component(graph, source))
+
+    graph = graph.subgraph(component)
     return graph, valid, connected
 
 
