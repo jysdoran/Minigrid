@@ -19,6 +19,7 @@ from ..util.distributions import sample_gaussian_with_reparametrisation, compute
     evaluate_logprob_bernoulli, evaluate_logprob_one_hot_categorical, evaluate_logprob_diagonal_gaussian
 from ..util import transforms as tr
 from ..util import graph_metrics as gm
+from ..util import util
 
 def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, predictor=None, labels=None, permutations=None):
     # TODO: permutations not functional at the moment, because not implemented for Fx
@@ -453,19 +454,7 @@ class GraphMLPDecoder(nn.Module):
 
     def get_node_features(self, graph: Union[dgl.DGLGraph, List[dgl.DGLGraph]]) -> Tuple[torch.Tensor, List[str]]:
 
-        # More efficient to rebatch graph
-        if isinstance(graph, list) and isinstance(graph[0], dgl.DGLGraph):
-            graph = dgl.batch(graph).to(self.device)
-
-        # Get node features
-        Fx = []
-        node_attributes = []
-        for attr in graph.ndata.keys():
-            Fx.append(Fx[attr].reshape(graph.batch_size, -1))
-            node_attributes.append(attr)
-        Fx = torch.stack(Fx, dim=-1).to(self.device)
-
-        return Fx, node_attributes
+        return util.get_node_features(graph, device=self.device)
 
     def get_attribute_mask(self, probs:torch.Tensor=None, logits:torch.Tensor=None, node_attributes=None) -> torch.Tensor:
 

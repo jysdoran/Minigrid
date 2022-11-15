@@ -9,7 +9,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import argparse
-from typing import Tuple, List
+from typing import Tuple, List, Union
 
 from ..data_loaders import WrappedDataLoader
 from . import transforms as tr
@@ -62,6 +62,27 @@ def check_unique(input: torch.Tensor):
         input = torch.tensor(input)
     _, ind, counts = torch.unique(input, dim=0, return_inverse=True, return_counts=True, sorted=False)
     return counts[ind] == 1
+
+def get_node_features(graph:Union[dgl.DGLGraph, List[dgl.DGLGraph]], device=None):
+
+    if device is None:
+        if isinstance(graph, dgl.DGLGraph):
+            device = graph.device
+        else:
+            device = graph[0].device
+    # More efficient to rebatch graph
+    if isinstance(graph, list) and isinstance(graph[0], dgl.DGLGraph):
+        graph = dgl.batch(graph).to(device)
+
+    # Get node features
+    Fx = []
+    node_attributes = []
+    for attr in graph.ndata.keys():
+        Fx.append(Fx[attr].reshape(graph.batch_size, -1))
+        node_attributes.append(attr)
+    Fx = torch.stack(Fx, dim=-1).to(device)
+
+    return Fx, node_attributes
 
 def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None, n_interp:int = 4, dim_r_threshold=None, interpolation_scheme:str = 'linear', img_dims: Tuple[int, int, int] = None, figsize: Tuple[int, int] = (10, 10),
                               labels=None, latent_sampling=False, device='cpu', alpha=0.5, title=None):
