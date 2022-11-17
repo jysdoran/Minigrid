@@ -78,7 +78,7 @@ def get_node_features(graph:Union[dgl.DGLGraph, List[dgl.DGLGraph]], device=None
     Fx = []
     node_attributes = []
     for attr in graph.ndata.keys():
-        Fx.append(Fx[attr].reshape(graph.batch_size, -1))
+        Fx.append(graph.ndata[attr].reshape(graph.batch_size, -1))
         node_attributes.append(attr)
     Fx = torch.stack(Fx, dim=-1).to(device)
 

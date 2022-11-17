@@ -42,12 +42,61 @@ class GridNav_Dataset(VisionDataset):
         ["batch_7.data", "TODO"],
         ["batch_8.data", "TODO"],
         ["batch_9.data", "TODO"],
+        ["batch_10.data", "TODO"],
+        ["batch_11.data", "TODO"],
+        ["batch_12.data", "TODO"],
+        ["batch_13.data", "TODO"],
+        ["batch_14.data", "TODO"],
+        ["batch_15.data", "TODO"],
+        ["batch_16.data", "TODO"],
+        ["batch_17.data", "TODO"],
+        ["batch_18.data", "TODO"],
+        ["batch_19.data", "TODO"],
+        ["batch_20.data", "TODO"],
+        ["batch_21.data", "TODO"],
+        ["batch_22.data", "TODO"],
+        ["batch_23.data", "TODO"],
+        ["batch_24.data", "TODO"],
+        ["batch_25.data", "TODO"],
+        ["batch_26.data", "TODO"],
+        ["batch_27.data", "TODO"],
+        ["batch_28.data", "TODO"],
+        ["batch_29.data", "TODO"],
     ]
 
     test_list = [
         ["test_batch.data", "TODO"],
         ["test_batch_90.data", "TODO"],
         ["test_batch_91.data", "TODO"],
+        ["test_batch_92.data", "TODO"],
+        ["test_batch_93.data", "TODO"],
+        ["test_batch_94.data", "TODO"],
+        ["test_batch_95.data", "TODO"],
+        ["test_batch_96.data", "TODO"],
+        ["test_batch_97.data", "TODO"],
+        ["test_batch_98.data", "TODO"],
+        ["test_batch_99.data", "TODO"],
+        ["test_batch_100.data", "TODO"],
+        ["test_batch_101.data", "TODO"],
+        ["test_batch_102.data", "TODO"],
+        ["test_batch_103.data", "TODO"],
+        ["test_batch_104.data", "TODO"],
+        ["test_batch_105.data", "TODO"],
+        ["test_batch_106.data", "TODO"],
+        ["test_batch_107.data", "TODO"],
+        ["test_batch_108.data", "TODO"],
+        ["test_batch_109.data", "TODO"],
+        ["test_batch_110.data", "TODO"],
+        ["test_batch_111.data", "TODO"],
+        ["test_batch_112.data", "TODO"],
+        ["test_batch_113.data", "TODO"],
+        ["test_batch_114.data", "TODO"],
+        ["test_batch_115.data", "TODO"],
+        ["test_batch_116.data", "TODO"],
+        ["test_batch_117.data", "TODO"],
+        ["test_batch_118.data", "TODO"],
+        ["test_batch_119.data", "TODO"],
+
     ]
     meta = {
         "filename": "dataset.meta",
@@ -272,6 +321,15 @@ class GridNavDataModule(pl.LightningDataModule):
         else:
             raise NotImplementedError("Data Module not currently implemented for non Graph Data.")
         return data_loader
+
+    @property
+    def images(self):
+        return self.target_contents['images'].to(torch.float)
+
+    @property
+    def task_structures(self):
+        return self.target_contents['task_structure']
+
 
 
 class WrappedDataLoader:

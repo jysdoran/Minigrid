@@ -2,10 +2,10 @@ name: null #AUTO
 dir_name: null #AUTO
 size: null #AUTO
 
-num_train_batches: 10
-num_test_batches: 2
-size_train_batch: 3
-size_test_batch: 3
+num_train_batches: 22
+num_test_batches: 22
+size_train_batch: 10
+size_test_batch: 1
 train_batch_ids: null #AUTO
 test_batch_ids: null #AUTO
 
@@ -17,7 +17,28 @@ gridworld_data_dim: [3,15,15]
 generating_algorithm: [wave_function_collapse]
 task_type: navigate_to_goal
 task_structure_split: #Assumed similar across train and test batches
-  cave: 1.0
+                     dungeon_ : 1
+                     dungeon_lessrooms : 1
+                     dungeon_rooms : 1
+                     dungeon_spirals_neg : 1
+                     dungeon_mazescaled : 1
+                     maze_ : 1
+                     maze_knot : 1
+                     maze_like : 1
+                     maze_paths : 1
+                     maze_spirals : 1
+                     maze_wall : 1
+                     maze_simple : 1
+                     obstacles_blackdots : 1
+                     obstacles_hogs2 : 1
+                     obstacles_hogs3 : 1
+                     obstacles_angular : 1
+                     rooms_fabric : 1
+                     rooms_office : 1
+                     rooms_magicoffice : 1
+                     skew_lake : 1
+                     skew_2 : 1
+                     skew_cave : 1
 seed: 123456 #AUTO
 
 label_descriptors:
@@ -28,11 +49,40 @@ label_descriptors:
   - optimal_trajectories
   - generating_algorithm #{'prims', 'multiroom'}
   - seed
+  - images
 
 label_descriptors_config:
   generating_algorithm: ${generating_algorithm}
   task_structures: [
-                     cave,
+                     dungeon_,
+                     dungeon_lessrooms,
+                     dungeon_rooms,
+                     dungeon_spirals_neg,
+                     dungeon_mazescaled,
+
+                     maze_,
+                     maze_knot,
+                     maze_like,
+                     maze_paths,
+                     maze_spirals,
+                     maze_wall,
+                     maze_simple,
+
+                     obstacles_blackdots,
+                     obstacles_hogs2,
+                     obstacles_hogs3,
+                     obstacles_angular,
+#                     obstacles_city,
+
+                     rooms_fabric,
+                     rooms_office,
+                     rooms_magicoffice,
+
+                     skew_lake,
+                     skew_2,
+                     skew_cave,
+
+
   ]
   shortest_path:
     min: 0.0

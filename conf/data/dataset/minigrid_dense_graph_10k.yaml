@@ -3,7 +3,37 @@ path: change_me
 size: 12000 #120000
 batch_size: 128
 val_data: test
-task_structures: ['rooms_unstructured_layout','maze'] #TODO CHANGE
+task_structures: [
+                     dungeon_,
+                     dungeon_lessrooms,
+                     dungeon_rooms,
+                     dungeon_spirals_neg,
+                     dungeon_mazescaled,
+
+                     maze_,
+                     maze_knot,
+                     maze_like,
+                     maze_paths,
+                     maze_spirals,
+                     maze_wall,
+                     maze_simple,
+
+                     obstacles_blackdots,
+                     obstacles_hogs2,
+                     obstacles_hogs3,
+                     obstacles_angular,
+#                     obstacles_city,
+
+                     rooms_fabric,
+                     rooms_office,
+                     rooms_magicoffice,
+
+                     skew_lake,
+                     skew_2,
+                     skew_cave,
+
+
+  ]
 data_type: 'graph' #TODO change to dense_graph?
 transforms: null
 gridworld_data_dim: [3,15,15]
@@ -17,3 +47,4 @@ label_descriptors:
   - optimal_trajectories
   - generating_algorithm #{'prims', 'multiroom'}
   - seed
+  - images
