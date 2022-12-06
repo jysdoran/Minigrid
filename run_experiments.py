@@ -1,21 +1,23 @@
+__package__ = "maze_representations"
+
 import logging
 import os
 import sys
 # TODO: to be removed later
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # os.environ["CUDA_LAUNCH_BLOCKING"] = str(1)
 import hydra
 import wandb
-from pathlib import Path #TODO replace by hydra?
+from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 
 from data_loaders import GridNavDataModule
-from models.graphVAE import LightningGraphVAE
-from util.util import *
-from util.logger_callbacks import GraphVAELogger
+from .models.graphVAE import LightningGraphVAE
+from .util.util import *
+from .util.logger_callbacks import GraphVAELogger
 
 @hydra.main(version_base=None, config_path="conf", config_name="config.yaml")
 def run_experiment(cfg: DictConfig) -> None:
@@ -34,12 +36,18 @@ def run_experiment(cfg: DictConfig) -> None:
                                     num_workers=cfg.num_cpus,
                                     val_data=cfg.data.dataset.val_data)
 
-    model = hydra.utils.instantiate(config=cfg.models,
+    model = LightningGraphVAE(config=cfg.models,
                                     config_model=cfg.models.configuration,
                                     config_optim=cfg.optim,
                                     hparams_model=cfg.models.hyperparameters,
-                                    config_logging =cfg.results,
-                                    _recursive_=False)
+                                    config_logging =cfg.results)
+
+    # model = hydra.utils.instantiate(config=cfg.models,
+    #                                 config_model=cfg.models.configuration,
+    #                                 config_optim=cfg.optim,
+    #                                 hparams_model=cfg.models.hyperparameters,
+    #                                 config_logging =cfg.results,
+    #                                 _recursive_=False)
     #wandb.login(key='x'*40)
     wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd(), offline=cfg.offline, entity="francelico", log_model=True)
     if wandb_logger.experiment.name is not None:
@@ -99,7 +107,7 @@ def get_dataset_dir(cfg, test_mode=False):
     if test_mode:
         data_directory = 'test'
     else:
-        data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-f={attributes_dim}-enc={encoding}"
+        data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-gf={attributes_dim}-enc={encoding}"
     data_full_dir = datasets_dir + data_directory
     return data_full_dir, data_directory
 
@@ -112,6 +120,13 @@ def process_cfg(cfg):
             f = lambda x : (x - 1) / 2
             cfg.data.dataset.max_nodes = int(f(gw_data_dim[1]) * f(gw_data_dim[2]))
             cfg.models.configuration.decoder.output_dim.adjacency = int((cfg.data.dataset.max_nodes - 1)*2)
+        elif cfg.data.dataset.encoding == 'dense':
+            gw_data_dim = cfg.data.dataset.gridworld_data_dim
+            f = lambda x: (x - 2)
+            cfg.data.dataset.max_nodes = int(f(gw_data_dim[1]) * f(gw_data_dim[2]))
+        else:
+            raise NotImplementedError(f"Encoding {cfg.data.dataset.encoding} not implemented "
+                                      f"for data_type {cfg.data.dataset.data_type}.")
 
 # #obsolete but keeping it in case we need more custom runnames
 # def get_run_name(tag, model_cfg, dataset_dir):

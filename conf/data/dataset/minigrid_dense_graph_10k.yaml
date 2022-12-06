@@ -34,7 +34,7 @@ task_structures: [
 
 
   ]
-data_type: 'graph' #TODO change to dense_graph?
+data_type: 'graph'
 transforms: null
 gridworld_data_dim: [3,15,15]
 encoding: dense

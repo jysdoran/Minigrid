@@ -105,7 +105,6 @@ def elbo_with_pathwise_gradients_gnn(X, *, encoder, decoder, num_samples, data_d
     logits = decoder(Z)  # (M, B, n_nodes-1, 2)
 
     graphs = dgl.unbatch(X)
-    #TODO: find a way to do this efficiently on GPU, maybe convert logits to sparse tensor
     n_nodes = graphs[0].num_nodes()
     A_in = torch.empty((len(graphs), n_nodes, n_nodes)).to(logits)
     for m in range(len(graphs)):
@@ -228,7 +227,6 @@ class Encoder(nn.Module):
         # Create separate final layers for each parameter (mean and log-variance)
         # We use log-variance to unconstrain the optimisation of the positive-only variance parameters
 
-        #TODO: handle GNN more graciously
         if isinstance(enc_layer_dims[-2], int):
             bneck_in = (enc_layer_dims[-2],)
         else:
@@ -355,8 +353,7 @@ class GNNEncoder(Encoder):
     def __init__(self, hparams):
         super().__init__(hparams)
 
-    def create_model(self, dims): #TODO: actually use dims
-        #try dropout 0, #TODO: fix input dim
+    def create_model(self, dims):
         self.gnn_net = GIN(num_layers=self.hparams.enc_convolutions, num_mlp_layers=2, input_dim=dims[0], hidden_dim=dims[1],
                  output_dim=dims[1], final_dropout=0, learn_eps=False, graph_pooling_type='mean',
                  neighbor_pooling_type='sum', n_nodes=169)

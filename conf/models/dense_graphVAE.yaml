@@ -1,5 +1,5 @@
 name: DenseGraphVAE
-_target_: models.graphVAE.LightningGraphVAE
+_target_: maze_representations.models.graphVAE.LightningGraphVAE
 
 # these parameters should not change
 configuration:
@@ -13,6 +13,16 @@ configuration:
     gridworld_data_dim: ${data.dataset.gridworld_data_dim}
 
   model:
+    outputs: [
+      "loss",
+      "elbos",
+      "unweighted_elbos",
+      "neg_cross_entropy_Fx",
+      "kld",
+      "logits_Fx",
+      "std",
+      "mean",
+    ]
     accelerator: ${accelerator}
     gradient_type: pathwise
     num_variational_samples: 1

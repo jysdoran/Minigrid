@@ -16,12 +16,6 @@ from . import transforms as tr
 
 #WIP section
 
-# TODO: function to check if duplicate tasks
-# train_task = train_data[0][0].numpy()
-# for test in test_data:
-#     test_task = test[0].numpy()
-#     assert not np.array_equal(train_task, test_task)
-
 # TODO: graphviz
 
 # g = graphs[0]
@@ -63,23 +57,29 @@ def check_unique(input: torch.Tensor):
     _, ind, counts = torch.unique(input, dim=0, return_inverse=True, return_counts=True, sorted=False)
     return counts[ind] == 1
 
-def get_node_features(graph:Union[dgl.DGLGraph, List[dgl.DGLGraph]], device=None):
+def get_node_features(graph:Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attributes:List[str]=None,
+                      device:torch.DeviceObjType=None, reshape:bool=True) -> Tuple[torch.Tensor, List[str]]:
 
     if device is None:
         if isinstance(graph, dgl.DGLGraph):
             device = graph.device
         else:
             device = graph[0].device
+
     # More efficient to rebatch graph
     if isinstance(graph, list) and isinstance(graph[0], dgl.DGLGraph):
         graph = dgl.batch(graph).to(device)
 
+    if node_attributes is None:
+        node_attributes = graph.ndata.keys()
+
     # Get node features
     Fx = []
-    node_attributes = []
-    for attr in graph.ndata.keys():
-        Fx.append(graph.ndata[attr].reshape(graph.batch_size, -1))
-        node_attributes.append(attr)
+    for attr in node_attributes:
+        f = graph.ndata[attr]
+        if reshape:
+            f = f.reshape(graph.batch_size, -1)
+        Fx.append(f)
     Fx = torch.stack(Fx, dim=-1).to(device)
 
     return Fx, node_attributes

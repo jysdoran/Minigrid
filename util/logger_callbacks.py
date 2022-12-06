@@ -1,3 +1,4 @@
+import copy
 import logging
 
 import dgl
@@ -5,15 +6,18 @@ import networkx as nx
 import numpy as np
 import torchvision
 from typing import List, Union, Tuple, Optional, Any, Dict
+from collections import defaultdict
 import torch
 import pytorch_lightning as pl
 import wandb
 import einops
 import pandas as pd
+from PIL import Image as PILImage
+from envs.multigrid.multigrid import Grid
 
-import util.transforms as tr
-from util.graph_metrics import compute_metrics
-from util.util import check_unique, cdist_polar, lerp, slerp, rgba2rgb
+from . import transforms as tr
+from .graph_metrics import compute_metrics
+from .util import check_unique, cdist_polar, lerp, slerp, rgba2rgb
 from copy import deepcopy
 
 logger = logging.getLogger(__name__)
@@ -43,7 +47,6 @@ class GraphVAELogger(pl.Callback):
         self.max_cached_batches = self.num_stored_samples // self.dataset_cfg.batch_size
         self.max_cached_batches = max(self.max_cached_batches, 1) #store at least one batch
         self.attributes = dataset_cfg.node_attributes
-        self.used_attributes = logging_cfg.attribute_to_gw_encoding
         self.graphs = {}
         self.labels = {}
         self.gw = {}
@@ -54,22 +57,7 @@ class GraphVAELogger(pl.Callback):
             "graphs": [],
             "label_ids": [],
             }
-        self.outputs_template = {
-            "loss": [],
-            "elbos": [],
-            "unweighted_elbos": [],
-            "neg_cross_entropy_A": [],
-            "neg_cross_entropy_Fx": [],
-            "kld": [],
-            "predictor_loss": [],
-            "predictor_loss_unreg": [],
-            "y": [],
-            "y_hat": [],
-            "logits_A": [],
-            "logits_Fx": [],
-            "std": [],
-            "mean": [],
-            }
+        self.outputs_template = {key:[] for key in self.logging_cfg.model_outputs}
 
         self.validation_batch = deepcopy(self.batch_template)
         self.predict_batch = deepcopy(self.batch_template)
@@ -92,8 +80,15 @@ class GraphVAELogger(pl.Callback):
             logger.info(f"{key} dataset was not supplied in the samples provided to the GraphVAELogger")
 
         for key in self.graphs.keys():
-            self.gw[key] = self.encode_graph_to_gridworld(self.graphs[key], self.attributes).to(device)
-            self.imgs[key] = self.gridworld_to_img(self.gw[key][:self.num_image_samples]).to(device)
+            if self.dataset_cfg.encoding == "minimal": #TODO: uniformise with new standard
+                self.gw[key] = self.encode_graph_to_gridworld(self.graphs[key], self.attributes).to(device)
+                self.imgs[key] = self.gridworld_to_img(self.gw[key][:self.num_image_samples]).to(device)
+            elif self.dataset_cfg.encoding == "dense":
+                if "images" in self.label_contents.keys():
+                    self.gw[key] = None
+                    self.imgs[key] = self.label_contents["images"][self.labels[key]][:self.num_image_samples]
+                else:
+                    raise RuntimeError("Images not found in label contents. Cannot log images.")
 
         self.resize_transform = torchvision.transforms.Resize((100, 100),
                                                interpolation=torchvision.transforms.InterpolationMode.NEAREST)
@@ -103,9 +98,9 @@ class GraphVAELogger(pl.Callback):
     def on_fit_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
 
         try:
-            self.log_images(trainer, "dataset/train", self.imgs["train"], self.labels["train"], mode="RGBA")
-            self.log_images(trainer, "dataset/val", self.imgs["val"], self.labels["val"], mode="RGBA")
-            self.log_images(trainer, "dataset/test", self.imgs["test"], self.labels["test"], mode="RGBA")
+            self.log_images(trainer, "dataset/train", self.imgs["train"], self.labels["train"], mode="RGB")
+            self.log_images(trainer, "dataset/val", self.imgs["val"], self.labels["val"], mode="RGB")
+            self.log_images(trainer, "dataset/test", self.imgs["test"], self.labels["test"], mode="RGB")
         except KeyError as e:
             logger.info(f"{e} dataset was not supplied in the samples provided to the GraphVAELogger")
 
@@ -116,43 +111,39 @@ class GraphVAELogger(pl.Callback):
         self.log_epoch_metrics(trainer, pl_module, self.validation_step_outputs, "val")
         if "train" in self.graphs.keys():
             outputs = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_image_samples, num_var_samples=1)
-            reconstructed_imgs_train = self.obtain_imgs(outputs["logits_A"], outputs["logits_Fx"], pl_module)
+            reconstructed_imgs_train = self.obtain_imgs(outputs, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["train"], outputs["unweighted_elbos"])]
-            self.log_images(trainer, "reconstructions/train", reconstructed_imgs_train, captions=captions, mode="RGBA")
-            self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/train", logits_A=outputs["logits_A"], logits_Fx=outputs["logits_Fx"])
+            self.log_images(trainer, "reconstructions/train", reconstructed_imgs_train, captions=captions, mode="RGB")
+            self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/train", outputs=outputs)
 
-            #TODO just to see. remove later possibly
-            outputs = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_image_samples, num_var_samples=self.num_variational_samples_logging)
-            self.log_epoch_metrics(trainer, pl_module, outputs, f"predict_{self.num_variational_samples_logging}_var_samples")
-            reconstructed_imgs_train = self.obtain_imgs(outputs["logits_A"], outputs["logits_Fx"], pl_module)
-            captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["train"], outputs["unweighted_elbos"])]
-            self.log_images(trainer, f"reconstructions/train/{self.num_variational_samples_logging}_var_sample", reconstructed_imgs_train, captions=captions, mode="RGBA")
-            self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=f"reconstructions/train/{self.num_variational_samples_logging}_var_sample", logits_A=outputs["logits_A"], logits_Fx=outputs["logits_Fx"])
+            if self.num_variational_samples_logging > 0:
+                outputs = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_image_samples, num_var_samples=self.num_variational_samples_logging)
+                self.log_epoch_metrics(trainer, pl_module, outputs, f"predict_{self.num_variational_samples_logging}_var_samples")
+                reconstructed_imgs_train = self.obtain_imgs(outputs, pl_module)
+                captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["train"], outputs["unweighted_elbos"])]
+                self.log_images(trainer, f"reconstructions/train/{self.num_variational_samples_logging}_var_sample", reconstructed_imgs_train, captions=captions, mode="RGB")
+                self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module,
+                                       tag=f"reconstructions/train/{self.num_variational_samples_logging}_var_sample",
+                                       outputs=outputs)
 
         if "val" in self.graphs.keys():
             outputs = self.obtain_model_outputs(self.graphs["val"], pl_module, num_samples=self.num_image_samples, num_var_samples=1)
 
-            reconstructed_imgs_val = self.obtain_imgs(outputs["logits_A"], outputs["logits_Fx"], pl_module)
+            reconstructed_imgs_val = self.obtain_imgs(outputs, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["val"], outputs["unweighted_elbos"])]
-            self.log_images(trainer, "reconstructions/val", reconstructed_imgs_val, captions=captions, mode="RGBA")
-            self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/val", logits_A=outputs["logits_A"], logits_Fx=outputs["logits_Fx"])
+            self.log_images(trainer, "reconstructions/val", reconstructed_imgs_val, captions=captions, mode="RGB")
+            self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag="reconstructions/val",  outputs=outputs)
 
         self.log_prior_sampling(trainer, pl_module, tag=None)
 
     def log_epoch_metrics(self, trainer, pl_module, outputs, mode):
 
         if not isinstance(outputs, dict):
-            # assert len(outputs) == 6, "GraphVAElogger.log_epoch_metrics() - incorrect number of outputs provided. " \
-            #                           f"Expected {6} outputs (elbos, unweighted_elbos, logits_A, logits_Fx, mean, std)," \
-            #                           f"got {len(outputs)} instead."
-            # elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg = outputs
-            # loss = -elbos.mean()
             raise NotImplementedError("GraphVAElogger.log_epoch_metrics() - only handles outputs in dict format")
 
         to_log = {
             f"metric/mean/std/{mode}"   : torch.linalg.norm(outputs["mean"], dim=-1).std().item(),
             f"metric/sigma/mean/{mode}" : torch.square(outputs["std"]).sum(axis=-1).sqrt().mean().item() / outputs["std"].shape[-1],
-            f'metric/entropy/A/{mode}'  : pl_module.decoder.entropy_A(outputs["logits_A"]).sum(),
             f'metric/entropy/Fx/{mode}' : pl_module.decoder.entropy_A(outputs["logits_Fx"]).sum(),
             }
         for key in outputs.keys():
@@ -160,23 +151,29 @@ class GraphVAELogger(pl.Callback):
 
         trainer.logger.log_metrics(to_log, step=trainer.global_step)
 
-        flattened_logits_A = torch.flatten(pl_module.decoder.param_pA(outputs["logits_A"]))
         flattened_logits_Fx = torch.flatten(pl_module.decoder.param_pFx(outputs["logits_Fx"]))
-        trainer.logger.experiment.log(
-            {f"distributions/logits/A/{mode}": wandb.Histogram(flattened_logits_A.to("cpu")),
-             "global_step": trainer.global_step})
         trainer.logger.experiment.log(
             {f"distributions/logits/Fx/{mode}": wandb.Histogram(flattened_logits_Fx.to("cpu")),
              "global_step": trainer.global_step})
+
+        if "logits_A" in outputs.keys():
+            to_log[f'metric/entropy/A/{mode}'] = pl_module.decoder.entropy_A(outputs["logits_A"]).sum()
+            flattened_logits_A = torch.flatten(pl_module.decoder.param_pA(outputs["logits_A"]))
+            trainer.logger.experiment.log(
+                {f"distributions/logits/A/{mode}": wandb.Histogram(flattened_logits_A.to("cpu")),
+                 "global_step": trainer.global_step})
+
 
 
     def on_train_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         logger.info(f"Progression: Entering on_train_end()")
         self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="val")
-        #TODO remove later
-        outputs = self.obtain_model_outputs(self.graphs["val"], pl_module, num_samples=self.num_embedding_samples, num_var_samples=self.num_variational_samples_logging)
-        self.log_latent_embeddings(trainer, pl_module, f"latent_space/{self.num_variational_samples_logging}_var_samples/val",
-                                   mode="custom", outputs=outputs)
+
+        if self.num_variational_samples_logging > 0:
+            outputs = self.obtain_model_outputs(self.graphs["val"], pl_module, num_samples=self.num_embedding_samples, num_var_samples=self.num_variational_samples_logging)
+            self.log_latent_embeddings(trainer, pl_module, f"latent_space/{self.num_variational_samples_logging}_var_samples/val",
+                                       mode="custom", outputs=outputs)
+
         self.log_latent_interpolation(trainer, pl_module, tag="interpolation/polar",
                                       mode="val",
                                       num_samples=self.logging_cfg.sample_interpolation.num_samples,
@@ -191,10 +188,11 @@ class GraphVAELogger(pl.Callback):
         self.batches_prepared = GraphVAELogger.prepare_stored_batch(self.predict_batch, self.predict_step_outputs, self.num_stored_samples)
         self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="prior")
         self.log_latent_embeddings(trainer, pl_module, "latent_space", mode="predict")
-        #TODO remove later
-        outputs = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_embedding_samples, num_var_samples=self.num_variational_samples_logging)
-        self.log_latent_embeddings(trainer, pl_module, f"latent_space/{self.num_variational_samples_logging}_var_samples/train",
-                                   mode="custom", outputs=outputs)
+        if self.num_variational_samples_logging > 0:
+            outputs = self.obtain_model_outputs(self.graphs["train"], pl_module, num_samples=self.num_embedding_samples, num_var_samples=self.num_variational_samples_logging)
+            self.log_latent_embeddings(trainer, pl_module, f"latent_space/{self.num_variational_samples_logging}_var_samples/train",
+                                       mode="custom", outputs=outputs)
+
         self.log_latent_interpolation(trainer, pl_module, "interpolation/polar",
                                       mode="predict",
                                       num_samples=self.logging_cfg.sample_interpolation.num_samples,
@@ -215,11 +213,11 @@ class GraphVAELogger(pl.Callback):
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         logger.info(f"Progression: Entering on_test_end()")
         if "test" in self.graphs.keys():
-            outputs = self.obtain_model_outputs(self.graphs["test"],
-                                                                                            pl_module, num_samples=self.num_image_samples, num_var_samples=1)
-            reconstructed_imgs = self.obtain_imgs(outputs["logits_A"], outputs["logits_Fx"], pl_module)
+            outputs = self.obtain_model_outputs(self.graphs["test"], pl_module,
+                                                num_samples=self.num_image_samples, num_var_samples=1)
+            reconstructed_imgs = self.obtain_imgs(outputs, pl_module)
             captions = [f"Label:{l}, unweighted_elbo:{e}" for (l,e) in zip(self.labels["test"], outputs["unweighted_elbos"])]
-            self.log_images(trainer, "reconstructions/test", reconstructed_imgs, captions=captions, mode="RGBA")
+            self.log_images(trainer, "reconstructions/test", reconstructed_imgs, captions=captions, mode="RGB")
 
     # Boiler plate code
 
@@ -272,7 +270,131 @@ class GraphVAELogger(pl.Callback):
 
     # Logging logic
 
-    def log_latent_embeddings(self, trainer, pl_module, tag, mode="val", outputs=None):
+    def log_latent_embeddings(self, trainer, pl_module, tag, mode="val", outputs=None, interpolation=False):
+
+        if self.force_valid_reconstructions:
+            raise NotImplementedError("force_valid_reconstructions not implemented yet.")
+
+        if interpolation:
+            input_batch = {}
+            assert outputs is not None, "Setting the interpolation flag requires outputs to be passed as well."
+            outputs = copy.copy(outputs)
+            assert outputs["Z"] is not None and len(outputs.keys()) == 1, \
+                "Setting the interpolation flag restricts outputs to contain only Z as key."
+            outputs["logits_Fx"] = pl_module.decoder(outputs["Z"])
+        else:
+            if mode == "prior":
+                input_batch = {}
+                assert outputs is None, "mode=prior with interpolation=false does not support passing outputs in."
+                outputs = {}
+                Z_dim = pl_module.hparams.config_model.shared_parameters.latent_dim
+                outputs["Z"] = torch.randn(self.num_generated_samples, Z_dim).to(device=pl_module.device)
+                outputs["logits_Fx"] = pl_module.decoder(outputs["Z"])
+            elif mode == "val":
+                input_batch = copy.copy(self.validation_batch)
+                outputs = copy.copy(self.validation_step_outputs)
+            elif mode == "predict":
+                input_batch = copy.copy(self.predict_batch)
+                outputs = copy.copy(self.predict_step_outputs)
+            elif mode == "custom":
+                input_batch = {}
+                assert outputs is not None, "Setting the custom flag requires outputs to be passed as well."
+                outputs = copy.copy(outputs)
+            else:
+                raise ValueError(f"Mode {mode} not supported.")
+
+            if mode != "prior":
+                for key in outputs.keys():
+                    outputs[key] = outputs[key][:self.num_embedding_samples]
+                for key in input_batch.keys():
+                    input_batch[key] = input_batch[key][:self.num_embedding_samples]
+                outputs["Z"] = outputs["mean"]
+
+        if input_batch.get("graphs") is not None:
+            input_imgs = tr.Nav2DTransforms.dense_graph_to_minigrid_render(input_batch["graphs"],
+                                                                     tile_size=self.logging_cfg.tile_size)
+
+        assert outputs["Z"].shape[0] == \
+               outputs["logits_Fx"].shape[0], \
+            f"log_latent_embeddings(): Shape mismatch Z={outputs['Z'].shape}, logits_Fx={outputs['logits_Fx'].shape}"
+
+        reconstructed_graphs = pl_module.decoder.to_graph(outputs["logits_Fx"], probabilistic_graph=True, make_batch=False)
+        reconstructed_imgs = self.obtain_imgs(outputs, pl_module)
+        reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
+        mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"])
+        start_nodes_ids = mode_Fx[..., pl_module.decoder.attributes.index('start')].argmax(dim=-1)
+        goal_nodes_ids = mode_Fx[..., pl_module.decoder.attributes.index('goal')].argmax(dim=-1)
+        is_valid = tr.Nav2DTransforms.check_validity_start_goal_dense(
+            start_nodes_ids, goal_nodes_ids, mode_Fx[..., pl_module.decoder.attributes.index('active')])
+        reconstruction_metrics["valid"] = is_valid.tolist()
+        reconstruction_metrics, rec_graphs_nx = \
+            compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes_ids, goal_nodes_ids,
+                            labels=input_batch.get("label_ids"))
+        reconstruction_metrics["unique"] = check_unique(mode_Fx).tolist()
+
+        del outputs["logits_Fx"], start_nodes_ids, goal_nodes_ids, rec_graphs_nx, is_valid, reconstructed_graphs
+
+        if self.label_descriptors_config is not None:
+            reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
+            logger.info(f"log_latent_embeddings(): graph metrics normalised.")
+
+        # Log average metrics
+        to_log = {}
+        for key in reconstruction_metrics.keys():
+            data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
+            data = data[~torch.isnan(data)]
+            to_log[f'metric/{tag}/task_metric/R/{key}/{mode}'] = data.mean()
+        if outputs.get("unweighted_elbos") is not None: #TODO
+            to_log[f'metric/unweighted_elbo/{mode}'] = outputs["unweighted_elbos"].mean() #TODO
+        trainer.logger.log_metrics(to_log, step=trainer.global_step)
+        del to_log
+        logger.info(f"log_latent_embeddings(): logged metrics to wandb.")
+
+        # Create embeddings table
+        df = pd.DataFrame()
+        df.insert(0, "Z", outputs["Z"].tolist())
+
+        # Store pre-computed Input metrics in the embeddings table
+        if input_batch.get("label_ids") is not None:
+            for input_property in reversed(["shortest_path", "resistance", "navigable_nodes", "task_structure", "seed"]):
+                if isinstance(self.label_contents[input_property], list):
+                    data = [self.label_contents[input_property][i] for i in input_batch["label_ids"]]
+                else:
+                    data = self.label_contents[input_property][input_batch["label_ids"]]
+                df.insert(0, f"I_{input_property}", data)
+
+
+        # Store Reconstruction metrics in the embeddings table
+        for key in reversed(["valid", "solvable", "unique", "shortest_path", "resistance", "navigable_nodes"]):
+            df.insert(0, f"R_{key}", reconstruction_metrics[key])
+            if key in ["shortest_path", "resistance", "navigable_nodes"]:
+                hist_data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
+                hist_data = hist_data[~hist_data.isnan()].cpu().numpy()
+                trainer.logger.experiment.log(
+                    {
+                        f"distributions/{tag}/R/{key}/{mode}": wandb.Histogram(hist_data),
+                        "global_step"                   : trainer.global_step
+                        })
+        del reconstruction_metrics, hist_data
+        logger.info(f"log_latent_embeddings(): logged graph metrics distributions to wandb.")
+        if outputs.get("unweighted_elbos") is not None:
+            df.insert(0, "Unweighted_elbos", outputs["unweighted_elbos"].tolist())
+        df.insert(0, "R:Reconstructions", [wandb.Image(x, mode="RGB") for x in reconstructed_imgs])
+        if input_batch.get("label_ids") is not None:
+            df.insert(0, "I:Inputs", [wandb.Image(x, mode="RGB") for x in input_imgs])
+            df.insert(0, "Label_ids", input_batch["label_ids"].tolist())
+
+
+        trainer.logger.experiment.log({
+            f"tables/{tag}/{mode}": wandb.Table(
+                dataframe=df
+            ),
+            "global_step": trainer.global_step
+        })
+        logger.info(f"log_latent_embeddings(): Logged dataframe tables/{tag}/{mode} with {len(reconstructed_imgs)} embeddings to wandb.")
+
+
+    def _log_latent_embeddings_old(self, trainer, pl_module, tag, mode="val", outputs=None):
 
         logger.info(f"Progression: Entering log_latent_embeddings(), mode:{mode}")
 
@@ -286,7 +408,7 @@ class GraphVAELogger(pl.Callback):
                 if "interpolation" in tag:
                     raise e("log_latent_embeddings() - Latent interpolation requires outputs['Z'] to be specified.")
                 else:
-                    Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
+                    Z_dim = pl_module.hparams.config_model.shared_parameters.latent_dim
                     Z = torch.randn(self.num_generated_samples, Z_dim).to(device=pl_module.device)
             logits_A, logits_Fx = pl_module.decoder(Z)
             unweighted_elbos = None
@@ -354,7 +476,7 @@ class GraphVAELogger(pl.Callback):
         reconstruction_metrics["unique"] = (check_unique(mode_A) | check_unique(mode_Fx)).tolist()
         del is_valid, reconstructed_graphs
 
-        reconstructed_imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+        reconstructed_imgs = self.obtain_imgs(outputs, pl_module)
 
         if self.force_valid_reconstructions:
             probs_Fx = pl_module.decoder.param_pFx(logits_Fx)
@@ -375,7 +497,7 @@ class GraphVAELogger(pl.Callback):
             reconstruction_metrics_force_valid["unique"] = (check_unique(mode_A) | check_unique(mode_Fx)).tolist()
             del start_nodes_valid, goal_nodes_valid
             logger.info(f"log_latent_embeddings(): successfully obtained metrics for the force valid decoded graphs.")
-            reconstructed_imgs_force_valid = self.obtain_imgs(logits_A, mode_Fx, pl_module)
+            reconstructed_imgs_force_valid = self.obtain_imgs({"logits_A":logits_A, "logits_Fx": mode_Fx}, pl_module)
             del mode_A, mode_Fx
 
         del logits_A, logits_Fx, start_nodes, goal_nodes, rec_graphs_nx
@@ -449,10 +571,10 @@ class GraphVAELogger(pl.Callback):
             df.insert(0, "Unweighted_elbos", unweighted_elbos.tolist())
 
         if self.force_valid_reconstructions:
-            df.insert(0, "RV:Reconstructions_Valid", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs_force_valid])
-        df.insert(0, "R:Reconstructions", [wandb.Image(x, mode="RGBA") for x in reconstructed_imgs])
+            df.insert(0, "RV:Reconstructions_Valid", [wandb.Image(x, mode="RGB") for x in reconstructed_imgs_force_valid])
+        df.insert(0, "R:Reconstructions", [wandb.Image(x, mode="RGB") for x in reconstructed_imgs])
         if labels is not None:
-            df.insert(0, "I:Inputs", [wandb.Image(x, mode="RGBA") for x in input_imgs])
+            df.insert(0, "I:Inputs", [wandb.Image(x, mode="RGB") for x in input_imgs])
             df.insert(0, "Label_ids", labels.tolist())
 
         trainer.logger.experiment.log({
@@ -514,7 +636,7 @@ class GraphVAELogger(pl.Callback):
             return torch.stack([torch.stack(row).to(data) for row in interpolations]).to(data)
 
         # Get data
-        Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
+        Z_dim = pl_module.hparams.config_model.shared_parameters.latent_dim
         if mode == "val":
             mean = self.validation_step_outputs["mean"]
             std = self.validation_step_outputs["std"]
@@ -616,32 +738,49 @@ class GraphVAELogger(pl.Callback):
         })
 
         interp_Z = interp_Z.reshape(-1, interp_Z.shape[-1])
-        self.log_latent_embeddings(trainer, pl_module, "latent_space/interpolation", mode=mode, outputs={"Z":interp_Z})
+        self.log_latent_embeddings(trainer, pl_module, "latent_space/interpolation", mode=mode, outputs={"Z":interp_Z},
+                                   interpolation=True)
 
         # Obtain the interpolated samples
-        logits_A, logits_Fx = pl_module.decoder(interp_Z)
+        logits = {}
+        if self.dataset_cfg.encoding == "minimal":
+            logits["logits_A"], logits["logits_Fx"] = pl_module.decoder(interp_Z)
+        elif self.dataset_cfg.encoding == "dense":
+            logits["logits_Fx"] = pl_module.decoder(interp_Z)
+        else:
+            raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
         del interp_Z
 
-        imgs = self.obtain_imgs(logits_A, logits_Fx, pl_module)
+        imgs = self.obtain_imgs(logits, pl_module)
         num_rows = int(imgs.shape[0] // len(distances.keys()))
 
-        self.log_images(trainer, f"interpolated_samples/{tag}/{mode}", imgs, mode="RGBA", nrow=num_rows)
+        self.log_images(trainer, f"interpolated_samples/{tag}/{mode}", imgs, mode="RGB", nrow=num_rows)
 
     def log_prior_sampling(self, trainer, pl_module, tag=None):
         logger.info(f"Progression: Entering log_prior_sampling(), tag:{tag}")
         tag = f"generated/prior/{tag}" if tag is not None else "generated/prior"
-        Z_dim = pl_module.hparams.configuration.shared_parameters.latent_dim
+        Z_dim = pl_module.hparams.config_model.shared_parameters.latent_dim
         Z = torch.randn(1, self.num_generated_samples, Z_dim).to(device=pl_module.device)
-        logits_A, logits_Fx = [f.mean(dim=0) for f in pl_module.decoder(Z)]
+        logits = {}
+        if self.dataset_cfg.encoding == "minimal":
+            logits["logits_A"], logits["logits_Fx"] = [f.mean(dim=0) for f in pl_module.decoder(Z)]
+            to_log = {
+            f'metric/entropy/A/{tag}': pl_module.decoder.entropy_A(logits["logits_A"]),
+            f'metric/entropy/Fx/{tag}': pl_module.decoder.entropy_Fx(logits["logits_Fx"]).sum()}
+        elif self.dataset_cfg.encoding == "dense":
+            logits["logits_Fx"] = pl_module.decoder(Z).mean(dim=0)
+            to_log = {f'metric/entropy/Fx/{tag}': pl_module.decoder.entropy_Fx(logits["logits_Fx"]).sum()}
+        else:
+            raise ValueError(f"Encoding {self.dataset_cfg.encoding} not recognised.")
         del Z
-        trainer.logger.log_metrics({
-            f'metric/entropy/A/{tag}': pl_module.decoder.entropy_A(logits_A),
-            f'metric/entropy/Fx/{tag}': pl_module.decoder.entropy_Fx(logits_Fx).sum()},
-            trainer.global_step)
+        trainer.logger.log_metrics(to_log, trainer.global_step)
 
-        generated_imgs = self.obtain_imgs(logits_A[:self.num_image_samples], logits_Fx[:self.num_image_samples], pl_module)
-        self.log_images(trainer, tag, generated_imgs, mode="RGBA")
-        self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=tag, logits_A=logits_A[:self.num_image_samples], logits_Fx=logits_Fx[:self.num_image_samples])
+        for key in logits.keys():
+            logits[key] = logits[key][:self.num_image_samples]
+        generated_imgs = self.obtain_imgs(outputs=logits, pl_module=pl_module)
+        self.log_images(trainer, tag, generated_imgs, mode="RGB")
+        self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=tag,
+                               outputs=logits)
 
     # Utility methods
 
@@ -665,7 +804,7 @@ class GraphVAELogger(pl.Callback):
     @staticmethod
     def prepare_stored_batch(batch_dict, output_dict, max_num_samples) -> bool:
         logger.info(f"Preparing the stored batches...")
-        assert len(batch_dict["graphs"]) == len(output_dict["logits_A"]), "Error in prepare_stored_batches(). The number of stored batches and outputs must be the same"
+        assert len(batch_dict["graphs"]) == len(output_dict["logits_Fx"]), "Error in prepare_stored_batches(). The number of stored batches and outputs must be the same"
         logger.info(f"Number of stored batches: {len(batch_dict['graphs'])}")
         logger.info(f"Number of stored batched outputs: {len(output_dict['loss'])}")
         def flatten(l):
@@ -700,23 +839,54 @@ class GraphVAELogger(pl.Callback):
 
         logger.debug(f"Successfully stored batch.")
 
-    def obtain_imgs(self, logits_A:torch.Tensor, logits_Fx:torch.Tensor, pl_module:pl.LightningModule) -> torch.Tensor:
+    def obtain_imgs(self, outputs, pl_module:pl.LightningModule) -> torch.Tensor:
+        """
 
-        mode_probs = pl_module.decoder.param_m((logits_A, logits_Fx))
-        reconstructed_gws = self.encode_graph_to_gridworld(mode_probs, attributes=self.used_attributes)
-        reconstructed_imgs = self.gridworld_to_img(reconstructed_gws)
+        :param outputs:
+        :param pl_module:
+        :return: images: torch.Tensor of shape (B, C, H, W), C=3 [dense encoding] or C=4 [old encoding]
+        """
+        assert self.dataset_cfg.data_type == "graph", "Error in obtain_imgs(). This method is only valid for graph datasets."
 
-        return reconstructed_imgs
+        if self.dataset_cfg.encoding == "dense":
+            mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"])
+            if self.logging_cfg.rendering == "minigrid": #Not sure this should be the decider
+                grids = tr.Nav2DTransforms.dense_features_to_minigrid(mode_Fx, node_attributes=pl_module.decoder.attributes)
+                images = tr.Nav2DTransforms.minigrid_to_minigrid_render(grids, tile_size=self.logging_cfg.tile_size)
+            else:
+                raise NotImplementedError(f"Rendering method {self.logging_cfg.rendering} not implemented for dense graph encoding.")
+        elif self.dataset_cfg.encoding == "minimal":
+            assert self.logging_cfg.rendering != "minigrid", "Error in obtain_imgs(). Minigrid rendering is not implemented for minimal graph encoding."
+            logger.warning(f"Warning {self.logging_cfg.rendering} is Deprecated. Correct behavior not guaranteed.")
+            mode_probs = pl_module.decoder.param_m((outputs["logits_A"], outputs["logits_Fx"]))
+            reconstructed_gws = self.encode_graph_to_gridworld(mode_probs, attributes=pl_module.decoder.attributes)
+            images = self.gridworld_to_img(reconstructed_gws)
+        else:
+            raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
+
+        return images
 
     def log_images(self, trainer:pl.Trainer, tag:str, images: torch.Tensor, captions:List[str]=None, mode:str=None, nrow:int=8):
+        """
+        Log images to Wandb.
+        :param trainer:
+        :param tag:
+        :param images: [B, C, H, W]
+        :param captions:
+        :param mode:
+        :param nrow:
+        """
+
+
         logger.info(f"log_images(): Saving {len(images)} images as {1} grid with {nrow} rows - mode:{mode}, tag:{tag}")
         if mode == "RGBA":
             images = rgba2rgb(images)
+        elif mode == "RGB":
+            pass
+        else:
+            raise NotImplementedError(f"Mode {mode} not implemented.")
 
-            # TODO: add conversion to imgs, also should sitch the stored logits_A, logits_Fx (or not include them above)
-            # also only get up to num_samples array size for Z.
-
-        img_grid = torchvision.utils.make_grid(self.resize_transform(images), nrow=nrow)
+        img_grid = torchvision.utils.make_grid(self.resize_transform(images).to(torch.float), nrow=nrow, normalize=True)
         #TODO: reimplement captions
         if captions is None:
             captions = [None] * len(images)
@@ -726,13 +896,21 @@ class GraphVAELogger(pl.Callback):
             "global_step": trainer.global_step
         })
 
-    def log_prob_heatmaps(self, trainer, pl_module, tag, logits_A, logits_Fx):
+    def log_prob_heatmaps(self, trainer, pl_module, tag, outputs):
         logger.info(f"Progression: Entering log_prob_heatmaps(), tag:{tag}")
-        logits_A, logits_Fx = pl_module.decoder.param_p((logits_A, logits_Fx))
-        grid_dim = int(np.sqrt(logits_Fx.shape[-2])) #sqrt(num_nodes)
+        grid_dim = int(np.sqrt(self.dataset_cfg.max_nodes))  # sqrt(num_nodes)
+        if self.dataset_cfg.encoding == "dense":
+            logits_Fx = pl_module.decoder.param_p(outputs["logits_Fx"])
+            heatmap_layout = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("active")], grid_dim)
+        elif self.dataset_cfg.encoding == "minimal":
+            logits_A, logits_Fx = pl_module.decoder.param_p((outputs["logits_A"], outputs["logits_Fx"]))
+            heatmap_layout = self.prob_heatmap_A(logits_A, grid_dim)
+        else:
+            raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
+
         heatmap_start = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("start")], grid_dim)
         heatmap_goal = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("goal")], grid_dim)
-        heatmap_layout = self.prob_heatmap_A(logits_A, grid_dim)
+
         self.log_images(trainer, tag + "/prob_heatmap/start", heatmap_start, mode="RGBA")
         self.log_images(trainer, tag + "/prob_heatmap/goal", heatmap_goal, mode="RGBA")
         self.log_images(trainer, tag + "/prob_heatmap/layout", heatmap_layout, mode="RGBA")
@@ -774,9 +952,15 @@ class GraphVAELogger(pl.Callback):
         return heat_map
 
     def encode_graph_to_gridworld(self, graphs, attributes):
+        raise NotImplementedError("Deprecated")
         return tr.Nav2DTransforms.encode_graph_to_gridworld(graphs, attributes, self.used_attributes)
 
     def gridworld_to_img(self, gws):
+        """
+        :param gws: [B, C, H, W]
+        :param gws:
+        :return: imgs: rgb image tensor with dimensions [B, C, H, W]
+        """
         colors = {
             'wall': [0., 0., 0., 1.],   #black
             'empty': [0., 0., 0., 0.],  #white
@@ -801,6 +985,8 @@ class GraphVAELogger(pl.Callback):
             color = torch.tensor(colors[feat]).to(gws)
             cm = torch.einsum('c, b h w -> b c h w', color, mask)
             imgs[cm>0] = cm[cm>0]
+
+        imgs = rgba2rgb(imgs)
 
         return imgs
 

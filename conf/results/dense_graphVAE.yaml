@@ -1,0 +1,20 @@
+name: GraphVAE_results_config
+
+plot_every: 1
+model_outputs: ${models.configuration.model.outputs}
+rendering: minigrid #minigrid or gridworld
+num_variational_samples: 0
+num_stored_samples: 1000
+num_image_samples: 32
+tile_size: 8 #only for minigrid
+num_embedding_samples: 128
+force_valid_reconstructions: false
+num_generated_samples: 128
+
+sample_interpolation:
+  num_samples: 64
+  num_interpolations: 8
+  remove_noninformative_dimensions: true
+  dimension_reduction_threshold: 0.9 #if std of this dimension is larger than 0.9, remove
+  sample_latents: true #if true, sample latents to be interpolated instead of interpolating their means
+  interpolation_scheme: "polar" #"linear" or "polar"

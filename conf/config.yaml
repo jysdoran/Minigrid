@@ -30,7 +30,7 @@ defaults:
   - data/dataset: minigrid_dense_graph_10k
   - models: dense_graphVAE
   - optim: adam
-  - results: graphVAE
+  - results: dense_graphVAE
   - _self_
 
   - override hydra/job_logging: colorlog

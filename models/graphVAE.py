@@ -1,3 +1,4 @@
+import logging
 import copy
 from collections import defaultdict
 
@@ -21,7 +22,10 @@ from ..util import transforms as tr
 from ..util import graph_metrics as gm
 from ..util import util
 
-def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, predictor=None, labels=None, permutations=None):
+logger = logging.getLogger(__name__)
+
+def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, output_keys, predictor=None, labels=None,
+                           permutations=None):
     # TODO: permutations not functional at the moment, because not implemented for Fx
 
     mean, std = encoder(X)  # (B, H), (B, H)
@@ -51,7 +55,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, pre
 
     # Feature head(s) computations
     if logits_Fx is not None:
-        Fx, _ = decoder.get_node_features(X)
+        Fx, _ = decoder.get_node_features(X, node_attributes=decoder.attributes)
         # mask Fx if needed
         if decoder.config.attribute_masking == "always":
             Fx_mask = decoder.get_attribute_mask(probs=Fx)
@@ -168,25 +172,40 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, pre
         y_hat = torch.zeros(elbos.shape[0]).to(Z)
         y = torch.zeros(elbos.shape[ 0 ]).to(Z)
 
-    outputs = {
-        "loss": -elbos.mean().reshape(1),
-        "elbos": elbos,
-        "unweighted_elbos": unweighted_elbos,
-        "neg_cross_entropy_A": neg_cross_entropy_A.mean(dim=0),
-        "neg_cross_entropy_Fx": neg_cross_entropy_Fx.mean(dim=0),
-        "kld": kld.mean().reshape(1),
-        "predictor_loss": predictor_loss.reshape(1),
-        "predictor_loss_unreg": predictor_loss_unreg,
-        "y": y,
-        "y_hat": y_hat,
-        "logits_A": logits_A,
-        "logits_Fx": logits_Fx,
-        "std": std,
-        "mean": mean,
-        }
+    output_dict = {}
+    for key in output_keys:
+        if key == "loss":
+            output_dict[key] = -elbos.mean().reshape(1)
+        elif key == "elbos":
+            output_dict[key] = elbos
+        elif key == "unweighted_elbos":
+            output_dict[key] = unweighted_elbos
+        elif key == "neg_cross_entropy_A":
+            output_dict[key] = neg_cross_entropy_A.mean(dim=0)
+        elif key == "neg_cross_entropy_Fx":
+            output_dict[key] = neg_cross_entropy_Fx.mean(dim=0)
+        elif key == "kld":
+            output_dict[key] = kld.mean().reshape(1)
+        elif key == "predictor_loss":
+            output_dict[key] = predictor_loss.reshape(1)
+        elif key == "predictor_loss_unreg":
+            output_dict[key] = predictor_loss_unreg
+        elif key == "y":
+            output_dict[key] = y
+        elif key == "y_hat":
+            output_dict[key] = y_hat
+        elif key == "logits_A":
+            output_dict[key] = logits_A
+        elif key == "logits_Fx":
+            output_dict[key] = logits_Fx
+        elif key == "std":
+            output_dict[key] = std
+        elif key == "mean":
+            output_dict[key] = mean
+        else:
+            raise ValueError(f"Unknown key {key}")
 
-    #return elbos, unweighted_elbos, logits_A, logits_Fx, mean, std, y_hat, predictor_loss_unreg
-    return outputs
+    return output_dict
 
 
 class GraphGCNEncoder(nn.Module):
@@ -197,10 +216,9 @@ class GraphGCNEncoder(nn.Module):
         self.shared_params = shared_params
         if self.config.attributes is None or len(self.config.attributes) == 0 or self.config.attributes[0] == "":
             self.attributes = None
-            self.attributes_mapping = None
+            logger.warning(f"No attributes specified for {self.__class__}.")
         else:
             self.attributes = self.config.attributes
-            self.attributes_mapping = [self.shared_params.node_attributes.index(i) for i in self.attributes]
 
         # Create all layers except last
         self.model = self.create_model()
@@ -215,7 +233,7 @@ class GraphGCNEncoder(nn.Module):
     def create_model(self):
         if self.config.gnn.architecture == "GIN":
             self.gcn = GIN(num_layers=self.config.gnn.num_layers, num_mlp_layers=self.config.gnn.num_mlp_layers,
-                               input_dim=len(self.attributes_mapping), hidden_dim=self.config.gnn.layer_dim,
+                               input_dim=len(self.attributes), hidden_dim=self.config.gnn.layer_dim,
                                output_dim=self.config.mlp.hidden_dim, final_dropout=self.config.gnn.final_dropout,
                                learn_eps=self.config.gnn.learn_eps, graph_pooling_type=self.config.gnn.graph_pooling,
                                neighbor_pooling_type=self.config.gnn.neighbor_pooling,
@@ -247,8 +265,7 @@ class GraphGCNEncoder(nn.Module):
         """
 
         graph = X
-        features = graph.ndata['feat'].float()
-        features = features[..., self.attributes_mapping]
+        features, _ = self.get_node_features(graph, node_attributes=self.attributes, reshape=False)
         features = self.gcn(graph, features)
 
         for net in self.model[1:]:
@@ -278,6 +295,17 @@ class GraphGCNEncoder(nn.Module):
         # Reuse the implemented code
         return evaluate_logprob_diagonal_gaussian(Z, mean=mean, std=std)
 
+    def get_node_features(self, graph: Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attributes:List[str]=None,
+                          reshape:bool=True) -> Tuple[torch.Tensor, List[str]]:
+
+        if node_attributes is None:
+            node_attributes = self.attributes
+
+        features, node_attributes = util.get_node_features(graph, node_attributes=node_attributes, device=None,
+                                                           reshape=reshape)
+
+        return features.float(), node_attributes
+
 
 class GraphMLPDecoder(nn.Module):
 
@@ -288,10 +316,9 @@ class GraphMLPDecoder(nn.Module):
         self.shared_params = shared_params
         if self.config.attributes is None or len(self.config.attributes) == 0 or self.config.attributes[0] == "":
             self.attributes = None
-            self.attributes_mapping = None
+            logger.warning(f"No attributes specified for {self.__class__}.")
         else:
             self.attributes = self.config.attributes
-            self.attributes_mapping = [self.shared_params.node_attributes.index(i) for i in self.attributes]
 
         self.attribute_distributions = self.config.distributions
 
@@ -373,10 +400,10 @@ class GraphMLPDecoder(nn.Module):
         elif self.adjacency is None and self.attributes is not None and self.shared_params.data_encoding == "dense":
             self.sample = self.sample_Fx
             self.log_prob = self.log_prob_Fx
-            self.param_p = self.param_p_Fx
-            self.param_m = self.param_m_Fx
+            self.param_p = self.param_pFx
+            self.param_m = self.param_mFx
             self.entropy = self.entropy_Fx
-            self.to_graph = self.to_dense_graph
+            self.to_graph = self._to_dense_graph
         else:
             raise NotImplementedError(f"Decoder setup with adjacency head {self.adjacency} and "
                                       f"attribute heads {self.attributes} is not supported for data encoding"
@@ -441,8 +468,8 @@ class GraphMLPDecoder(nn.Module):
         """
         raise NotImplementedError("Method was not initialised at init call")
 
-    def to_graph(self, logits:Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], node_attributes:List[str]=None)\
-            -> dgl.DGLGraph:
+    def to_graph(self, logits:Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], node_attributes:List[str]=None,
+                 dim_gridgraph:tuple=None, make_batch:bool=False) -> Union[List[dgl.DGLGraph], dgl.DGLGraph]:
         """
         Evaluates the log_probability of X given the distributions parameters.
 
@@ -452,9 +479,16 @@ class GraphMLPDecoder(nn.Module):
         """
         raise NotImplementedError("Method was not initialised at init call")
 
-    def get_node_features(self, graph: Union[dgl.DGLGraph, List[dgl.DGLGraph]]) -> Tuple[torch.Tensor, List[str]]:
+    def get_node_features(self, graph: Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attributes:List[str]=None,
+                          reshape:bool=True) -> Tuple[torch.Tensor, List[str]]:
 
-        return util.get_node_features(graph, device=self.device)
+        if node_attributes is None:
+            node_attributes = self.attributes
+
+        features, node_attributes = util.get_node_features(graph, node_attributes=node_attributes, device=None,
+                                                           reshape=reshape)
+
+        return features.float(), node_attributes
 
     def get_attribute_mask(self, probs:torch.Tensor=None, logits:torch.Tensor=None, node_attributes=None) -> torch.Tensor:
 
@@ -463,13 +497,15 @@ class GraphMLPDecoder(nn.Module):
         elif probs is not None and logits is not None:
             raise ValueError("Only one of probs or logits can be provided")
         elif probs is None and logits is not None:
-            probs = torch.sigmoid(logits)
+            probs = torch.sigmoid(logits) #not mathematically correct for the categorical distribution, but works for masking
 
         if node_attributes is None:
             node_attributes = self.attributes
         assert len(node_attributes) == probs.shape[-1], "Number of node attributes does not match the input tensor"
 
-        attribute_mask = torch.ones(*probs.shape, dtype=torch.bool).to(self.device)
+        attribute_mask = torch.ones(*probs.shape, dtype=torch.bool).to(probs.device)
+
+        assert node_attributes.index("active") < node_attributes.index("start") < node_attributes.index("goal")
 
         for i, attr in enumerate(node_attributes):
             if attr == "active":
@@ -478,12 +514,13 @@ class GraphMLPDecoder(nn.Module):
                 attribute_mask[..., i] = probs[..., node_attributes.index("active")] >= 0.5
             elif attr == "goal":
                 attribute_mask[..., i] = probs[..., node_attributes.index("active")] >= 0.5
-                start_nodes = probs[..., node_attributes.index("start")].argmax(dim=-1)
+                start_nodes = (attribute_mask[..., node_attributes.index("start")] *
+                               probs[..., node_attributes.index("start")]).argmax(dim=-1)
                 attribute_mask[:, start_nodes, i] = False
 
         return attribute_mask
 
-    def mask_logits(self, logits, mask, value=0.):
+    def mask_logits(self, logits, mask, value=float('-inf')):
 
         # TODO: Or logits_Fx + float('-inf') * (1 - Fx_mask) to preserve gradients?
 
@@ -548,13 +585,12 @@ class GraphMLPDecoder(nn.Module):
         # Fx #TODO: figure how to explicitly include the distributions_domains property.
         logp_Fx = []
         for i in range(len(self.attribute_distributions)):
-            Fx_dim = self.attributes_mapping[i]
             if self.attribute_distributions[i] == "bernoulli":
-                logp_Fx.append(evaluate_logprob_bernoulli(Fx[..., Fx_dim], logits=logits_Fx[..., i]))
+                logp_Fx.append(evaluate_logprob_bernoulli(Fx[..., i], logits=logits_Fx[..., i]))
             # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. B,D),
             # but requires modifying evaluate_logprob_one_hot_categorical()
             elif self.attribute_distributions[i] == "one_hot_categorical":
-                logp_Fx.append(evaluate_logprob_one_hot_categorical(Fx[..., Fx_dim], logits=logits_Fx[..., i]))
+                logp_Fx.append(evaluate_logprob_one_hot_categorical(Fx[..., i], logits=logits_Fx[..., i]))
             else:
                 raise NotImplementedError(f"Specified Data Distribution '{self.attribute_distributions[i]}'"
                                           f" Invalid or Not Currently Implemented")
@@ -811,7 +847,30 @@ class GraphMLPDecoder(nn.Module):
 
         if self.config.attribute_masking in ["always", "gen_only"]:
             mask = self.get_attribute_mask(logits=logits_Fx)
-            logits_Fx = self.mask_logits(logits_Fx, mask)
+            logits_Fx_masked = self.mask_logits(logits_Fx, mask)
+            for i in range(len(self.attribute_distributions)):
+                if self.attribute_distributions[i] == "one_hot_categorical":
+                    logits_invalid = torch.all(logits_Fx_masked[..., i] == float('-inf'), dim=-1)
+                    if logits_invalid.any():
+                        invalid_batch_idx = logits_invalid.nonzero().flatten()
+                        logger.warning(f"Invalid logits detected for {self.attributes[i]} at "
+                                       f"batch indices: {invalid_batch_idx.tolist()}."
+                                       f" Sampling object at random within masked logits instead.")
+                        sampled_idx = []
+                        for idx in invalid_batch_idx:
+                            sampling_set = torch.where(mask[idx,...,i])[0]
+                            if len(sampling_set) == 0:
+                                logger.warning(f"Invalid masks detected for {self.attributes[i]} at "
+                                               f"batch indices: {invalid_batch_idx.tolist()}."
+                                               f" Sampling object at random within all nodes instead "
+                                               f" (layout is guaranteed to be invalid).")
+                                sampling_set = torch.randperm(logits_Fx_masked.shape[-2])
+                                sampled_idx.append(sampling_set[0])
+                                if i < len(self.attribute_distributions) - 1: #a bit hacky, will only work if for start & goal as one_hot_categorical
+                                    logits_Fx_masked[idx, sampling_set[1], i + 1] = 1.0
+                            else:
+                                sampled_idx.append(sampling_set[torch.randint(low=0, high=len(sampling_set), size=(1,))])
+                        logits_Fx_masked[invalid_batch_idx, sampled_idx, i] = 1.0 #can be set to any value > -inf
         else:
             mask = None
 
@@ -833,48 +892,62 @@ class GraphMLPDecoder(nn.Module):
         mFx = torch.stack(mFx, dim=-1).to(logits_Fx)
         return mFx
 
-    def _to_dense_graph(self, Fx:torch.Tensor, node_attributes:List[str]=None, dim_grid:tuple=None, make_batch=False) \
-            -> dgl.DGLGraph:
+    def _to_dense_graph(self, logits_Fx:torch.Tensor, node_attributes:List[str]=None, dim_gridgraph:tuple=None,
+                        probabilistic_graph:bool=True, make_batch:bool=False) \
+            -> Union[List[dgl.DGLGraph], dgl.DGLGraph]:
+
+        if probabilistic_graph:
+            Fx = self.param_pFx(logits_Fx)
+        else:
+            Fx = self.param_mFx(logits_Fx)
 
         if node_attributes is None:
             node_attributes = self.attributes
-        if dim_grid is None:
-            dim_grid = tuple(self.shared_params.gridworld_data_dim[1:])
-            assert len(dim_grid) == 2, "Only 2D Gridworlds are currently supported"
+        if dim_gridgraph is None:
+            dim_gridgraph = tuple([x - 2 for x in self.shared_params.gridworld_data_dim[1:]])
 
-        if Fx.shape != (*dim_grid, len(node_attributes)):
-            grid_Fx = Fx.reshape(Fx.shape[0], *dim_grid, len(node_attributes))
+        assert len(dim_gridgraph) == 2, "Only 2D Gridworlds are currently supported"
+
+        if Fx.shape[1:] == (*dim_gridgraph, len(node_attributes)):
+            Fx = Fx.reshape(Fx.shape[0], -1, len(node_attributes))
+
+        if Fx.shape[1:] != (*dim_gridgraph, len(node_attributes)):
+            grid_Fx = Fx.reshape(Fx.shape[0], *dim_gridgraph, len(node_attributes))
         else:
             grid_Fx = copy.deepcopy(Fx)
             Fx = Fx.reshape(Fx.shape[0], -1, len(node_attributes))
 
         Fx_dict = {}
         for i, attr in enumerate(node_attributes):
-            Fx_dict[attr] = Fx[..., i]
+            Fx_dict[attr] = Fx[..., i].flatten()
 
-        ids = list(zip(*np.where(grid_Fx[..., node_attributes.index("active")] <= 0.5)))
+        ids = list(zip(*torch.where(grid_Fx[..., node_attributes.index("active")] <= 0.5)))
         inactive_nodes = defaultdict(list)
         for tup in ids:
             inactive_nodes[tup[0]].append(tup[1:])
 
         graphs = []
         for m in range(grid_Fx.shape[0]):
-            g_temp = nx.grid_2d_graph(*dim_grid)
+            g_temp = nx.grid_2d_graph(*dim_gridgraph)
             g_temp.remove_nodes_from(inactive_nodes[m])
             g_temp.add_nodes_from(inactive_nodes[m])
             g = nx.Graph()
             g.add_nodes_from(sorted(g_temp.nodes(data=True)))
             g.add_edges_from(g_temp.edges(data=True))
-            g = dgl.from_networkx(g, node_attrs=Fx_dict).to(self.device)
+            g = dgl.from_networkx(g).to(logits_Fx.device)
             graphs.append(g)
 
-        graphs = dgl.batch(graphs).to(self.device)
+        graphs = dgl.batch(graphs).to(logits_Fx.device)
+        graphs.ndata.update(Fx_dict)
+        if not make_batch:
+            graphs = dgl.unbatch(graphs)
 
         return graphs
 
     def _to_minimal_graph(self, logits:tuple) -> dgl.DGLGraph:
 
-        raise NotImplementedError("TODO (low priority.)")
+        # TODO(low priority.)
+        raise NotImplementedError()
 
 class Predictor(nn.Module):
 
@@ -1042,7 +1115,8 @@ class LightningGraphVAE(pl.LightningModule):
         graphVAE_elbo_pathwise(X, encoder=self.encoder, decoder=self.decoder, predictor=self.predictor,
                                  num_samples=num_samples,
                                  elbo_coeffs=self.hparams.hparams_model.loss.elbo_coeffs,
-                                 permutations=self.permutations)
+                                 permutations=self.permutations,
+                                 output_keys=self.hparams.config_model.model.outputs)
         return outputs
 
     def elbo(self, X):

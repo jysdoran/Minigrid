@@ -72,7 +72,7 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target
     If the source node is not specified, the largest component is returned."""
 
     if isinstance(graph, dgl.DGLGraph):
-        graph = graph.to_networkx()
+        graph = dgl.to_networkx(graph.cpu(), node_attrs=graph.ndata.keys())
     elif isinstance(graph, nx.Graph):
         pass
     else:
