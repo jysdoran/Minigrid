@@ -3,9 +3,6 @@ __package__ = "maze_representations"
 import logging
 import os
 import sys
-# TODO: to be removed later
-# sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-# os.environ["CUDA_LAUNCH_BLOCKING"] = str(1)
 import hydra
 import wandb
 from pathlib import Path
@@ -18,6 +15,8 @@ from data_loaders import GridNavDataModule
 from .models.graphVAE import LightningGraphVAE
 from .util.util import *
 from .util.logger_callbacks import GraphVAELogger
+
+# os.environ["CUDA_LAUNCH_BLOCKING"] = str(1)
 
 @hydra.main(version_base=None, config_path="conf", config_name="config.yaml")
 def run_experiment(cfg: DictConfig) -> None:

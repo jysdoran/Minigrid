@@ -344,8 +344,8 @@ class GraphVAELogger(pl.Callback):
             data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
             data = data[~torch.isnan(data)]
             to_log[f'metric/{tag}/task_metric/R/{key}/{mode}'] = data.mean()
-        if outputs.get("unweighted_elbos") is not None: #TODO
-            to_log[f'metric/unweighted_elbo/{mode}'] = outputs["unweighted_elbos"].mean() #TODO
+        if outputs.get("unweighted_elbos") is not None:
+            to_log[f'metric/unweighted_elbo/{mode}'] = outputs["unweighted_elbos"].mean()
         trainer.logger.log_metrics(to_log, step=trainer.global_step)
         del to_log
         logger.info(f"log_latent_embeddings(): logged metrics to wandb.")
@@ -934,7 +934,6 @@ class GraphVAELogger(pl.Callback):
 
         assert len(probs_A.shape) == 2 #check A is flattened
 
-        # TODO: to revise for non reduced formulations
         probs_A = probs_A.reshape(probs_A.shape[0], -1, 2)
 
         flip_bits = tr.FlipBinaryTransform()
