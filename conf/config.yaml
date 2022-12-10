@@ -23,6 +23,7 @@ seed: 20211201
 accelerator: gpu
 num_devices: 1
 num_cpus: 16
+debug_multiprocessing: false
 epochs: 10
 
 defaults:

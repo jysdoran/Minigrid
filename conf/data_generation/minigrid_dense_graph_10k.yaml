@@ -8,6 +8,7 @@ size_train_batch: 10
 size_test_batch: 1
 train_batch_ids: null #AUTO
 test_batch_ids: null #AUTO
+n_thumbnail_per_batch: 10
 
 data_type: graph
 encoding: dense
