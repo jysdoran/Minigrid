@@ -22,6 +22,11 @@ from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
+#TODO: issues with metrics computation:
+# - valid is shown false when it should be true
+# - solvable is shown true when it should be false
+# - shortest path, etc has a value when it should be Nan
+
 class GraphVAELogger(pl.Callback):
     def __init__(self,
                  label_contents: Dict[str, Any],
@@ -84,11 +89,11 @@ class GraphVAELogger(pl.Callback):
                 self.gw[key] = self.encode_graph_to_gridworld(self.graphs[key], self.attributes).to(device)
                 self.imgs[key] = self.gridworld_to_img(self.gw[key][:self.num_image_samples]).to(device)
             elif self.dataset_cfg.encoding == "dense":
+                self.gw[key] = None
                 if "images" in self.label_contents.keys():
-                    self.gw[key] = None
                     self.imgs[key] = self.label_contents["images"][self.labels[key]][:self.num_image_samples]
                 else:
-                    raise RuntimeError("Images not found in label contents. Cannot log images.")
+                    self.imgs[key] = tr.Nav2DTransforms.dense_graph_to_minigrid_render(self.graphs[key], tile_size=16)[:self.num_image_samples]
 
         self.resize_transform = torchvision.transforms.Resize((100, 100),
                                                interpolation=torchvision.transforms.InterpolationMode.NEAREST)
@@ -318,7 +323,8 @@ class GraphVAELogger(pl.Callback):
                outputs["logits_Fx"].shape[0], \
             f"log_latent_embeddings(): Shape mismatch Z={outputs['Z'].shape}, logits_Fx={outputs['logits_Fx'].shape}"
 
-        reconstructed_graphs = pl_module.decoder.to_graph(outputs["logits_Fx"], probabilistic_graph=True, make_batch=False)
+        pl_module.decoder.logit_mask = pl_module.decoder.compute_attribute_mask(logits=outputs["logits_Fx"])
+        reconstructed_graphs = pl_module.decoder.to_graph(outputs["logits_Fx"], probabilistic_graph=True, make_batch=False, masked=True)
         reconstructed_imgs = self.obtain_imgs(outputs, pl_module)
         reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
         mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"])
@@ -747,6 +753,7 @@ class GraphVAELogger(pl.Callback):
             logits["logits_A"], logits["logits_Fx"] = pl_module.decoder(interp_Z)
         elif self.dataset_cfg.encoding == "dense":
             logits["logits_Fx"] = pl_module.decoder(interp_Z)
+            assert pl_module.decoder.logit_mask is not None
         else:
             raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
         del interp_Z
@@ -839,7 +846,7 @@ class GraphVAELogger(pl.Callback):
 
         logger.debug(f"Successfully stored batch.")
 
-    def obtain_imgs(self, outputs, pl_module:pl.LightningModule) -> torch.Tensor:
+    def obtain_imgs(self, outputs, pl_module:pl.LightningModule, masked=True) -> torch.Tensor:
         """
 
         :param outputs:
@@ -849,7 +856,11 @@ class GraphVAELogger(pl.Callback):
         assert self.dataset_cfg.data_type == "graph", "Error in obtain_imgs(). This method is only valid for graph datasets."
 
         if self.dataset_cfg.encoding == "dense":
-            mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"])
+            if masked:
+                mask = pl_module.decoder.compute_attribute_mask(logits=outputs["logits_Fx"])
+            else:
+                mask = None
+            mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"], masked=True, mask=mask)
             if self.logging_cfg.rendering == "minigrid": #Not sure this should be the decider
                 grids = tr.Nav2DTransforms.dense_features_to_minigrid(mode_Fx, node_attributes=pl_module.decoder.attributes)
                 images = tr.Nav2DTransforms.minigrid_to_minigrid_render(grids, tile_size=self.logging_cfg.tile_size)
@@ -916,7 +927,7 @@ class GraphVAELogger(pl.Callback):
         self.log_images(trainer, tag + "/prob_heatmap/layout", heatmap_layout, mode="RGBA")
 
     def prob_heatmap_fx(self, probs_fx, grid_dim):
-
+        probs_fx = probs_fx.squeeze(0)
         assert len(probs_fx.shape) == 2
 
         probs_fx = probs_fx / probs_fx.amax(dim=[i for i in range(1, len(probs_fx.shape))], keepdim=True)

@@ -13,6 +13,9 @@ from torchvision.datasets.utils import check_integrity
 from torchvision.datasets.vision import VisionDataset
 from dgl.dataloading import GraphDataLoader
 
+#import memory_profiler
+import maze_representations.util.util as util
+
 logger = logging.getLogger(__name__)
 
 class GridNav_Dataset(VisionDataset):
@@ -106,15 +109,18 @@ class GridNav_Dataset(VisionDataset):
         "task:": "task_type",
     }
 
+    #@memory_profiler.profile
     def __init__(
         self,
         root: str,
         train: bool = True,
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None,
-    ) -> None:
+        no_images = False
+        ) -> None:
 
         super().__init__(root, transform=transform, target_transform=target_transform)
+        self.no_images = no_images
 
         self._load_meta()
 
@@ -136,45 +142,56 @@ class GridNav_Dataset(VisionDataset):
         # now load the picked numpy arrays
         for file_name, checksum in pickled_data:
             file_path = os.path.join(self.root, self.base_folder, file_name)
-            try:
-                if self.data_type == 'graph':
-                    if not os.path.exists(file_path): raise FileNotFoundError()
-                    graphs, labels = dgl.load_graphs(file_path)
-                    self.data.extend(graphs)
-                    self.targets.extend(labels['labels'])
-                    file_path += '.meta'
-                with open(file_path, "rb") as f:
-                    entry = pickle.load(f, encoding="latin1")
-                    # note: will end loop prematurely if exeption is thrown, not sure this is the best pattern
-                    # as behavior is order dependent
-                    try:
-                        self.batches_metadata.append(entry["batch_meta"])
-                        if self.target_contents is None:
-                            self.target_contents = entry["label_contents"]
-                        else:
-                            try:
-                                for key in entry["label_contents"].keys():
-                                    if isinstance(entry["label_contents"][key], list):
-                                        self.target_contents[key].extend(entry["label_contents"][key])
-                                    elif isinstance(entry["label_contents"][key], torch.Tensor):
-                                        self.target_contents[key] = \
-                                            torch.cat((self.target_contents[key], entry["label_contents"][key]))
-                                    else:
-                                        raise ValueError("Unsupported type for target_contents")
-                            except KeyError as e:
-                                raise KeyError(f"{e} not found in {self.target_contents.keys()}. Mismatch in label contents "
-                                               f"across batch files")
-
-                        # these ones will usually be skipped
-                        self.data.extend(entry["data"])
-                        self.targets.extend(entry["labels"])
-                    except KeyError as e:
-                        pass
-            except FileNotFoundError as e:
-                pass
+            self._load_data(file_path)
 
         if not self.data:
             raise FileNotFoundError("Dataset not found at specified location.")
+
+    #@memory_profiler.profile
+    def _load_data(self, file_path: str) -> None:
+
+        try:
+            if self.data_type == 'graph':
+                if not os.path.exists(file_path): raise FileNotFoundError()
+                graphs, labels = dgl.load_graphs(file_path)
+                self.data.extend(graphs)
+                self.targets.extend(labels['labels'])
+                file_path += '.meta'
+            with open(file_path, "rb") as f:
+                entry = pickle.load(f, encoding="latin1")
+                if self.no_images:
+                    try:
+                        del entry["label_contents"]["images"]
+                    except KeyError as e:
+                        pass
+                # note: will end loop prematurely if exeption is thrown, not sure this is the best pattern
+                # as behavior is order dependent
+                try:
+                    self.batches_metadata.append(entry["batch_meta"])
+                    if self.target_contents is None:
+                        self.target_contents = entry["label_contents"]
+                    else:
+                        try:
+                            for key in entry["label_contents"].keys():
+                                if isinstance(entry["label_contents"][key], list):
+                                    self.target_contents[key].extend(entry["label_contents"][key])
+                                elif isinstance(entry["label_contents"][key], torch.Tensor):
+                                    self.target_contents[key] = \
+                                        torch.cat((self.target_contents[key], entry["label_contents"][key]))
+                                else:
+                                    raise ValueError("Unsupported type for target_contents")
+                        except KeyError as e:
+                            raise KeyError(
+                                f"{e} not found in {self.target_contents.keys()}. Mismatch in label contents "
+                                f"across batch files")
+
+                    # these ones will usually be skipped
+                    self.data.extend(entry["data"])
+                    self.targets.extend(entry["labels"])
+                except KeyError as e:
+                    pass
+        except FileNotFoundError as e:
+            pass
 
     def _load_meta(self) -> None:
         path = os.path.join(self.root, self.base_folder, self.meta["filename"])
@@ -229,7 +246,7 @@ class GridNav_Dataset(VisionDataset):
 
 class GridNavDataModule(pl.LightningDataModule):
     def __init__(self, data_dir: str = "", batch_size: int = 32, num_samples: int = 2048,
-                 transform=None, num_workers: int = 0, val_data: str = 'train', **kwargs):
+                 transform=None, num_workers: int = 0, val_data: str = 'train', no_images=False, **kwargs):
         super().__init__()
         #sampler = dgl.dataloading.GraphDataLoader()
         self.data_dir = data_dir
@@ -242,13 +259,14 @@ class GridNavDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.val_data = val_data # from train or test set
         self.test = None
+        self.no_images = no_images
         logger.info("Initializing Gridworld Navigation DataModule")
 
     def setup(self, stage=None):
         dataset_train = None
         dataset_test = None
         if stage == 'fit' or stage is None:
-            dataset_train = GridNav_Dataset(self.data_dir, train=True, transform=self.transform)
+            dataset_train = GridNav_Dataset(self.data_dir, train=True, transform=self.transform, no_images=self.no_images)
             self.dataset_metadata = dataset_train.dataset_metadata
             if self.val_data == 'train':
                 split_size = [int(0.9 * len(dataset_train)), len(dataset_train) - int(0.9 * len(dataset_train))]
@@ -324,7 +342,13 @@ class GridNavDataModule(pl.LightningDataModule):
 
     @property
     def images(self):
-        return self.target_contents['images'].to(torch.float)
+        try:
+            images = self.target_contents['images'].to(torch.float)
+        except KeyError as e:
+            logger.warning("Images were not loaded in the data_loader")
+            images = None
+
+        return images
 
     @property
     def task_structures(self):

@@ -78,6 +78,8 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target
     else:
         raise ValueError("graph must be a DGLGraph or nx.Graph")
     graph = nx.Graph(graph)
+    inactive_nodes = [x for x, y in graph.nodes(data=True) if y['active'] < .5]
+    graph.remove_nodes_from(inactive_nodes)
     nodes = set(graph.nodes)
 
     if source is not None:
@@ -86,11 +88,13 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target
             valid = False
             connected = False
             return graph, valid, connected
-
-        if graph.degree[source] == 0 or graph.degree[target] == 0:
-            valid = False
         else:
             valid = True
+
+        # if graph.degree[source] == 0 or graph.degree[target] == 0:
+        #     valid = False
+        # else:
+        #     valid = True
 
         if nx.has_path(graph, source, target):
             connected = True

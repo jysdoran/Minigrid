@@ -33,7 +33,8 @@ def run_experiment(cfg: DictConfig) -> None:
                                     num_samples=cfg.results.num_stored_samples,
                                     transforms=cfg.data.dataset.transforms,
                                     num_workers=cfg.num_cpus,
-                                    val_data=cfg.data.dataset.val_data)
+                                    val_data=cfg.data.dataset.val_data,
+                                    no_images=cfg.data.dataset.no_images)
 
     model = LightningGraphVAE(config=cfg.models,
                                     config_model=cfg.models.configuration,
@@ -48,7 +49,7 @@ def run_experiment(cfg: DictConfig) -> None:
     #                                 config_logging =cfg.results,
     #                                 _recursive_=False)
     #wandb.login(key='x'*40)
-    wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd(), offline=cfg.offline, entity="francelico", log_model=True)
+    wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd(), offline=cfg.offline, entity="francelico", log_model=(not cfg.offline))
     if wandb_logger.experiment.name is not None:
         wandb_logger.experiment.name = cfg.run_name + "_" + wandb_logger.experiment.name
     else:

@@ -85,6 +85,9 @@ hyperparameters:
   loss:
     elbo_coeffs:
       A: 0.
-      Fx: [1., .25, .25]
+      Fx:
+        active: 1.
+        start: .25
+        goal: .25
       beta: 1.
       predictor: 0.

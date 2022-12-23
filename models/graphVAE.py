@@ -8,7 +8,6 @@ import torch
 import einops
 import pytorch_lightning as pl
 import hydra
-import wandb
 from torch import nn
 import torch.nn.functional as F
 from typing import Iterable, Union, List, Dict, Tuple
@@ -58,10 +57,10 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, out
         Fx, _ = decoder.get_node_features(X, node_attributes=decoder.attributes)
         # mask Fx if needed
         if decoder.config.attribute_masking == "always":
-            Fx_mask = decoder.get_attribute_mask(probs=Fx)
-            logits_Fx = decoder.mask_logits(logits_Fx, Fx_mask, float("-inf"))
+            decoder.logit_mask = decoder.compute_attribute_mask(probs=Fx)
+            logits_Fx = decoder.mask_logits(logits_Fx)
         else:
-            Fx_mask = None
+            decoder.logit_mask = None
 
         # Compute ~E_{q(z|x)}[ p(x | z) ]
         # Important: the samples are "propagated" all the way to the decoder output,
@@ -82,7 +81,8 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, out
         if not hasattr(elbo_coeffs.Fx, '__iter__'):
             elbos_Fx = elbo_coeffs.Fx * neg_cross_entropy_Fx.mean(dim=-1)  # (M, B, D) -> (M, B)
         else:
-            elbos_Fx = torch.einsum('i, m b i -> m b', torch.tensor(elbo_coeffs.Fx).to(logits_Fx), neg_cross_entropy_Fx)
+            coeffs_Fx = list(elbo_coeffs.Fx.values())
+            elbos_Fx = torch.einsum('i, m b i -> m b', torch.tensor(coeffs_Fx).to(logits_Fx), neg_cross_entropy_Fx)
         logits_Fx = logits_Fx.mean(dim=0)
     else:
         Fx = None
@@ -339,6 +339,7 @@ class GraphMLPDecoder(nn.Module):
             self.attribute_heads = nn.ModuleList()
             for i in range(len(self.attributes)):
                 self.attribute_heads.append(nn.Linear(self.config.hidden_dim, self.config.output_dim.attributes))
+            self._logit_mask = None
         else:
             self.attribute_heads = None
 
@@ -372,6 +373,7 @@ class GraphMLPDecoder(nn.Module):
             for net in self.attribute_heads:
                 f_out.append(net(logits))
             f_out = torch.stack(f_out, dim=-1)
+            self.logit_mask = self.compute_attribute_mask(logits=f_out.squeeze(0))
         else:
             f_out = None
 
@@ -490,7 +492,7 @@ class GraphMLPDecoder(nn.Module):
 
         return features.float(), node_attributes
 
-    def get_attribute_mask(self, probs:torch.Tensor=None, logits:torch.Tensor=None, node_attributes=None) -> torch.Tensor:
+    def compute_attribute_mask(self, probs:torch.Tensor=None, logits:torch.Tensor=None, node_attributes=None) -> torch.Tensor:
 
         if probs is None and logits is None:
             raise ValueError("Either probs or logits must be provided")
@@ -516,13 +518,20 @@ class GraphMLPDecoder(nn.Module):
                 attribute_mask[..., i] = probs[..., node_attributes.index("active")] >= 0.5
                 start_nodes = (attribute_mask[..., node_attributes.index("start")] *
                                probs[..., node_attributes.index("start")]).argmax(dim=-1)
-                attribute_mask[:, start_nodes, i] = False
+                ids = torch.arange(start_nodes.shape[0], device=start_nodes.device)
+                attribute_mask[..., ids, start_nodes, i] = False
 
         return attribute_mask
 
-    def mask_logits(self, logits, mask, value=float('-inf')):
+    def mask_logits(self, logits, mask=None, value=float('-inf')):
 
         # TODO: Or logits_Fx + float('-inf') * (1 - Fx_mask) to preserve gradients?
+
+        if mask is None:
+            if self.logit_mask is not None:
+                mask = self.logit_mask
+            else:
+                raise ValueError("No mask provided and self.mask is not set.")
 
         return logits.masked_fill(mask == 0, value)
 
@@ -700,7 +709,7 @@ class GraphMLPDecoder(nn.Module):
 
         return torch.distributions.Bernoulli(logits=logits_A).probs
 
-    def param_pFx(self, logits_Fx):
+    def param_pFx(self, logits_Fx, masked=True, mask=None):
         """
         Returns the distributions parameters
 
@@ -710,6 +719,18 @@ class GraphMLPDecoder(nn.Module):
         Returns:
             pFx (Tensor): parameters of the feature matrix distribution, shape (*, B, max_nodes, D)
         """
+
+        if masked:
+            if mask is None:
+                if self.logit_mask is not None:
+                    mask = self.logit_mask
+                else:
+                    raise ValueError("No mask provided or logit_mask not set")
+            logits_Fx = self.mask_logits(logits_Fx, mask=mask)
+            logits_Fx = self.force_valid_masking(logits_Fx, mask=mask)
+        else:
+            if mask is not None:
+                raise ValueError("Mask provided but masked=False")
 
         pFx = []
         for i in range(len(self.attribute_distributions)):
@@ -831,7 +852,7 @@ class GraphMLPDecoder(nn.Module):
         binary_transform = tr.BinaryTransform(threshold)
         return binary_transform(self.param_pA(logits_A))
 
-    def param_mFx(self, logits_Fx, threshold: float = 0.5):
+    def param_mFx(self, logits_Fx, threshold: float = 0.5, masked=True, mask=None):
         """
         Returns the mode given the distribution parameters. An optional threshold parameter
         can be specified to tune cutoff point between sampling 0 or 1 (only applied to Bernoulli distributions)
@@ -845,37 +866,20 @@ class GraphMLPDecoder(nn.Module):
             mFx (Tensor): mode of probabilistic feature attributes matrix, shape (*, B, max_nodes, D)
         """
 
-        if self.config.attribute_masking in ["always", "gen_only"]:
-            mask = self.get_attribute_mask(logits=logits_Fx)
-            logits_Fx_masked = self.mask_logits(logits_Fx, mask)
-            for i in range(len(self.attribute_distributions)):
-                if self.attribute_distributions[i] == "one_hot_categorical":
-                    logits_invalid = torch.all(logits_Fx_masked[..., i] == float('-inf'), dim=-1)
-                    if logits_invalid.any():
-                        invalid_batch_idx = logits_invalid.nonzero().flatten()
-                        logger.warning(f"Invalid logits detected for {self.attributes[i]} at "
-                                       f"batch indices: {invalid_batch_idx.tolist()}."
-                                       f" Sampling object at random within masked logits instead.")
-                        sampled_idx = []
-                        for idx in invalid_batch_idx:
-                            sampling_set = torch.where(mask[idx,...,i])[0]
-                            if len(sampling_set) == 0:
-                                logger.warning(f"Invalid masks detected for {self.attributes[i]} at "
-                                               f"batch indices: {invalid_batch_idx.tolist()}."
-                                               f" Sampling object at random within all nodes instead "
-                                               f" (layout is guaranteed to be invalid).")
-                                sampling_set = torch.randperm(logits_Fx_masked.shape[-2])
-                                sampled_idx.append(sampling_set[0])
-                                if i < len(self.attribute_distributions) - 1: #a bit hacky, will only work if for start & goal as one_hot_categorical
-                                    logits_Fx_masked[idx, sampling_set[1], i + 1] = 1.0
-                            else:
-                                sampled_idx.append(sampling_set[torch.randint(low=0, high=len(sampling_set), size=(1,))])
-                        logits_Fx_masked[invalid_batch_idx, sampled_idx, i] = 1.0 #can be set to any value > -inf
+        if masked:
+            if mask is None:
+                if self.logit_mask is not None:
+                    mask = self.logit_mask
+                else:
+                    raise ValueError("No mask provided or logit_mask not set")
+            logits_Fx = self.mask_logits(logits_Fx, mask=mask)
+            logits_Fx = self.force_valid_masking(logits_Fx, mask)
         else:
-            mask = None
+            if mask is not None:
+                raise ValueError("Mask provided but masked=False")
 
         binary_transform = tr.BinaryTransform(threshold)
-        pFx = self.param_pFx(logits_Fx)
+        pFx = self.param_pFx(logits_Fx, masked=False)
 
         mFx = []
         for i in range(len(self.attribute_distributions)):
@@ -892,14 +896,44 @@ class GraphMLPDecoder(nn.Module):
         mFx = torch.stack(mFx, dim=-1).to(logits_Fx)
         return mFx
 
+    def force_valid_masking(self, logits_Fx_masked, mask):
+
+        for i in range(len(self.attribute_distributions)):
+            if self.attribute_distributions[i] == "one_hot_categorical":
+                logits_invalid = torch.all(logits_Fx_masked[..., i] == float('-inf'), dim=-1)
+                if logits_invalid.any():
+                    invalid_batch_idx = logits_invalid.nonzero().flatten()
+                    logger.warning(f"Invalid logits detected for {self.attributes[i]} at "
+                                   f"batch indices: {invalid_batch_idx.tolist()}."
+                                   f" Sampling object at random within masked logits instead.")
+                    sampled_idx = []
+                    for idx in invalid_batch_idx:
+                        sampling_set = torch.where(mask[idx, ..., i])[0]
+                        if len(sampling_set) == 0:
+                            logger.warning(f"Invalid masks detected for {self.attributes[i]} at "
+                                           f"batch indices: {invalid_batch_idx.tolist()}."
+                                           f" Sampling object at random within all nodes instead "
+                                           f" (layout is guaranteed to be invalid).")
+                            sampling_set = torch.randperm(logits_Fx_masked.shape[-2])
+                            sampled_idx.append(sampling_set[0])
+                            if i < len(
+                                    self.attribute_distributions) - 1:  # a bit hacky, will only work if for start & goal as one_hot_categorical
+                                logits_Fx_masked[idx, sampling_set[1], i + 1] = 1.0
+                        else:
+                            sampled_idx.append(sampling_set[torch.randint(low=0, high=len(sampling_set), size=(1,))])
+                    logits_Fx_masked[invalid_batch_idx, sampled_idx, i] = 1.0  # can be set to any value > -inf
+
+        return logits_Fx_masked
+
     def _to_dense_graph(self, logits_Fx:torch.Tensor, node_attributes:List[str]=None, dim_gridgraph:tuple=None,
-                        probabilistic_graph:bool=True, make_batch:bool=False) \
+                        probabilistic_graph:bool=True, make_batch:bool=False, masked=True, mask=None) \
             -> Union[List[dgl.DGLGraph], dgl.DGLGraph]:
 
+
         if probabilistic_graph:
-            Fx = self.param_pFx(logits_Fx)
+            Fx = self.param_pFx(logits_Fx, masked=masked, mask=mask)
         else:
-            Fx = self.param_mFx(logits_Fx)
+            Fx = self.param_mFx(logits_Fx, masked=masked, mask=mask)
 
         if node_attributes is None:
             node_attributes = self.attributes
@@ -948,6 +982,19 @@ class GraphMLPDecoder(nn.Module):
 
         # TODO(low priority.)
         raise NotImplementedError()
+
+    @property
+    def logit_mask(self):
+        return self._logit_mask
+
+    @logit_mask.setter
+    def logit_mask(self, value):
+        self._logit_mask = value
+
+    @logit_mask.deleter
+    def logit_mask(self):
+        self._logit_mask = None
+
 
 class Predictor(nn.Module):
 
