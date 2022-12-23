@@ -2,6 +2,7 @@ name: minigrid_dense_graph_10k
 path: change_me
 size: 12000 #120000
 batch_size: 128
+no_images: true
 val_data: test
 task_structures: [
                      dungeon_,

@@ -4,8 +4,8 @@ size: null #AUTO
 
 num_train_batches: 22
 num_test_batches: 22
-size_train_batch: 10
-size_test_batch: 1
+size_train_batch: 1000
+size_test_batch: 200
 train_batch_ids: null #AUTO
 test_batch_ids: null #AUTO
 n_thumbnail_per_batch: 10
@@ -55,33 +55,33 @@ label_descriptors:
 label_descriptors_config:
   generating_algorithm: ${generating_algorithm}
   task_structures: [
-                     dungeon_,
-                     dungeon_lessrooms,
-                     dungeon_rooms,
-                     dungeon_spirals_neg,
-                     dungeon_mazescaled,
+                     dungeon_, #5.91
+                     dungeon_lessrooms, #2.21
+                     dungeon_rooms, #1.36
+                     dungeon_spirals_neg, #2.16
+                     dungeon_mazescaled, #0.22
 
-                     maze_,
-                     maze_knot,
-                     maze_like,
-                     maze_paths,
-                     maze_spirals,
-                     maze_wall,
-                     maze_simple,
+                     maze_, #13.27
+                     maze_knot, #1.16
+                     maze_like, #2.38
+                     maze_paths, #1.40
+                     maze_spirals, #2.11
+                     maze_wall, #0.11
+                     maze_simple, #0.15
 
-                     obstacles_blackdots,
-                     obstacles_hogs2,
-                     obstacles_hogs3,
-                     obstacles_angular,
+                     obstacles_blackdots, #0.10
+                     obstacles_hogs2, #0.14
+                     obstacles_hogs3, #0.48
+                     obstacles_angular, #0.52
 #                     obstacles_city,
 
-                     rooms_fabric,
-                     rooms_office,
-                     rooms_magicoffice,
+                     rooms_fabric, #0.38
+                     rooms_office, #1.67
+                     rooms_magicoffice, #.3.13
 
-                     skew_lake,
-                     skew_2,
-                     skew_cave,
+                     skew_lake, #6.31
+                     skew_2, #1.92
+                     skew_cave, #1.59
 
 
   ]
