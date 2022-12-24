@@ -156,7 +156,7 @@ class GraphVAELogger(pl.Callback):
 
         trainer.logger.log_metrics(to_log, step=trainer.global_step)
 
-        flattened_logits_Fx = torch.flatten(pl_module.decoder.param_pFx(outputs["logits_Fx"]))
+        flattened_logits_Fx = torch.flatten(pl_module.decoder.param_pFx(outputs["logits_Fx"], masked=False))
         trainer.logger.experiment.log(
             {f"distributions/logits/Fx/{mode}": wandb.Histogram(flattened_logits_Fx.to("cpu")),
              "global_step": trainer.global_step})
@@ -323,7 +323,6 @@ class GraphVAELogger(pl.Callback):
                outputs["logits_Fx"].shape[0], \
             f"log_latent_embeddings(): Shape mismatch Z={outputs['Z'].shape}, logits_Fx={outputs['logits_Fx'].shape}"
 
-        pl_module.decoder.logit_mask = pl_module.decoder.compute_attribute_mask(logits=outputs["logits_Fx"])
         reconstructed_graphs = pl_module.decoder.to_graph(outputs["logits_Fx"], probabilistic_graph=True, make_batch=False, masked=True)
         reconstructed_imgs = self.obtain_imgs(outputs, pl_module)
         reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
@@ -753,7 +752,6 @@ class GraphVAELogger(pl.Callback):
             logits["logits_A"], logits["logits_Fx"] = pl_module.decoder(interp_Z)
         elif self.dataset_cfg.encoding == "dense":
             logits["logits_Fx"] = pl_module.decoder(interp_Z)
-            assert pl_module.decoder.logit_mask is not None
         else:
             raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
         del interp_Z
@@ -856,11 +854,7 @@ class GraphVAELogger(pl.Callback):
         assert self.dataset_cfg.data_type == "graph", "Error in obtain_imgs(). This method is only valid for graph datasets."
 
         if self.dataset_cfg.encoding == "dense":
-            if masked:
-                mask = pl_module.decoder.compute_attribute_mask(logits=outputs["logits_Fx"])
-            else:
-                mask = None
-            mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"], masked=True, mask=mask)
+            mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"], masked=masked)
             if self.logging_cfg.rendering == "minigrid": #Not sure this should be the decider
                 grids = tr.Nav2DTransforms.dense_features_to_minigrid(mode_Fx, node_attributes=pl_module.decoder.attributes)
                 images = tr.Nav2DTransforms.minigrid_to_minigrid_render(grids, tile_size=self.logging_cfg.tile_size)
@@ -911,7 +905,7 @@ class GraphVAELogger(pl.Callback):
         logger.info(f"Progression: Entering log_prob_heatmaps(), tag:{tag}")
         grid_dim = int(np.sqrt(self.dataset_cfg.max_nodes))  # sqrt(num_nodes)
         if self.dataset_cfg.encoding == "dense":
-            logits_Fx = pl_module.decoder.param_p(outputs["logits_Fx"])
+            logits_Fx = pl_module.decoder.param_p(outputs["logits_Fx"], masked=False)
             heatmap_layout = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("active")], grid_dim)
         elif self.dataset_cfg.encoding == "minimal":
             logits_A, logits_Fx = pl_module.decoder.param_p((outputs["logits_A"], outputs["logits_Fx"]))

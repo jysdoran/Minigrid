@@ -57,10 +57,10 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, out
         Fx, _ = decoder.get_node_features(X, node_attributes=decoder.attributes)
         # mask Fx if needed
         if decoder.config.attribute_masking == "always":
-            decoder.logit_mask = decoder.compute_attribute_mask(probs=Fx)
-            logits_Fx = decoder.mask_logits(logits_Fx)
+            mask = decoder.compute_attribute_mask(probs=Fx)
+            logits_Fx = decoder.mask_logits(logits_Fx, mask)
         else:
-            decoder.logit_mask = None
+            mask = None
 
         # Compute ~E_{q(z|x)}[ p(x | z) ]
         # Important: the samples are "propagated" all the way to the decoder output,
@@ -339,7 +339,6 @@ class GraphMLPDecoder(nn.Module):
             self.attribute_heads = nn.ModuleList()
             for i in range(len(self.attributes)):
                 self.attribute_heads.append(nn.Linear(self.config.hidden_dim, self.config.output_dim.attributes))
-            self._logit_mask = None
         else:
             self.attribute_heads = None
 
@@ -373,7 +372,6 @@ class GraphMLPDecoder(nn.Module):
             for net in self.attribute_heads:
                 f_out.append(net(logits))
             f_out = torch.stack(f_out, dim=-1)
-            self.logit_mask = self.compute_attribute_mask(logits=f_out.squeeze(0))
         else:
             f_out = None
 
@@ -523,15 +521,9 @@ class GraphMLPDecoder(nn.Module):
 
         return attribute_mask
 
-    def mask_logits(self, logits, mask=None, value=float('-inf')):
+    def mask_logits(self, logits, mask, value=float('-inf')):
 
         # TODO: Or logits_Fx + float('-inf') * (1 - Fx_mask) to preserve gradients?
-
-        if mask is None:
-            if self.logit_mask is not None:
-                mask = self.logit_mask
-            else:
-                raise ValueError("No mask provided and self.mask is not set.")
 
         return logits.masked_fill(mask == 0, value)
 
@@ -722,10 +714,7 @@ class GraphMLPDecoder(nn.Module):
 
         if masked:
             if mask is None:
-                if self.logit_mask is not None:
-                    mask = self.logit_mask
-                else:
-                    raise ValueError("No mask provided or logit_mask not set")
+                mask = self.compute_attribute_mask(logits=logits_Fx)
             logits_Fx = self.mask_logits(logits_Fx, mask=mask)
             logits_Fx = self.force_valid_masking(logits_Fx, mask=mask)
         else:
@@ -868,12 +857,9 @@ class GraphMLPDecoder(nn.Module):
 
         if masked:
             if mask is None:
-                if self.logit_mask is not None:
-                    mask = self.logit_mask
-                else:
-                    raise ValueError("No mask provided or logit_mask not set")
+                mask = self.compute_attribute_mask(logits=logits_Fx)
             logits_Fx = self.mask_logits(logits_Fx, mask=mask)
-            logits_Fx = self.force_valid_masking(logits_Fx, mask)
+            logits_Fx = self.force_valid_masking(logits_Fx, mask=mask)
         else:
             if mask is not None:
                 raise ValueError("Mask provided but masked=False")
@@ -916,8 +902,8 @@ class GraphMLPDecoder(nn.Module):
                                            f" (layout is guaranteed to be invalid).")
                             sampling_set = torch.randperm(logits_Fx_masked.shape[-2])
                             sampled_idx.append(sampling_set[0])
-                            if i < len(
-                                    self.attribute_distributions) - 1:  # a bit hacky, will only work if for start & goal as one_hot_categorical
+                            # a bit hacky, will only work for [active, start, goal] ordering
+                            if i != len(self.attribute_distributions) - 1:
                                 logits_Fx_masked[idx, sampling_set[1], i + 1] = 1.0
                         else:
                             sampled_idx.append(sampling_set[torch.randint(low=0, high=len(sampling_set), size=(1,))])
@@ -982,19 +968,6 @@ class GraphMLPDecoder(nn.Module):
 
         # TODO(low priority.)
         raise NotImplementedError()
-
-    @property
-    def logit_mask(self):
-        return self._logit_mask
-
-    @logit_mask.setter
-    def logit_mask(self, value):
-        self._logit_mask = value
-
-    @logit_mask.deleter
-    def logit_mask(self):
-        self._logit_mask = None
-
 
 class Predictor(nn.Module):
 
