@@ -232,13 +232,13 @@ class GraphGCNEncoder(nn.Module):
 
     def create_model(self):
         if self.config.gnn.architecture == "GIN":
-            # Note: GIN will always use batchnorm at present.
             self.gcn = GIN(num_layers=self.config.gnn.num_layers, num_mlp_layers=self.config.gnn.num_mlp_layers,
                                input_dim=len(self.attributes), hidden_dim=self.config.gnn.layer_dim,
                                output_dim=self.config.mlp.hidden_dim, final_dropout=self.shared_params.dropout,
                                learn_eps=self.config.gnn.learn_eps, graph_pooling_type=self.config.gnn.graph_pooling,
                                neighbor_pooling_type=self.config.gnn.neighbor_pooling,
-                               n_nodes=self.shared_params.graph_max_nodes)
+                               n_nodes=self.shared_params.graph_max_nodes,
+                               enable_batch_norm=self.shared_params.use_batch_norm)
         else:
             raise NotImplementedError(f"Specified GNN architecture '{self.config.architecture}'"
                                       f" Invalid or Not Currently Implemented")

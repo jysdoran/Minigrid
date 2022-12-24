@@ -92,9 +92,15 @@ hydra:
 
       # Model configuration
       models.configuration.shared_parameters.latent_dim: [128, 256, 512, 1024 ]
+      models.configuration.shared_parameters.dropout: 0.0
+      models.configuration.shared_parameters.use_batch_norm: true
+
+      models.configuration.encoder.mlp.batch_norm_output_layer: true
+      models.configuration.decoder.batch_norm_output_layer: true
 
       models.configuration.encoder.gnn.num_layers: [1, 2, 3, 4]
       models.configuration.encoder.gnn.layer_dim: [ 8, 12, 16]
+      models.configuration.encoder.gnn.learn_eps: [true, false]
       models.configuration.encoder.mlp.num_layers: [1, 2, 3 ]
       models.configuration.encoder.mlp.hidden_dim: [2048, 1024, 512, 256]
       models.configuration.encoder.mlp.bottleneck_dim: [64, 128, 256, 512 ]

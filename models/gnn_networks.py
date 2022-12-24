@@ -30,7 +30,7 @@ class ApplyNodeFunc(nn.Module):
 
 class MLP(nn.Module):
     """MLP with linear output"""
-    def __init__(self, num_layers, input_dim, hidden_dim, output_dim):
+    def __init__(self, num_layers, input_dim, hidden_dim, output_dim, enable_batch_norm):
         """MLP layers construction
         Paramters
         ---------
@@ -47,6 +47,7 @@ class MLP(nn.Module):
         self.linear_or_not = True  # default is linear model
         self.num_layers = num_layers
         self.output_dim = output_dim
+        self.enable_batch_norm = enable_batch_norm
 
         if num_layers < 1:
             raise ValueError("number of layers should be positive!")
@@ -57,15 +58,20 @@ class MLP(nn.Module):
             # Multi-layer model
             self.linear_or_not = False
             self.linears = torch.nn.ModuleList()
-            self.batch_norms = torch.nn.ModuleList()
+
+            if self.enable_batch_norm:
+                self.batch_norms = torch.nn.ModuleList()
+            else:
+                self.batch_norms = None
 
             self.linears.append(nn.Linear(input_dim, hidden_dim, bias=False))
             for layer in range(num_layers - 2):
                 self.linears.append(nn.Linear(hidden_dim, hidden_dim, bias=False))
             self.linears.append(nn.Linear(hidden_dim, output_dim, bias=False))
 
-            for layer in range(num_layers - 1):
-                self.batch_norms.append(nn.BatchNorm1d((hidden_dim)))
+            if self.enable_batch_norm:
+                for layer in range(num_layers - 1):
+                    self.batch_norms.append(nn.BatchNorm1d((hidden_dim)))
 
     def forward(self, x):
         if self.linear_or_not:
@@ -75,7 +81,10 @@ class MLP(nn.Module):
             # If MLP
             h = x
             for i in range(self.num_layers - 1):
-                h = F.relu(self.batch_norms[i](self.linears[i](h)))
+                h = self.linears[i](h)
+                if self.enable_batch_norm:
+                    h = self.batch_norms[i](h)
+                h = F.relu(h)
             return self.linears[-1](h)
 
 
@@ -83,7 +92,7 @@ class GIN(nn.Module):
     """GIN model"""
     def __init__(self, num_layers, num_mlp_layers, input_dim, hidden_dim,
                  output_dim, final_dropout, learn_eps, graph_pooling_type,
-                 neighbor_pooling_type, n_nodes):
+                 neighbor_pooling_type, n_nodes, enable_batch_norm):
         """model parameters setting
         Paramters
         ---------
@@ -110,6 +119,7 @@ class GIN(nn.Module):
         super(GIN, self).__init__()
         self.num_layers = num_layers
         self.learn_eps = learn_eps
+        self.enable_batch_norm = enable_batch_norm
 
         # real output dim #TODO: remove linear predictor
         self.input_dim = input_dim
@@ -118,17 +128,21 @@ class GIN(nn.Module):
 
         # List of MLPs
         self.ginlayers = torch.nn.ModuleList()
-        self.batch_norms = torch.nn.ModuleList()
+        if self.enable_batch_norm:
+            self.batch_norms = torch.nn.ModuleList()
+        else:
+            self.batch_norms = None
 
         for layer in range(self.num_layers - 1):
             if layer == 0:
-                mlp = MLP(num_mlp_layers, input_dim, hidden_dim, hidden_dim)
+                mlp = MLP(num_mlp_layers, input_dim, hidden_dim, hidden_dim, self.enable_batch_norm)
             else:
-                mlp = MLP(num_mlp_layers, hidden_dim, hidden_dim, hidden_dim)
+                mlp = MLP(num_mlp_layers, hidden_dim, hidden_dim, hidden_dim, self.enable_batch_norm)
 
             self.ginlayers.append(
                 GINConv(ApplyNodeFunc(mlp), neighbor_pooling_type, 0, self.learn_eps))
-            self.batch_norms.append(nn.BatchNorm1d(hidden_dim))
+            if self.enable_batch_norm:
+                self.batch_norms.append(nn.BatchNorm1d(hidden_dim))
 
         # Linear function for graph poolings of output of each layer
         # which maps the output of different layers into a prediction score
@@ -159,7 +173,8 @@ class GIN(nn.Module):
 
         for i in range(self.num_layers - 1):
             h = self.ginlayers[i](g, h)
-            h = self.batch_norms[i](h)
+            if self.enable_batch_norm:
+                h = self.batch_norms[i](h)
             h = F.relu(h)
             hidden_rep.append(h)
 
