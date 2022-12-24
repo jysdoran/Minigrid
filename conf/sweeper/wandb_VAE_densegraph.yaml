@@ -7,7 +7,7 @@ hydra:
     # See https://docs.wandb.ai/guides/sweeps/configuration for types of configs
     wandb_sweep_config:
       # (Required) The name of the sweep, displayed in the W&B UI.
-      name: hydra_plugin_test
+      name: slurm_VAE_10k
 
       # (Required) Specify the search strategy.
       method: random
@@ -28,15 +28,15 @@ hydra:
       # reached. Use a multi-processing launcher to have these agents execute
       # simultaneously, otherwise it's a useless option since they'll execute in
       # sequence. Default is 1.
-      num_agents: 1
+      num_agents: 5 #4
 
       # (Optional) Total number of agents to launch (must be >= num_agents)
       # Default is 1.
-      budget: 2
+      budget: 180
 
       # (Optional) Specify the entity for this sweep. Otherwise infer from the
       # environment.
-      # entity: your_entity
+      entity: francelico
 
       # (Optional) Specify the project this sweep will be under. Projects are
       # used to organize models that can be compared, working on the same
@@ -57,6 +57,8 @@ hydra:
       tags:
         - ${run_name}
         - ${data.dataset.name}
+        - always_masking
+        - wide_sweep
 
       # (Optional) Specify any early stopping criteria. Default is {}.
       # early_terminate:
@@ -73,11 +75,11 @@ hydra:
 
       # (Optional) Maximum authorized failure rate for a batch of wandb agents'
       # runs. Default is 0.0.
-      max_run_failure_rate: 0.5
+      max_run_failure_rate: 1.0
 
       # (Optional) Maximum authorized failure rate for a batch of wandb agents
       # launched by the launcher. Default is 0.0.
-      max_agent_failure_rate: 0.5
+      max_agent_failure_rate: 1.0
 
       # (Optional) Used for resuming from a previous sweep. Default is None.
       # sweep_id: your_sweep_id
@@ -89,32 +91,47 @@ hydra:
     params:
 
       # Model configuration
-      models.configuration.shared_parameters.latent_dim: [ 64]
+      models.configuration.shared_parameters.latent_dim: [128, 256, 512, 1024 ]
 
-      models.configuration.encoder.gnn.num_layers: [ 5 ]
-      models.configuration.encoder.gnn.layer_dim: [ 8 ]
-      models.configuration.encoder.mlp.num_layers: [ 2 ]
-      models.configuration.encoder.mlp.hidden_dim: [ 512 ]
-      models.configuration.encoder.mlp.bottleneck_dim: [ 128 ]
+      models.configuration.encoder.gnn.num_layers: [1, 2, 3, 4]
+      models.configuration.encoder.gnn.layer_dim: [ 8, 12, 16]
+      models.configuration.encoder.mlp.num_layers: [1, 2, 3 ]
+      models.configuration.encoder.mlp.hidden_dim: [2048, 1024, 512, 256]
+      models.configuration.encoder.mlp.bottleneck_dim: [64, 128, 256, 512 ]
 
-      models.configuration.decoder.num_layers: [ 2 ]
-      models.configuration.decoder.bottleneck_dim: [ 128 ]
-      models.configuration.decoder.hidden_dim: [ 256]
+      models.configuration.decoder.num_layers: [1, 2, 3]
+      models.configuration.decoder.bottleneck_dim: [256, 512, 1024, 2048 ]
+      models.configuration.decoder.hidden_dim: [128, 256, 512, 1024, 2048 ]
 
       # Optimisation configuration
 
-      data.dataset.batch_size: [128]
+      data.dataset.batch_size: [64, 128, 256]
 
       optim.lr:
         distribution: log_uniform
         min: -9.21034 #log(0.0001)
-        max: -4.605170185988091 # log(0.01)
+        max: -6.645391014514646 # log(0.0013)
 
       # Objective configuration
 
+      models.hyperparameters.loss.elbo_coeffs.Fx.active:
+        distribution: log_uniform
+        min: -4.605170185988091 #log(0.01)
+        max: 0.0 #log(1.0)
+
+      models.hyperparameters.loss.elbo_coeffs.Fx.start:
+        distribution: log_uniform
+        min: -4.605170185988091 #log(0.01)
+        max: 0.0 #log(1.0)
+
+      models.hyperparameters.loss.elbo_coeffs.Fx.goal:
+        distribution: log_uniform
+        min: -4.605170185988091 #log(0.01)
+        max: 0.0 #log(1.0)
+
       models.hyperparameters.loss.elbo_coeffs.beta:
         distribution: log_uniform
-        min: -2.3025850929940455 #log(0.1)
-        max: 0. #log(1.0)
+        min: -4.605170185988091 #log(0.01)
+        max: 0.0 #log(1.0)
 
-      epochs: 1
+      epochs: 50

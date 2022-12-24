@@ -14,8 +14,13 @@ class Network(nn.Module):
     :attr layers (torch.nn.Module): neural network as sequential network of multiple layers
     """
 
-    def __init__(self, dims: Iterable[int], output_activation: nn.Module = None):
-        """Creates a network using ReLUs between layers and no activation at the end
+    def __init__(self, dims: Iterable[int],
+                 output_activation: nn.Module = None,
+                 dropout: float = 0.0,
+                 batch_norm=True,
+                 dropout_output_layer=False,
+                 batch_norm_output_layer=False):
+        """Template for multiple layer neural network
 
         :param dims (Iterable[int]): tuple in the form of (IN_SIZE, HIDDEN_SIZE, HIDDEN_SIZE2,
             ..., OUT_SIZE) for dimensionalities of layers
@@ -24,6 +29,10 @@ class Network(nn.Module):
         super().__init__()
         self.input_size = dims[0]
         self.out_size = dims[-1]
+        self.dropout_p = dropout
+        self.batch_norm = batch_norm
+        self.dropout_output_layer = dropout_output_layer
+        self.batch_norm_output_layer = batch_norm_output_layer
         self.layers = self.make_seq(dims, output_activation)
 
     def make_seq(self, dims: Iterable[int], output_activation: nn.Module) -> nn.Module:
@@ -48,9 +57,14 @@ class FC_ReLU_Network(Network):
     :attr layers (torch.nn.Module): neural network as sequential network of multiple layers
     """
 
-    def __init__(self, dims: Iterable[int], output_activation: nn.Module = None):
+    def __init__(self, dims: Iterable[int],
+                 output_activation: nn.Module = None,
+                 dropout: float = 0.0,
+                 batch_norm=True,
+                 dropout_output_layer=False,
+                 batch_norm_output_layer=False):
 
-        super().__init__(dims, output_activation)
+        super().__init__(dims, output_activation, dropout, batch_norm, dropout_output_layer, batch_norm_output_layer)
 
     def make_seq(self, dims: Iterable[int], output_activation: nn.Module) -> nn.Module:
 
@@ -74,10 +88,20 @@ class FC_ReLU_Network(Network):
                 dim_out = prod(dims[i+1])
             mods.append(nn.Linear(dim_in, dim_out))
             if i != (len(dims) - 2):
+                mods.append(nn.Dropout(self.dropout_p))
                 mods.append(nn.ReLU())
+                if self.batch_norm:
+                    mods.append(nn.BatchNorm1d(dim_out))
+
+        if self.dropout_output_layer:
+            mods.append(nn.Dropout(self.dropout_p))
 
         if output_activation:
             mods.append(output_activation())
+
+        if self.batch_norm_output_layer:
+            mods.append(nn.BatchNorm1d(dims[-1]))
+
         return nn.Sequential(*mods)
 
 #class CNN_Factory:
@@ -192,6 +216,7 @@ class CNN_ReLU_Network(Network):
             mods.append(nn.Conv2d(self.channels[i], self.channels[i+1], kernel_size, stride, self.padding[i]))
             if i != (len(dims) - 2): #do not append ReLU layer on the last one.
                 mods.append(nn.ReLU())
+                mods.append(nn.BatchNorm2d(self.channels[i+1]))
 
         if output_activation:
             mods.append(output_activation())
@@ -299,6 +324,7 @@ class dConv_ReLU_Network(Network):
                                            output_padding=self.out_padding[i], padding=self.padding[i]))
             if i != (len(dims) - 2): #do not append ReLU layer on the last one.
                 mods.append(nn.ReLU())
+                mods.append(nn.BatchNorm2d(self.channels[i + 1]))
 
         if output_activation:
             mods.append(output_activation())

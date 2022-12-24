@@ -232,9 +232,10 @@ class GraphGCNEncoder(nn.Module):
 
     def create_model(self):
         if self.config.gnn.architecture == "GIN":
+            # Note: GIN will always use batchnorm at present.
             self.gcn = GIN(num_layers=self.config.gnn.num_layers, num_mlp_layers=self.config.gnn.num_mlp_layers,
                                input_dim=len(self.attributes), hidden_dim=self.config.gnn.layer_dim,
-                               output_dim=self.config.mlp.hidden_dim, final_dropout=self.config.gnn.final_dropout,
+                               output_dim=self.config.mlp.hidden_dim, final_dropout=self.shared_params.dropout,
                                learn_eps=self.config.gnn.learn_eps, graph_pooling_type=self.config.gnn.graph_pooling,
                                neighbor_pooling_type=self.config.gnn.neighbor_pooling,
                                n_nodes=self.shared_params.graph_max_nodes)
@@ -246,7 +247,12 @@ class GraphGCNEncoder(nn.Module):
         mlp_dims = [self.gcn.output_dim]
         mlp_dims.extend([self.config.mlp.hidden_dim] * (self.config.mlp.num_layers - 1))
         mlp_dims.extend([self.config.mlp.bottleneck_dim])
-        self.mlp = FC_ReLU_Network(mlp_dims, output_activation=nn.ReLU)
+        self.mlp = FC_ReLU_Network(mlp_dims,
+                                   output_activation=nn.ReLU,
+                                   dropout=self.shared_params.dropout,
+                                   batch_norm=self.shared_params.use_batch_norm,
+                                   batch_norm_output_layer=self.config.mlp.batch_norm_output_layer,
+                                   dropout_output_layer=self.config.mlp.dropout_output_layer)
         model = [self.gcn, self.flatten_layer, self.mlp]
         model = list(filter(None, model))
 
@@ -345,9 +351,19 @@ class GraphMLPDecoder(nn.Module):
         self.populate_methods()
 
     def create_model(self, dims: Iterable[int]):
-        self.bottleneck = FC_ReLU_Network(dims[0:2], output_activation=nn.ReLU)
+        self.bottleneck = FC_ReLU_Network(dims[0:2],
+                                          output_activation=nn.ReLU,
+                                          dropout=self.shared_params.dropout,
+                                          batch_norm=self.shared_params.use_batch_norm,
+                                          batch_norm_output_layer=self.shared_params.use_batch_norm,
+                                          dropout_output_layer=bool(self.shared_params.dropout))
         if len(dims) > 2:
-            self.fc_net = FC_ReLU_Network(dims[1:], output_activation=nn.ReLU)
+            self.fc_net = FC_ReLU_Network(dims[1:],
+                                          output_activation=nn.ReLU,
+                                          dropout=self.shared_params.dropout,
+                                          batch_norm=self.shared_params.use_batch_norm,
+                                          dropout_output_layer=self.config.dropout_output_layer,
+                                          batch_norm_output_layer=self.config.batch_norm_output_layer)
             return [self.bottleneck, self.fc_net]
         else:
             return [self.bottleneck]
@@ -363,7 +379,12 @@ class GraphMLPDecoder(nn.Module):
             adj_out, f_out (Tensors):
         """
 
-        logits = Z
+        logits = Z.reshape(-1, Z.shape[-1])
+        if logits.ndim != Z.ndim:
+            reshape = True
+        else:
+            reshape = False
+
         for net in self.model:
             logits = net(logits)
 
@@ -372,11 +393,15 @@ class GraphMLPDecoder(nn.Module):
             for net in self.attribute_heads:
                 f_out.append(net(logits))
             f_out = torch.stack(f_out, dim=-1)
+            if reshape:
+                f_out = f_out.reshape(*Z.shape[:-1], *f_out.shape[1:])
         else:
             f_out = None
 
         if self.adjacency is not None:
             adj_out = self.adjacency(logits)
+            if reshape:
+                adj_out = adj_out.reshape(*Z.shape[:-1], *adj_out.shape[1:])
         else:
             adj_out = None
 

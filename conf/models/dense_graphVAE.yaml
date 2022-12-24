@@ -11,6 +11,8 @@ configuration:
     batch_size: ${data.dataset.batch_size}
     data_encoding: ${data.dataset.encoding}
     gridworld_data_dim: ${data.dataset.gridworld_data_dim}
+    dropout: 0.0
+    use_batch_norm: true
 
   model:
     outputs: [
@@ -26,7 +28,7 @@ configuration:
     accelerator: ${accelerator}
     gradient_type: pathwise
     num_variational_samples: 1
-    augmented_inputs: False
+    augmented_inputs: false
     augmented_transforms: null
 #    augmented_transforms: [[[1, 0], [0, 1]],
 #                           [[1, 0], [0, -1]],
@@ -45,8 +47,7 @@ configuration:
       num_layers: 5 #8
       layer_dim: 8
       num_mlp_layers: 2
-      final_dropout: 0
-      learn_eps: False
+      learn_eps: false
       graph_pooling: mean
       neighbor_pooling: sum
 
@@ -54,6 +55,8 @@ configuration:
       num_layers: 2
       hidden_dim: 1024
       bottleneck_dim: 128
+      batch_norm_output_layer: false
+      dropout_output_layer: false
 
   decoder:
     adjacency: null #[full, reduced, null]
@@ -69,6 +72,8 @@ configuration:
     num_layers: 2 #not counting the final multihead layer
     bottleneck_dim: 128 #not counting the final multihead layer
     hidden_dim: 128 #not counting the final multihead layer
+    batch_norm_output_layer: false
+    dropout_output_layer: false
 
   predictor:
     enable: False
