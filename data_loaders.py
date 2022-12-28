@@ -2,7 +2,7 @@ import logging
 
 import os.path
 import pickle
-from typing import Any, Callable, Optional, Tuple, Dict
+from typing import Any, Callable, Optional, Tuple, Dict, List
 
 import torch
 import pytorch_lightning as pl
@@ -116,7 +116,8 @@ class GridNav_Dataset(VisionDataset):
         train: bool = True,
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None,
-        no_images = False
+        no_images = False,
+        held_out_tasks: Optional[List[str]] = None,
         ) -> None:
 
         super().__init__(root, transform=transform, target_transform=target_transform)
@@ -138,6 +139,10 @@ class GridNav_Dataset(VisionDataset):
         self.targets = []
         self.target_contents: Dict = None
         self.batches_metadata: Any = []
+        self.held_out_tasks = held_out_tasks
+
+        if self.held_out_tasks is not None:
+            logger.info("Held out tasks: {}".format(self.held_out_tasks))
 
         # now load the picked numpy arrays
         for file_name, checksum in pickled_data:
@@ -151,14 +156,19 @@ class GridNav_Dataset(VisionDataset):
     def _load_data(self, file_path: str) -> None:
 
         try:
-            if self.data_type == 'graph':
-                if not os.path.exists(file_path): raise FileNotFoundError()
-                graphs, labels = dgl.load_graphs(file_path)
-                self.data.extend(graphs)
-                self.targets.extend(labels['labels'])
-                file_path += '.meta'
-            with open(file_path, "rb") as f:
+            meta_file_path = file_path + '.meta'
+            with open(meta_file_path, "rb") as f:
                 entry = pickle.load(f, encoding="latin1")
+                ts = entry['label_contents']['task_structure'][0]
+                assert all(ts == i for i in entry['label_contents']['task_structure']), \
+                    f"Not all tasks are the same in batch {file_path}."
+                if self.held_out_tasks is not None and ts in self.held_out_tasks:
+                    return
+                if self.data_type == 'graph':
+                    if not os.path.exists(file_path): raise FileNotFoundError()
+                    graphs, labels = dgl.load_graphs(file_path)
+                    self.data.extend(graphs)
+                    self.targets.extend(labels['labels'])
                 if self.no_images:
                     try:
                         del entry["label_contents"]["images"]
@@ -246,7 +256,9 @@ class GridNav_Dataset(VisionDataset):
 
 class GridNavDataModule(pl.LightningDataModule):
     def __init__(self, data_dir: str = "", batch_size: int = 32, num_samples: int = 2048,
-                 transform=None, num_workers: int = 0, val_data: str = 'train', no_images=False, **kwargs):
+                 transform=None, num_workers: int = 0, val_data: str = 'train', no_images=False,
+                 held_out_tasks:List[str]=None,
+                 **kwargs):
         super().__init__()
         #sampler = dgl.dataloading.GraphDataLoader()
         self.data_dir = data_dir
@@ -260,13 +272,18 @@ class GridNavDataModule(pl.LightningDataModule):
         self.val_data = val_data # from train or test set
         self.test = None
         self.no_images = no_images
+        self.held_out_tasks = held_out_tasks #only used for train set
+
         logger.info("Initializing Gridworld Navigation DataModule")
+        if not self.no_images:
+            logger.warning("no_images set to False, may cause memory issues.")
 
     def setup(self, stage=None):
         dataset_train = None
         dataset_test = None
         if stage == 'fit' or stage is None:
-            dataset_train = GridNav_Dataset(self.data_dir, train=True, transform=self.transform, no_images=self.no_images)
+            dataset_train = GridNav_Dataset(self.data_dir, train=True, transform=self.transform,
+                                            no_images=self.no_images, held_out_tasks=self.held_out_tasks)
             self.dataset_metadata = dataset_train.dataset_metadata
             if self.val_data == 'train':
                 split_size = [int(0.9 * len(dataset_train)), len(dataset_train) - int(0.9 * len(dataset_train))]
@@ -301,6 +318,7 @@ class GridNavDataModule(pl.LightningDataModule):
             if dataset_test is None:
                 dataset_test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
             self.dataset = torch.utils.data.ConcatDataset([dataset_train, dataset_test])
+            targets = torch.concat([torch.stack(dataset_train.targets), torch.stack(dataset_test.targets)]).tolist()
             self.target_contents = dataset_train.target_contents
             for key in self.target_contents.keys():
                 if isinstance(self.target_contents[key], list):
@@ -308,8 +326,10 @@ class GridNavDataModule(pl.LightningDataModule):
                 elif isinstance(self.target_contents[key], torch.Tensor):
                     self.target_contents[key] = \
                         torch.cat((self.target_contents[key], dataset_test.target_contents[key]))
+                    self.target_contents[key] = self.target_contents[key].tolist()
                 else:
                     raise ValueError("Unsupported type for target_contents")
+                self.target_contents[key] = dict(zip(targets, self.target_contents[key]))
 
     def train_dataloader(self):
         loader = self.create_dataloader(self.train, batch_size=self.batch_size, shuffle=True)
@@ -339,6 +359,10 @@ class GridNavDataModule(pl.LightningDataModule):
         else:
             raise NotImplementedError("Data Module not currently implemented for non Graph Data.")
         return data_loader
+
+    def find_label_ids(self, dataset, label_descriptor, value):
+        ids = [i for i, x in enumerate(dataset.target_contents[label_descriptor]) if x == value]
+        return ids
 
     @property
     def images(self):

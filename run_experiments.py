@@ -34,7 +34,8 @@ def run_experiment(cfg: DictConfig) -> None:
                                     transforms=cfg.data.dataset.transforms,
                                     num_workers=cfg.num_cpus,
                                     val_data=cfg.data.dataset.val_data,
-                                    no_images=cfg.data.dataset.no_images)
+                                    no_images=cfg.data.dataset.no_images,
+                                    held_out_tasks=cfg.data.dataset.held_out_tasks)
 
     model = LightningGraphVAE(config=cfg.models,
                                     config_model=cfg.models.configuration,
@@ -94,20 +95,21 @@ def get_dataset_dir(cfg, test_mode=False):
     base_dir = str(Path(__file__).resolve().parent)
     datasets_dir = base_dir + '/datasets/'
 
-    dataset_size = cfg.size
-    task_structures = cfg.task_structures  # ('rooms_unstructured_layout','maze')
-    data_type = cfg.data_type  # 'graph'
-    data_dims = cfg.gridworld_data_dim
-    data_dim = data_dims[-1]
-    task_structures = '-'.join(sorted(task_structures))
-
-    attributes_dim = len(cfg.node_attributes)
-    encoding = cfg.encoding
+    # dataset_size = cfg.size
+    # task_structures = cfg.task_structures  # ('rooms_unstructured_layout','maze')
+    # data_type = cfg.data_type  # 'graph'
+    # data_dims = cfg.gridworld_data_dim
+    # data_dim = data_dims[-1]
+    # task_structures = '-'.join(sorted(task_structures))
+    #
+    # attributes_dim = len(cfg.node_attributes)
+    # encoding = cfg.encoding
 
     if test_mode:
         data_directory = 'test'
     else:
-        data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-gf={attributes_dim}-enc={encoding}"
+        data_directory = cfg.name
+        # data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-gf={attributes_dim}-enc={encoding}"
     data_full_dir = datasets_dir + data_directory
     return data_full_dir, data_directory
 

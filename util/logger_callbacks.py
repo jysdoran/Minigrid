@@ -362,10 +362,7 @@ class GraphVAELogger(pl.Callback):
         # Store pre-computed Input metrics in the embeddings table
         if input_batch.get("label_ids") is not None:
             for input_property in reversed(["shortest_path", "resistance", "navigable_nodes", "task_structure", "seed"]):
-                if isinstance(self.label_contents[input_property], list):
-                    data = [self.label_contents[input_property][i] for i in input_batch["label_ids"]]
-                else:
-                    data = self.label_contents[input_property][input_batch["label_ids"]]
+                data = [self.label_contents[input_property][i] for i in input_batch["label_ids"].tolist()]
                 df.insert(0, f"I_{input_property}", data)
 
 

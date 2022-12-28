@@ -28,7 +28,7 @@ epochs: 10
 
 defaults:
   # + data/data_generation: gridworlds
-  - data/dataset: minigrid_dense_graph_10k
+  - data/dataset: minigrid_dense_graph_22k
   - models: dense_graphVAE
   - optim: adam
   - results: dense_graphVAE

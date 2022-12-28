@@ -12,8 +12,6 @@ import argparse
 from typing import Tuple, List, Union
 import sys
 
-
-from ..data_loaders import WrappedDataLoader
 from . import transforms as tr
 
 #WIP section
@@ -305,17 +303,17 @@ def rgba2rgb(imgs:torch.Tensor, background=(1, 1, 1))->torch.Tensor:
     return rgb
 
 
-def create_dataloader(data, batch_size, device, shuffle=True):
-    data_type = data.dataset_metadata['data_type']
-    if data_type == 'graph':
-        data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
-    else:
-        kwargs = {'num_workers': 1, 'pin_memory': True} if device else {}  # Bug here but whatever should be arg.cuda
-        data_loader = torch.utils.data.DataLoader(
-            data, batch_size=batch_size, shuffle=shuffle, **kwargs)
-        data_loader = WrappedDataLoader(data_loader, tr.ToDeviceTransform(device))
-
-    return data_loader
+# def create_dataloader(data, batch_size, device, shuffle=True):
+#     data_type = data.dataset_metadata['data_type']
+#     if data_type == 'graph':
+#         data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
+#     else:
+#         kwargs = {'num_workers': 1, 'pin_memory': True} if device else {}  # Bug here but whatever should be arg.cuda
+#         data_loader = torch.utils.data.DataLoader(
+#             data, batch_size=batch_size, shuffle=shuffle, **kwargs)
+#         data_loader = WrappedDataLoader(data_loader, tr.ToDeviceTransform(device))
+#
+#     return data_loader
 
 
 def save_state(cfg, model, optimizer, file, model_states: List, optim_states: List):
