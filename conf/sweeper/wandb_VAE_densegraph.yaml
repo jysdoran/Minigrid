@@ -7,7 +7,7 @@ hydra:
     # See https://docs.wandb.ai/guides/sweeps/configuration for types of configs
     wandb_sweep_config:
       # (Required) The name of the sweep, displayed in the W&B UI.
-      name: slurm_VAE_10k
+      name: slurm_denseGraphVAE_10k
 
       # (Required) Specify the search strategy.
       method: random
@@ -28,7 +28,7 @@ hydra:
       # reached. Use a multi-processing launcher to have these agents execute
       # simultaneously, otherwise it's a useless option since they'll execute in
       # sequence. Default is 1.
-      num_agents: 5 #4
+      num_agents: 6 #4
 
       # (Optional) Total number of agents to launch (must be >= num_agents)
       # Default is 1.
@@ -91,23 +91,16 @@ hydra:
     params:
 
       # Model configuration
-      models.configuration.shared_parameters.latent_dim: [128, 256, 512, 1024 ]
-      models.configuration.shared_parameters.dropout: 0.0
-      models.configuration.shared_parameters.use_batch_norm: true
-
-      models.configuration.encoder.mlp.batch_norm_output_layer: true
-      models.configuration.decoder.batch_norm_output_layer: true
-
+      models.configuration.shared_parameters.latent_dim: [256, 512, 1024 ]
       models.configuration.encoder.gnn.num_layers: [1, 2, 3, 4]
       models.configuration.encoder.gnn.layer_dim: [ 8, 12, 16]
-      models.configuration.encoder.gnn.learn_eps: [true, false]
       models.configuration.encoder.mlp.num_layers: [1, 2, 3 ]
       models.configuration.encoder.mlp.hidden_dim: [2048, 1024, 512, 256]
-      models.configuration.encoder.mlp.bottleneck_dim: [64, 128, 256, 512 ]
+      models.configuration.encoder.mlp.bottleneck_dim: [128, 256, 512 ]
 
       models.configuration.decoder.num_layers: [1, 2, 3]
-      models.configuration.decoder.bottleneck_dim: [256, 512, 1024, 2048 ]
-      models.configuration.decoder.hidden_dim: [128, 256, 512, 1024, 2048 ]
+      models.configuration.decoder.bottleneck_dim: [128, 256, 512, 1024, 2048 ]
+      models.configuration.decoder.hidden_dim: [256, 512, 1024, 2048 ]
 
       # Optimisation configuration
 

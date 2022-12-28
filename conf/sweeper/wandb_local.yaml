@@ -103,7 +103,7 @@ hydra:
 
       # Optimisation configuration
 
-      data.dataset.batch_size: [128]
+      data.dataset.batch_size: [64]
 
       optim.lr:
         distribution: log_uniform

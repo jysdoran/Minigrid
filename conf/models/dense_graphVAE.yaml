@@ -55,7 +55,7 @@ configuration:
       num_layers: 2
       hidden_dim: 1024
       bottleneck_dim: 128
-      batch_norm_output_layer: false
+      batch_norm_output_layer: true
       dropout_output_layer: false
 
   decoder:
@@ -72,7 +72,7 @@ configuration:
     num_layers: 2 #not counting the final multihead layer
     bottleneck_dim: 128 #not counting the final multihead layer
     hidden_dim: 128 #not counting the final multihead layer
-    batch_norm_output_layer: false
+    batch_norm_output_layer: true
     dropout_output_layer: false
 
   predictor:
