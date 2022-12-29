@@ -739,6 +739,8 @@ class GraphMLPDecoder(nn.Module):
 
         if masked:
             if mask is None:
+                if self.config.attribute_masking is None:
+                    raise RuntimeError("Cannot do auto-masking when attribute masking set to None in decoder config.")
                 mask = self.compute_attribute_mask(logits=logits_Fx)
             logits_Fx = self.mask_logits(logits_Fx, mask=mask)
             logits_Fx = self.force_valid_masking(logits_Fx, mask=mask)
@@ -882,6 +884,8 @@ class GraphMLPDecoder(nn.Module):
 
         if masked:
             if mask is None:
+                if self.config.attribute_masking is None:
+                    raise RuntimeError("Cannot do auto-masking when attribute masking set to None in decoder config.")
                 mask = self.compute_attribute_mask(logits=logits_Fx)
             logits_Fx = self.mask_logits(logits_Fx, mask=mask)
             logits_Fx = self.force_valid_masking(logits_Fx, mask=mask)
