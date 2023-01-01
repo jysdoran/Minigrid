@@ -354,11 +354,11 @@ class GridNavDataModule(pl.LightningDataModule):
         return loader
 
     def create_dataloader(self, data, batch_size, shuffle=True):
-        data_type = data.dataset_metadata['data_type']
-        if data_type == 'graph':
-            data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle, num_workers=self.num_workers)
-        else:
-            raise NotImplementedError("Data Module not currently implemented for non Graph Data.")
+        # data_type = self.dataset_metadata['data_type']
+        # if data_type == 'graph':
+        data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle, num_workers=self.num_workers)
+        # else:
+        #     raise NotImplementedError("Data Module not currently implemented for non Graph Data.")
         return data_loader
 
     def find_label_ids(self, dataset, label_descriptor, value):
