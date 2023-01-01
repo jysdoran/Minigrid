@@ -273,6 +273,7 @@ class GridNavDataModule(pl.LightningDataModule):
         self.test = None
         self.no_images = no_images
         self.held_out_tasks = held_out_tasks #only used for train set
+        self.dataset_metadata = None
 
         logger.info("Initializing Gridworld Navigation DataModule")
         if not self.no_images:
