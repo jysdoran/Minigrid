@@ -309,8 +309,6 @@ class GridNavDataModule(pl.LightningDataModule):
         if stage == 'test' or stage is None:
             if self.test is None:
                 dataset_test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
-                if self.dataset_metadata is None:
-                    self.dataset_metadata = dataset_test.dataset_metadata
                 self.test = dataset_test
             n_samples = min(self.num_samples, len(self.test))
             self.samples["test"] = next(iter(self.create_dataloader(self.test, batch_size=n_samples)))
