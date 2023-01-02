@@ -108,7 +108,7 @@ def get_dataset_dir(cfg, test_mode=False):
     if test_mode:
         data_directory = 'test'
     else:
-        data_directory = 'minigrid_dense_graph_22k' #cfg.name
+        data_directory = cfg.name
         # data_directory = f"ts={task_structures}-x={data_type}-s={dataset_size}-d={data_dim}-gf={attributes_dim}-enc={encoding}"
     data_full_dir = datasets_dir + data_directory
     return data_full_dir, data_directory
