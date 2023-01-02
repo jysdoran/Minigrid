@@ -354,7 +354,7 @@ class GridNavDataModule(pl.LightningDataModule):
         return loader
 
     def create_dataloader(self, data, batch_size, shuffle=True):
-        data_type = data.dataset_metadata['data_type']
+        data_type = self.dataset_metadata['data_type']
         if data_type == 'graph':
             data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle, num_workers=self.num_workers)
         else:
