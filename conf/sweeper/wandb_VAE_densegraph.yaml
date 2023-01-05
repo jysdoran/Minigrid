@@ -123,11 +123,6 @@ hydra:
         min: -4.605170185988091 #log(0.01)
         max: 0.0 #log(1.0)
 
-      models.hyperparameters.loss.elbo_coeffs.Fx.goal:
-        distribution: log_uniform
-        min: -4.605170185988091 #log(0.01)
-        max: 0.0 #log(1.0)
-
       models.hyperparameters.loss.elbo_coeffs.beta:
         distribution: log_uniform
         min: -4.605170185988091 #log(0.01)

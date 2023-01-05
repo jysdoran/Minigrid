@@ -93,6 +93,6 @@ hyperparameters:
       Fx:
         active: 1.
         start: .25
-        goal: .25
+        goal: ${models.hyperparameters.loss.elbo_coeffs.Fx.start}
       beta: 1.
       predictor: 0.
