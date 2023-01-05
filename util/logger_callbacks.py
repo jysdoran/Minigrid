@@ -17,23 +17,18 @@ from envs.multigrid.multigrid import Grid
 
 from . import transforms as tr
 from .graph_metrics import compute_metrics
-from .util import check_unique, cdist_polar, lerp, slerp, rgba2rgb
+from .util import check_unique, check_novel, get_node_features, cdist_polar, interpolate_between_pairs, rgba2rgb
 from copy import deepcopy
+from maze_representations.data_loaders import GridNavDataModule
 
 logger = logging.getLogger(__name__)
 
-#TODO: issues with metrics computation:
-# - valid is shown false when it should be true
-# - solvable is shown true when it should be false
-# - shortest path, etc has a value when it should be Nan
 
 class GraphVAELogger(pl.Callback):
     def __init__(self,
-                 label_contents: Dict[str, Any],
-                 samples: Dict[str, Tuple[dgl.DGLGraph, torch.Tensor]],
+                 data_module: GridNavDataModule,
                  logging_cfg,
                  dataset_cfg,
-                 label_descriptors_config: Dict = None,
                  accelerator: str = "cpu"):
 
         super().__init__()
@@ -41,8 +36,8 @@ class GraphVAELogger(pl.Callback):
         self.logging_cfg = logging_cfg
         self.dataset_cfg = dataset_cfg
 
-        self.label_contents = label_contents
-        self.label_descriptors_config = label_descriptors_config
+        self.label_contents = data_module.target_contents
+        self.label_descriptors_config = data_module.dataset_metadata['label_descriptors_config']
         self.force_valid_reconstructions = logging_cfg.force_valid_reconstructions
         self.num_stored_samples = logging_cfg.num_stored_samples
         self.num_image_samples = logging_cfg.num_image_samples
@@ -52,6 +47,12 @@ class GraphVAELogger(pl.Callback):
         self.max_cached_batches = self.num_stored_samples // self.dataset_cfg.batch_size
         self.max_cached_batches = max(self.max_cached_batches, 1) #store at least one batch
         self.attributes = dataset_cfg.node_attributes
+
+        graphs = []
+        for (graph, label) in data_module.train:
+            graphs.append(graph)
+        self.train_dataset_features, _ = get_node_features(graphs, device=device)
+
         self.graphs = {}
         self.labels = {}
         self.gw = {}
@@ -71,7 +72,7 @@ class GraphVAELogger(pl.Callback):
 
         try:
             for key in ["train", "val", "test"]:
-                self.graphs[key], self.labels[key] = samples[key]
+                self.graphs[key], self.labels[key] = data_module.samples[key]
                 self.graphs[key] = dgl.unbatch(self.graphs[key])
                 self.graphs[key] = self.graphs[key]
                 self.labels[key] = self.labels[key]
@@ -336,6 +337,9 @@ class GraphVAELogger(pl.Callback):
             compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes_ids, goal_nodes_ids,
                             labels=input_batch.get("label_ids"))
         reconstruction_metrics["unique"] = check_unique(mode_Fx).tolist()
+        novel_dataset = check_novel(mode_Fx, self.train_dataset_features).tolist()
+        reconstruction_metrics["novel"] = novel_dataset and reconstruction_metrics["solvable"]
+        frac_novel_not_repeated = torch.unique(mode_Fx[reconstruction_metrics["novel"]], dim=0).shape[0] / mode_Fx.shape[0]
 
         del outputs["logits_Fx"], start_nodes_ids, goal_nodes_ids, rec_graphs_nx, is_valid, reconstructed_graphs
 
@@ -349,6 +353,7 @@ class GraphVAELogger(pl.Callback):
             data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
             data = data[~torch.isnan(data)]
             to_log[f'metric/{tag}/task_metric/R/{key}/{mode}'] = data.mean()
+        to_log[f'metric/{tag}/task_metric/R/novel_unique/{mode}'] = frac_novel_not_repeated
         if outputs.get("unweighted_elbos") is not None:
             to_log[f'metric/unweighted_elbo/{mode}'] = outputs["unweighted_elbos"].mean()
         trainer.logger.log_metrics(to_log, step=trainer.global_step)
@@ -367,7 +372,7 @@ class GraphVAELogger(pl.Callback):
 
 
         # Store Reconstruction metrics in the embeddings table
-        for key in reversed(["valid", "solvable", "unique", "shortest_path", "resistance", "navigable_nodes"]):
+        for key in reversed(["valid", "solvable", "unique", "novel", "shortest_path", "resistance", "navigable_nodes"]):
             df.insert(0, f"R_{key}", reconstruction_metrics[key])
             if key in ["shortest_path", "resistance", "navigable_nodes"]:
                 hist_data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
@@ -414,7 +419,7 @@ class GraphVAELogger(pl.Callback):
         #       Sample points around each interpolated mean according to a linear interpolation of the stds
         #       points = points + lerp(std1, std2) * randn()
 
-        # New slerp interpolate logic:
+        # New slerp interpolate logic (unit-sphere, not used in _dcd):
         # I. Compute distances between points in latent space and sort samples into pairs of lowest to highest distance.
         # II. For num_samples pairs:
         #   1. normalise means to be unit vectors. mean_norm = mean / ||mean||
@@ -425,25 +430,6 @@ class GraphVAELogger(pl.Callback):
         #       points = points + lerp(std1, std2) * randn()
 
         logger.info(f"Progression: Entering log_latent_interpolation(), mode:{mode}")
-
-        def interpolate_between_pairs(pairs:Tuple[int,int], data:torch.Tensor, num_interpolations:int,
-                                      scheme:str)->torch.Tensor:
-
-            interpolation_points = np.linspace(0, 1, num_interpolations + 2)[1:-1]
-            interpolations = [[] for _ in pairs]
-            for i, pair in enumerate(pairs):
-                interpolations[i].append(data[pair[0]])
-                for loc in interpolation_points:
-                    if scheme == 'linear':
-                        interp = lerp(loc, data[pair[0]], data[pair[1]])
-                    elif scheme == 'polar':
-                        interp = slerp(loc, data[pair[0]], data[pair[1]])
-                    else:
-                        raise RuntimeError(f"Interpolation scheme {interpolation_scheme} not recognised.")
-                    interpolations[i].append(interp)
-                interpolations[i].append(data[pair[1]])
-
-            return torch.stack([torch.stack(row).to(data) for row in interpolations]).to(data)
 
         # Get data
         Z_dim = pl_module.hparams.config_model.shared_parameters.latent_dim
@@ -493,13 +479,14 @@ class GraphVAELogger(pl.Callback):
 
         # sort the distances in ascending order
         distances = {k: v for k, v in sorted(distances.items(), key=lambda item: item[1])}
+        pairs = list(distances.keys())
 
         if interpolation_scheme in ['linear','polar']:
             #1.
-            interp_Z = interpolate_between_pairs(list(distances.keys()), mean, interpolations_per_samples, scheme=interpolation_scheme)
+            interp_Z = interpolate_between_pairs(pairs, mean, interpolations_per_samples, scheme=interpolation_scheme)
             #2.
             if latent_sampling and std is not None:
-                interp_std = interpolate_between_pairs(list(distances.keys()), std, interpolations_per_samples, 'linear')
+                interp_std = interpolate_between_pairs(pairs, std, interpolations_per_samples, 'linear')
                 interp_Z = interp_Z + interp_std * torch.randn_like(interp_Z)
                 del interp_std
         # Not used at the moment
@@ -509,22 +496,21 @@ class GraphVAELogger(pl.Callback):
             mean_normalised = mean / mean_norm.unsqueeze(-1)
 
             #2.
-            interp_Z = interpolate_between_pairs(distances.keys(), mean_normalised, interpolations_per_samples, interpolation_scheme)
+            interp_Z = interpolate_between_pairs(pairs, mean_normalised, interpolations_per_samples, interpolation_scheme)
 
             #3.
-            interp_mean_norms = interpolate_between_pairs(distances.keys(), mean_norm, interpolations_per_samples, 'linear')
+            interp_mean_norms = interpolate_between_pairs(pairs, mean_norm, interpolations_per_samples, 'linear')
             interp_Z = interp_Z * interp_mean_norms.unsqueeze(-1)
 
             #4.
             if latent_sampling and std is not None:
-                interp_std = interpolate_between_pairs(distances.keys(), std, interpolations_per_samples, 'linear')
+                interp_std = interpolate_between_pairs(pairs, std, interpolations_per_samples, 'linear')
                 interp_Z = interp_Z + interp_std * torch.randn_like(interp_Z)
                 del interp_std
 
             del interp_mean_norms, mean_norm, mean_normalised
         else:
             raise RuntimeError(f"Interpolation scheme {interpolation_scheme} not recognised.")
-        del mean, std
 
         # reassembly
         if remove_dims and mode!="prior":
@@ -547,22 +533,32 @@ class GraphVAELogger(pl.Callback):
             "global_step": trainer.global_step
         })
 
-        interp_Z = interp_Z.reshape(-1, interp_Z.shape[-1])
         self.log_latent_embeddings(trainer, pl_module, "latent_space/interpolation", mode=mode, outputs={"Z":interp_Z},
                                    interpolation=True)
 
-        # Obtain the interpolated samples
+        # Obtain the interpolated samples + original pairs
+        all_Z = []
+        interp_Z = interp_Z.reshape(len(pairs), -1, Z_dim)
+        for i, pair in enumerate(pairs):
+            all_Z.append(mean[pair[0]])
+            for latent in interp_Z[i]:
+                all_Z.append(latent)
+            all_Z.append(mean[pair[1]])
+        all_Z = torch.stack(all_Z)
+
+        del mean, std, interp_Z
+
         logits = {}
         if self.dataset_cfg.encoding == "minimal":
-            logits["logits_A"], logits["logits_Fx"] = pl_module.decoder(interp_Z)
+            logits["logits_A"], logits["logits_Fx"] = pl_module.decoder(all_Z)
         elif self.dataset_cfg.encoding == "dense":
-            logits["logits_Fx"] = pl_module.decoder(interp_Z)
+            logits["logits_Fx"] = pl_module.decoder(all_Z)
         else:
             raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
-        del interp_Z
+        del all_Z
 
         imgs = self.obtain_imgs(logits, pl_module)
-        num_rows = int(imgs.shape[0] // len(distances.keys()))
+        num_rows = int(imgs.shape[0] // len(pairs))
 
         self.log_images(trainer, f"interpolated_samples/{tag}/{mode}", imgs, mode="RGB", nrow=num_rows)
 

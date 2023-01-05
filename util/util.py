@@ -9,7 +9,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import argparse
-from typing import Tuple, List, Union
+from typing import Tuple, List, Union, Any
 import sys
 
 from . import transforms as tr
@@ -85,8 +85,40 @@ def check_unique(input: torch.Tensor):
     _, ind, counts = torch.unique(input, dim=0, return_inverse=True, return_counts=True, sorted=False)
     return counts[ind] == 1
 
+def check_novel(batch, dataset):
+    """
+    Returns a mask of size B indicating which tensors in batch are not present in the dataset.
+
+    Args:
+    batch (Tensor): a batch of tensors to check novelty of dim (B, ...)
+    dataset: a batch of tensors to check each batch tensor against with dim (N, ...)
+    """
+
+    if not isinstance(batch, torch.Tensor):
+        batch = torch.tensor(batch)
+    if not isinstance(dataset, torch.Tensor):
+        dataset = torch.tensor(dataset)
+
+    #Best to avoid loading dataset on GPU as it is likely to be large
+    device = batch.device
+    if dataset.device == torch.device("cpu"):
+        batch = batch.cpu()
+
+    dataset = torch.unique(dataset, dim=0, sorted=False)
+
+    novel = []
+    for b in batch:
+        data = torch.concat((b.unsqueeze(0), dataset), dim=0)
+        _, ind, counts = torch.unique(data, dim=0, return_inverse=True, return_counts=True, sorted=False)
+        if counts[ind[0]] == 1:
+            novel.append(True)
+        else:
+            novel.append(False)
+
+    return torch.tensor(novel, dtype=torch.bool).to(device)
+
 def get_node_features(graph:Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attributes:List[str]=None,
-                      device:torch.DeviceObjType=None, reshape:bool=True) -> Tuple[torch.Tensor, List[str]]:
+                      device=None, reshape:bool=True) -> Tuple[torch.Tensor, List[str]]:
 
     if device is None:
         if isinstance(graph, dgl.DGLGraph):
@@ -111,6 +143,25 @@ def get_node_features(graph:Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attrib
     Fx = torch.stack(Fx, dim=-1).to(device)
 
     return Fx, node_attributes
+
+
+def interpolate_between_pairs(pairs: List[Tuple[int, int]], data: torch.Tensor, num_interpolations: int,
+                              scheme: str) -> Tuple[torch.Tensor, List[Any]]:
+    interpolation_points = np.linspace(0, 1, num_interpolations + 2)[1:-1]
+    interpolations = []
+    for i, pair in enumerate(pairs):
+        for loc in interpolation_points:
+            if scheme == 'linear':
+                interp = lerp(loc, data[pair[0]], data[pair[1]])
+            elif scheme == 'polar':
+                interp = slerp(loc, data[pair[0]], data[pair[1]])
+            else:
+                raise RuntimeError(f"Interpolation scheme {scheme} not recognised.")
+            interpolations.append(interp)
+
+    interpolations = torch.stack(interpolations).to(data)
+
+    return interpolations
 
 def latent_interpolation(model, minibatch:torch.Tensor, Z_mean=None, Z_std=None, n_interp:int = 4, dim_r_threshold=None, interpolation_scheme:str = 'linear', img_dims: Tuple[int, int, int] = None, figsize: Tuple[int, int] = (10, 10),
                               labels=None, latent_sampling=False, device='cpu', alpha=0.5, title=None):

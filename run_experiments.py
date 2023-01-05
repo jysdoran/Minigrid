@@ -60,11 +60,9 @@ def run_experiment(cfg: DictConfig) -> None:
 
     data_module.setup()
     logging_callbacks = [
-        GraphVAELogger(data_module.target_contents,
-                       data_module.samples,
+        GraphVAELogger(data_module,
                        cfg.results,
                        cfg.data.dataset,
-                       label_descriptors_config=data_module.dataset_metadata['label_descriptors_config'],
                        accelerator=cfg.accelerator),
     ]
     trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs,
