@@ -256,7 +256,7 @@ class GridNav_Dataset(VisionDataset):
 
 class GridNavDataModule(pl.LightningDataModule):
     def __init__(self, data_dir: str = "", batch_size: int = 32, num_samples: int = 2048,
-                 transform=None, num_workers: int = 0, val_data: str = 'train', no_images=False,
+                 transform=None, num_workers: int = 0, val_data: str = 'train', no_images=True,
                  held_out_tasks:List[str]=None,
                  **kwargs):
         super().__init__()
