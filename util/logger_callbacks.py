@@ -454,10 +454,10 @@ class GraphVAELogger(pl.Callback):
 
         # Calculate and sort distances between latents
         if interpolation_scheme == 'linear':
-            latents_dist = torch.cdist(mean, mean, p=2)
+            latents_dist = torch.cdist(mean.cpu(), mean.cpu(), p=2)
             eps = 5e-3
         elif interpolation_scheme == 'polar':
-            latents_dist = cdist_polar(mean, mean)
+            latents_dist = cdist_polar(mean.cpu(), mean.cpu())
             eps = 5e-3
         else:
             raise RuntimeError(f"Interpolation scheme {interpolation_scheme} not recognised.")
