@@ -1,7 +1,7 @@
 name: minigrid_dense_graph_22k
 path: change_me
 size: 16000 # != (trainset only) 22k because of held_out_tasks
-batch_size: 128
+batch_size: 256
 no_images: true
 val_data: test
 held_out_tasks: [
