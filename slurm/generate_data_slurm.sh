@@ -49,7 +49,7 @@ echo "Job started: $dt"
 echo "Setting up bash enviroment"
 
 # Make available all commands on $PATH as on headnode
-source /home/${USER}/.bashrc
+source ${HOME}/.bashrc
 
 # Make script bail out after first error
 set -e
@@ -63,8 +63,7 @@ echo "Activating conda environment: ${CONDA_ENV_NAME}"
 conda activate ${CONDA_ENV_NAME}
 
 # input data directory path on the DFS - change line below if loc different
-DEBUG = False
-REPO=/home/${USER}/auto-curriculum-design/_dcd
+REPO= ${HOME}/auto-curriculum-design/_dcd
 
 if [ -z ${DEBUG+x} ] ; then
     CONF = "minigrid_dense_graph_1M.yaml"
