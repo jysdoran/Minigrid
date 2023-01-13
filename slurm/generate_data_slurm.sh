@@ -63,19 +63,24 @@ echo "Activating conda environment: ${CONDA_ENV_NAME}"
 conda activate ${CONDA_ENV_NAME}
 
 # input data directory path on the DFS - change line below if loc different
-REPO= ${HOME}/auto-curriculum-design/_dcd
+REPO=${HOME}/auto-curriculum-design/_dcd
 
-if [ -z ${DEBUG+x} ] ; then
-    CONF = "minigrid_dense_graph_1M.yaml"
-    DATASET_DIRNAME = "minigrid_dense_graph_1M"
+if [[ -z ${2+x} ]]
+then
+    CONF="minigrid_dense_graph_1M"
+    DATASET_DIRNAME="minigrid_dense_graph_1M"
 else
     echo "DEBUG MODE"
-    CONF = "minigrid_dense_graph_debug"
-    DATASET_DIRNAME = "test_minigrid_dense_graph"
+    CONF="minigrid_dense_graph_debug"
+    DATASET_DIRNAME="test_minigrid_dense_graph"
 fi
 
 # Launch the job
 # ===================
+NUM_PROC=$1
 echo "Code repository located at: $REPO"
+echo "Launching job with CONF: $CONF"
+echo "Num CPUs : $NUM_PROC"
+echo "Dataset will be saved in DIRNAME: $DATASET_DIRNAME"
 cd $REPO
-$HOME/miniconda3/envs/${CONDA_ENV_NAME}/bin/python maze_representations/data_generators.py models=data_generation num_cpus=$NUM_PROC +data_generation=$CONF accelerator=cpu +multiprocessing=1 data_generation.dir_name=$DATASET_DIRNAME
+$HOME/miniconda3/envs/${CONDA_ENV_NAME}/bin/python maze_representations/data_generators.py hydra.job.chdir=False models=data_generation num_cpus=${NUM_PROC} +data_generation=$CONF accelerator=cpu +multiprocessing=1 data_generation.dir_name=$DATASET_DIRNAME
