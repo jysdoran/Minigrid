@@ -4,8 +4,8 @@ size: null #AUTO
 
 num_train_batches: null #AUTO
 num_test_batches: null #AUTO
-size_train_batch: 1000
-size_test_batch: 200
+size_train_batch: 10000
+size_test_batch: 2000
 train_batch_ids: null #AUTO
 test_batch_ids: null #AUTO
 
@@ -23,28 +23,28 @@ gridworld_data_dim: [3,15,15]
 generating_algorithm: [wave_function_collapse]
 task_type: navigate_to_goal
 task_structure_split: #Assumed similar across train and test batches
-                     dungeon_ : 50
-                     dungeon_lessrooms : 50
-                     dungeon_rooms : 50
-                     dungeon_spirals_neg : 50
-                     dungeon_mazescaled : 50
-                     maze_ : 50
-                     maze_knot : 50
-                     maze_like : 50
-                     maze_paths : 50
-                     maze_spirals : 50
-                     maze_wall : 50
-                     maze_simple : 50
-                     obstacles_blackdots : 50
-                     obstacles_hogs2 : 50
-                     obstacles_hogs3 : 50
-                     obstacles_angular : 50
-                     rooms_fabric : 50
-                     rooms_office : 50
-                     rooms_magicoffice : 50
-                     skew_lake : 50
-                     skew_2 : 50
-                     skew_cave : 50
+                     dungeon_ : 5
+                     dungeon_lessrooms : 5
+                     dungeon_rooms : 5
+                     dungeon_spirals_neg : 5
+                     dungeon_mazescaled : 5
+                     maze_ : 5
+                     maze_knot : 5
+                     maze_like : 5
+                     maze_paths : 5
+                     maze_spirals : 5
+                     maze_wall : 5
+                     maze_simple : 5
+                     obstacles_blackdots : 5
+                     obstacles_hogs2 : 5
+                     obstacles_hogs3 : 5
+                     obstacles_angular : 5
+                     rooms_fabric : 5
+                     rooms_office : 5
+                     rooms_magicoffice : 5
+                     skew_lake : 5
+                     skew_2 : 5
+                     skew_cave : 5
 seed: 123456 #AUTO
 
 label_descriptors:
