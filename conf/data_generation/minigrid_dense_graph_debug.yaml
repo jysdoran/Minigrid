@@ -8,13 +8,17 @@ size_train_batch: 2
 size_test_batch: 2
 train_batch_ids: null #AUTO
 test_batch_ids: null #AUTO
-n_thumbnail_per_batch: 2
-generate_images: false
 
+save_as_completed: true #Set false to save batches only when all batches have been generated
+resume_generation: true #If true, will resume generation from the last saved batch
+generate_images: false #Set false for large datasets to save disk space and avoid OOM errors during generation
+check_unique: false #Set true to check if generated layouts are unique across all batches
+normalise_metrics: true
+
+n_thumbnail_per_batch: 2
 data_type: graph
 encoding: dense
 ensure_connected: true #make sure layouts have a single component
-normalise_metrics: true
 gridworld_data_dim: [3,15,15]
 generating_algorithm: [wave_function_collapse]
 task_type: navigate_to_goal
@@ -38,9 +42,9 @@ task_structure_split: #Assumed similar across train and test batches
                      rooms_fabric : 1
                      rooms_office : 1
                      rooms_magicoffice : 1
-#                     skew_lake : 1
+                     skew_lake : 1
                      skew_2 : 1
-                     skew_cave : 1
+#                     skew_cave : 1
 seed: 123456 #AUTO
 
 label_descriptors:
