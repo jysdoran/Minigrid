@@ -78,9 +78,11 @@ fi
 # Launch the job
 # ===================
 NUM_PROC=$1
+SPAWNED_PROC=$((NUM_PROC-2))
 echo "Code repository located at: $REPO"
 echo "Launching job with CONF: $CONF"
 echo "Num CPUs : $NUM_PROC"
+echo "Will spawn $SPAWNED_PROC extra processes for generation"
 echo "Dataset will be saved in DIRNAME: $DATASET_DIRNAME"
 cd $REPO
-$HOME/miniconda3/envs/${CONDA_ENV_NAME}/bin/python maze_representations/data_generators.py hydra.job.chdir=False models=data_generation num_cpus=${NUM_PROC} +data_generation=$CONF accelerator=cpu +multiprocessing=1 data_generation.dir_name=$DATASET_DIRNAME
+$HOME/miniconda3/envs/${CONDA_ENV_NAME}/bin/python maze_representations/data_generators.py hydra.job.chdir=False models=data_generation num_cpus=${SPAWNED_PROC} +data_generation=$CONF accelerator=cpu +multiprocessing=1 data_generation.dir_name=$DATASET_DIRNAME
