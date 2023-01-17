@@ -16,6 +16,7 @@ check_unique: false #Set true to check if generated layouts are unique across al
 normalise_metrics: false
 
 n_thumbnail_per_batch: 10
+seeds_per_batch: 45454 #Required for consistency between runs if splitting the batches
 data_type: graph
 encoding: dense
 ensure_connected: true #make sure layouts have a single component
