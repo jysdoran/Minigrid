@@ -13,7 +13,7 @@ save_as_completed: true #Set false to save batches only when all batches have be
 resume_generation: true #If true, will resume generation from the last saved batch
 generate_images: false #Set false for large datasets to save disk space and avoid OOM errors during generation
 check_unique: false #Set true to check if generated layouts are unique across all batches
-normalise_metrics: true
+normalise_metrics: false
 
 n_thumbnail_per_batch: 10
 data_type: graph
@@ -23,28 +23,28 @@ gridworld_data_dim: [3,15,15]
 generating_algorithm: [wave_function_collapse]
 task_type: navigate_to_goal
 task_structure_split: #Assumed similar across train and test batches
-                     dungeon_ : 5
-                     dungeon_lessrooms : 5
-                     dungeon_rooms : 5
-                     dungeon_spirals_neg : 5
-                     dungeon_mazescaled : 5
-                     maze_ : 5
-                     maze_knot : 5
-                     maze_like : 5
-                     maze_paths : 5
-                     maze_spirals : 5
-                     maze_wall : 5
-                     maze_simple : 5
                      obstacles_blackdots : 5
                      obstacles_hogs2 : 5
                      obstacles_hogs3 : 5
                      obstacles_angular : 5
+                     dungeon_mazescaled : 5
+                     maze_wall : 5
+                     maze_simple : 5
                      rooms_fabric : 5
+                     dungeon_rooms : 5
+                     maze_knot : 5
+                     maze_paths : 5
                      rooms_office : 5
-                     rooms_magicoffice : 5
-                     skew_lake : 5
                      skew_2 : 5
                      skew_cave : 5
+                     dungeon_spirals_neg : 5
+                     maze_like : 5
+                     maze_spirals : 5
+                     dungeon_lessrooms : 5
+                     rooms_magicoffice : 5
+                     dungeon_ : 5
+                     skew_lake : 5
+                     maze_ : 5
 seed: 123456 #AUTO
 
 label_descriptors:
