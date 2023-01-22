@@ -15,6 +15,7 @@ from dgl.dataloading import GraphDataLoader
 
 #import memory_profiler
 import maze_representations.util.util as util
+from util import DotDict
 
 logger = logging.getLogger(__name__)
 
@@ -34,73 +35,6 @@ class GridNav_Dataset(VisionDataset):
     """
 
     base_folder = ""
-    train_list = [
-        ["batch_0.data", "TODO"],
-        ["batch_1.data", "TODO"],
-        ["batch_2.data", "TODO"],
-        ["batch_3.data", "TODO"],
-        ["batch_4.data", "TODO"],
-        ["batch_5.data", "TODO"],
-        ["batch_6.data", "TODO"],
-        ["batch_7.data", "TODO"],
-        ["batch_8.data", "TODO"],
-        ["batch_9.data", "TODO"],
-        ["batch_10.data", "TODO"],
-        ["batch_11.data", "TODO"],
-        ["batch_12.data", "TODO"],
-        ["batch_13.data", "TODO"],
-        ["batch_14.data", "TODO"],
-        ["batch_15.data", "TODO"],
-        ["batch_16.data", "TODO"],
-        ["batch_17.data", "TODO"],
-        ["batch_18.data", "TODO"],
-        ["batch_19.data", "TODO"],
-        ["batch_20.data", "TODO"],
-        ["batch_21.data", "TODO"],
-        ["batch_22.data", "TODO"],
-        ["batch_23.data", "TODO"],
-        ["batch_24.data", "TODO"],
-        ["batch_25.data", "TODO"],
-        ["batch_26.data", "TODO"],
-        ["batch_27.data", "TODO"],
-        ["batch_28.data", "TODO"],
-        ["batch_29.data", "TODO"],
-    ]
-
-    test_list = [
-        ["test_batch.data", "TODO"],
-        ["test_batch_90.data", "TODO"],
-        ["test_batch_91.data", "TODO"],
-        ["test_batch_92.data", "TODO"],
-        ["test_batch_93.data", "TODO"],
-        ["test_batch_94.data", "TODO"],
-        ["test_batch_95.data", "TODO"],
-        ["test_batch_96.data", "TODO"],
-        ["test_batch_97.data", "TODO"],
-        ["test_batch_98.data", "TODO"],
-        ["test_batch_99.data", "TODO"],
-        ["test_batch_100.data", "TODO"],
-        ["test_batch_101.data", "TODO"],
-        ["test_batch_102.data", "TODO"],
-        ["test_batch_103.data", "TODO"],
-        ["test_batch_104.data", "TODO"],
-        ["test_batch_105.data", "TODO"],
-        ["test_batch_106.data", "TODO"],
-        ["test_batch_107.data", "TODO"],
-        ["test_batch_108.data", "TODO"],
-        ["test_batch_109.data", "TODO"],
-        ["test_batch_110.data", "TODO"],
-        ["test_batch_111.data", "TODO"],
-        ["test_batch_112.data", "TODO"],
-        ["test_batch_113.data", "TODO"],
-        ["test_batch_114.data", "TODO"],
-        ["test_batch_115.data", "TODO"],
-        ["test_batch_116.data", "TODO"],
-        ["test_batch_117.data", "TODO"],
-        ["test_batch_118.data", "TODO"],
-        ["test_batch_119.data", "TODO"],
-
-    ]
     meta = {
         "filename": "dataset.meta",
         "md5": "ceb1fb9aaface2c9669a3914ecf7d30a",
@@ -124,6 +58,10 @@ class GridNav_Dataset(VisionDataset):
         self.no_images = no_images
 
         self._load_meta()
+        dataset_path = os.path.join(self.root, self.base_folder)
+        files = os.listdir(dataset_path)
+        self.train_list = [f for f in files if f.endswith('.data') and not f.startswith('test')]
+        self.test_list = [f for f in files if f.endswith('.data') and f.startswith('test')]
 
         self.train = train  # training set or test set
 
@@ -145,7 +83,7 @@ class GridNav_Dataset(VisionDataset):
             logger.info("Held out tasks: {}".format(self.held_out_tasks))
 
         # now load the picked numpy arrays
-        for file_name, checksum in pickled_data:
+        for file_name in pickled_data:
             file_path = os.path.join(self.root, self.base_folder, file_name)
             self._load_data(file_path)
 
@@ -159,6 +97,11 @@ class GridNav_Dataset(VisionDataset):
             meta_file_path = file_path + '.meta'
             with open(meta_file_path, "rb") as f:
                 entry = pickle.load(f, encoding="latin1")
+                if isinstance(entry['label_contents'], DotDict):
+                    entry['label_contents'] = entry['label_contents'].to_dict()
+                if isinstance(entry['batch_meta'], DotDict):
+                    entry['batch_meta'] = entry['batch_meta'].to_dict()
+
                 ts = entry['label_contents']['task_structure'][0]
                 assert all(ts == i for i in entry['label_contents']['task_structure']), \
                     f"Not all tasks are the same in batch {file_path}."
@@ -183,6 +126,8 @@ class GridNav_Dataset(VisionDataset):
                     else:
                         try:
                             for key in entry["label_contents"].keys():
+                                if key == '__dict__': #handles DotDict objects
+                                    continue
                                 if isinstance(entry["label_contents"][key], list):
                                     self.target_contents[key].extend(entry["label_contents"][key])
                                 elif isinstance(entry["label_contents"][key], torch.Tensor):
@@ -272,7 +217,10 @@ class GridNavDataModule(pl.LightningDataModule):
         self.val_data = val_data # from train or test set
         self.test = None
         self.no_images = no_images
-        self.held_out_tasks = held_out_tasks #only used for train set
+        if held_out_tasks is None or len(held_out_tasks) == 0:
+            self.held_out_tasks = None
+        else:
+            self.held_out_tasks = held_out_tasks #only used for train set
         self.dataset_metadata = None
 
         logger.info("Initializing Gridworld Navigation DataModule")
