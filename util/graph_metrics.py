@@ -67,7 +67,7 @@ def is_solvable(graph: nx.Graph, source, target) -> bool:
 
 
 def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target: int=None)\
-        ->Tuple[List[nx.Graph], bool, bool]:
+        -> Tuple[nx.Graph, bool, bool]:
     """Convert DGLGraph to nx.Graph and reduces it to a single component. Containing the source node.
     If the source node is not specified, the largest component is returned."""
 
