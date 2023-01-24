@@ -15,6 +15,7 @@ from dgl.dataloading import GraphDataLoader
 
 #import memory_profiler
 import maze_representations.util.util as util
+import maze_representations.util.transforms as tr
 from util import DotDict
 
 logger = logging.getLogger(__name__)
@@ -197,6 +198,36 @@ class GridNav_Dataset(VisionDataset):
     def extra_repr(self) -> str:
         split = "Train" if self.train is True else "Test"
         return f"Split: {split}"
+
+    def pickle(self, path, label_id, format='minigrid', level_info=None):
+
+        if format == 'minigrid':
+            pass
+        else:
+            raise NotImplementedError
+
+        if level_info is None:
+            level_info = self.dataset_metadata['level_info']
+
+        graph = self.data[label_id]
+        task_structure = self.target_contents['task_structure'][label_id]
+        seed = self.target_contents['seed'][label_id]
+
+        bitmaps, start_pos, goal_pos = tr.Nav2DTransforms.graphs_to_bitmap([graph], level_info=level_info)
+        bitmaps = bitmaps[0]
+        start_pos = start_pos[0]
+        goal_pos = goal_pos[0]
+
+        data = {
+            'task_structure': task_structure,
+            'bit_map': bitmaps,
+            'start_pos': start_pos,
+            'goal_pos': goal_pos,
+            'seed': seed
+            }
+
+        with open(path, 'wb') as f:
+            pickle.dump(data, f)
 
 
 class GridNavDataModule(pl.LightningDataModule):
