@@ -228,19 +228,20 @@ for i in range(len(init_datapoints)):
     all_grids.append(end_grids[i])
 grids = np.stack(all_grids)
 
-# TODO fix this, or replace with agents regret
+# TODO Replace with agents regret
 def compute_resistance_for_grids(grids):
     init_metrics = []
     for grid, nx_grid in zip(grids, tr.Nav2DTransforms.minigrid_to_dense_graph(grids)):
         start = np.argwhere(grid[..., 0] == minigrid.OBJECT_TO_IDX['agent'])[0]
         goal = np.argwhere(grid[..., 0] == minigrid.OBJECT_TO_IDX['goal'])[0]
-        start = start-1
-        goal = goal-1
-        metric = graph_metrics.is_solvable(nx_grid, source=tuple(start), target=tuple(goal))
-        # try:
-        #     metric = graph_metrics.resistance_distance(nx_grid, source=tuple(start), target=tuple(goal))
-        # except:
-        #     metric = float('nan')
+        start = tuple(start-1)
+        goal = tuple(goal-1)
+        # metric = graph_metrics.is_solvable(nx_grid, source=start, target=goal)
+        nx_grid, valid, solvable = graph_metrics.prepare_graph(nx_grid, start, goal)
+        if valid and solvable:
+            metric = graph_metrics.resistance_distance(nx_grid, source=start, target=goal)
+        else:
+            metric = float('nan')
         init_metrics.append(metric)
         
     return np.array(init_metrics)
