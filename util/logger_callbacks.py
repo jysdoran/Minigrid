@@ -37,7 +37,7 @@ class GraphVAELogger(pl.Callback):
         self.dataset_cfg = dataset_cfg
 
         self.label_contents = data_module.target_contents
-        self.label_descriptors_config = data_module.dataset_metadata['label_descriptors_config']
+        self.label_descriptors_config = data_module.dataset_metadata.config.label_descriptors_config
         self.force_valid_reconstructions = logging_cfg.force_valid_reconstructions
         self.num_stored_samples = logging_cfg.num_stored_samples
         self.num_image_samples = logging_cfg.num_image_samples

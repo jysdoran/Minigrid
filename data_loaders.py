@@ -155,8 +155,8 @@ class GridNav_Dataset(VisionDataset):
         #     raise RuntimeError("Dataset metadata file not found or corrupted.")
         with open(path, "rb") as infile:
             self.dataset_metadata = pickle.load(infile, encoding="latin1")
-            self.label_descriptors = self.dataset_metadata["label_descriptors"]
-            self.data_type = self.dataset_metadata["data_type"]
+            self.label_descriptors = self.dataset_metadata.config.label_descriptors
+            self.data_type = self.dataset_metadata.config.data_type
         self.label_to_idx = {_class: i for i, _class in enumerate(self.label_descriptors)} #TODO: decide if we replace by self.label_to_idx
 
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
