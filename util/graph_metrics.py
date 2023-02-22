@@ -78,7 +78,7 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target
     else:
         raise ValueError("graph must be a DGLGraph or nx.Graph")
     graph = nx.Graph(graph)
-    inactive_nodes = [x for x, y in graph.nodes(data=True) if y['active'] < .5]
+    inactive_nodes = [x for x, y in graph.nodes(data=True) if y['navigable'] < .5]
     graph.remove_nodes_from(inactive_nodes)
     nodes = set(graph.nodes)
 

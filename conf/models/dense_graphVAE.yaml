@@ -40,7 +40,7 @@ configuration:
 #                           [[0, -1], [-1, 0]]]
 
   encoder:
-    attributes: ["active", "start", "goal"]
+    attributes: ["navigable", "start", "goal"]
     #attributes_mapping: [0, 2, 3]
     gnn:
       architecture: GIN
@@ -60,7 +60,7 @@ configuration:
 
   decoder:
     adjacency: null #[full, reduced, null]
-    attributes: ["active", "start", "goal"]
+    attributes: ["navigable", "start", "goal"]
     attribute_masking: always #[null, always, gen_only]
     #attributes_mapping: [2, 3] #predict start, goal
     distributions: ["bernoulli", "one_hot_categorical", "one_hot_categorical"]

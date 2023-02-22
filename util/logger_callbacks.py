@@ -331,7 +331,7 @@ class GraphVAELogger(pl.Callback):
         start_nodes_ids = mode_Fx[..., pl_module.decoder.attributes.index('start')].argmax(dim=-1)
         goal_nodes_ids = mode_Fx[..., pl_module.decoder.attributes.index('goal')].argmax(dim=-1)
         is_valid = tr.Nav2DTransforms.check_validity_start_goal_dense(
-            start_nodes_ids, goal_nodes_ids, mode_Fx[..., pl_module.decoder.attributes.index('active')])
+            start_nodes_ids, goal_nodes_ids, mode_Fx[..., pl_module.decoder.attributes.index('navigable')])
         reconstruction_metrics["valid"] = is_valid.tolist()
         reconstruction_metrics, rec_graphs_nx = \
             compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes_ids, goal_nodes_ids,
@@ -707,7 +707,7 @@ class GraphVAELogger(pl.Callback):
         grid_dim = int(np.sqrt(self.dataset_cfg.max_nodes))  # sqrt(num_nodes)
         if self.dataset_cfg.encoding == "dense":
             logits_Fx = pl_module.decoder.param_p(outputs["logits_Fx"], masked=False)
-            heatmap_layout = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("active")], grid_dim)
+            heatmap_layout = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("navigable")], grid_dim)
         elif self.dataset_cfg.encoding == "minimal":
             logits_A, logits_Fx = pl_module.decoder.param_p((outputs["logits_A"], outputs["logits_Fx"]))
             heatmap_layout = self.prob_heatmap_A(logits_A, grid_dim)

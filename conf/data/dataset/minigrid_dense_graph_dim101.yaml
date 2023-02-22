@@ -29,7 +29,7 @@ transforms: null
 gridworld_data_dim: [3,101,101]
 encoding: dense
 max_nodes: null #AUTO
-node_attributes: [ "active", "start", "goal" ]
+node_attributes: [ "navigable", "start", "goal" ]
 label_descriptors:
   - task_structure # AUTO {maze, rooms_unstructured}
   - shortest_path

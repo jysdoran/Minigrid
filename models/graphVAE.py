@@ -530,15 +530,15 @@ class GraphMLPDecoder(nn.Module):
 
         attribute_mask = torch.ones(*probs.shape, dtype=torch.bool).to(probs.device)
 
-        assert node_attributes.index("active") < node_attributes.index("start") < node_attributes.index("goal")
+        assert node_attributes.index("navigable") < node_attributes.index("start") < node_attributes.index("goal")
 
         for i, attr in enumerate(node_attributes):
-            if attr == "active":
+            if attr == "navigable":
                 continue #attribute_mask[..., i] = 1
             elif attr == "start":
-                attribute_mask[..., i] = probs[..., node_attributes.index("active")] >= 0.5
+                attribute_mask[..., i] = probs[..., node_attributes.index("navigable")] >= 0.5
             elif attr == "goal":
-                attribute_mask[..., i] = probs[..., node_attributes.index("active")] >= 0.5
+                attribute_mask[..., i] = probs[..., node_attributes.index("navigable")] >= 0.5
                 start_nodes = (attribute_mask[..., node_attributes.index("start")] *
                                probs[..., node_attributes.index("start")]).argmax(dim=-1)
                 ids = torch.arange(start_nodes.shape[0], device=start_nodes.device)
@@ -970,7 +970,7 @@ class GraphMLPDecoder(nn.Module):
         for i, attr in enumerate(node_attributes):
             Fx_dict[attr] = Fx[..., i].flatten()
 
-        ids = list(zip(*torch.where(grid_Fx[..., node_attributes.index("active")] <= 0.5)))
+        ids = list(zip(*torch.where(grid_Fx[..., node_attributes.index("navigable")] <= 0.5)))
         inactive_nodes = defaultdict(list)
         for tup in ids:
             inactive_nodes[tup[0]].append(tup[1:])

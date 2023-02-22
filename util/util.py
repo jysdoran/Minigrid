@@ -24,7 +24,7 @@ from . import transforms as tr
 #     'node_size': 80,
 #     'width': 1,
 # }
-# G = dgl.to_networkx(g)
+# G = dgl.to_networkx(g.cpu(), node_attrs=g.ndata.keys())
 # plt.figure(figsize=[15, 7])
 # nx.draw(G, **options)
 # plt.show()
