@@ -1,5 +1,4 @@
 import maze_representations.util
-import gym_minigrid
 import maze_representations.models
 import maze_representations.data_generation
 #import hydra_plugins
