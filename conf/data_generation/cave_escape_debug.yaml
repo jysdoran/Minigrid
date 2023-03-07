@@ -7,7 +7,7 @@ size: null #AUTO
 num_train_batches: null #AUTO
 num_test_batches: null #AUTO
 size_train_batch: 10
-size_test_batch: 0
+size_test_batch: 10
 train_batch_ids: null
 test_batch_ids: null
 
