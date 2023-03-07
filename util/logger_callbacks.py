@@ -38,6 +38,7 @@ class GraphVAELogger(pl.Callback):
 
         self.label_contents = data_module.target_contents
         self.label_descriptors_config = data_module.dataset_metadata.config.label_descriptors_config
+        self.dataset_metadata = data_module.dataset_metadata
         self.force_valid_reconstructions = logging_cfg.force_valid_reconstructions
         self.num_stored_samples = logging_cfg.num_stored_samples
         self.num_image_samples = logging_cfg.num_image_samples
@@ -150,20 +151,28 @@ class GraphVAELogger(pl.Callback):
         to_log = {
             f"metric/mean/std/{mode}"   : torch.linalg.norm(outputs["mean"], dim=-1).std().item(),
             f"metric/sigma/mean/{mode}" : torch.square(outputs["std"]).sum(axis=-1).sqrt().mean().item() / outputs["std"].shape[-1],
-            f'metric/entropy/Fx/{mode}' : pl_module.decoder.entropy_A(outputs["logits_Fx"]).sum(),
             }
+
         for key in outputs.keys():
+            if key in ["logits_heads", "logits_Fx"]:
+                continue
             to_log[f"metric/{key}/{mode}"] = outputs[key].mean()
+
+        entropy = pl_module.decoder.entropy(outputs["logits_heads"])
+        probs = pl_module.decoder.param_p(outputs["logits_heads"])
+        for head in entropy:
+            to_log[f'metric/entropy/heads/{head}/{mode}'] = entropy[head].mean()
+            flattened_logits = torch.flatten(probs[head])
+            trainer.logger.experiment.log(
+                {
+                    f"distributions/logits/Fx/{mode}": wandb.Histogram(flattened_logits.to("cpu")),
+                    "global_step"                    : trainer.global_step
+                    })
 
         trainer.logger.log_metrics(to_log, step=trainer.global_step)
 
-        flattened_logits_Fx = torch.flatten(pl_module.decoder.param_pFx(outputs["logits_Fx"], masked=False))
-        trainer.logger.experiment.log(
-            {f"distributions/logits/Fx/{mode}": wandb.Histogram(flattened_logits_Fx.to("cpu")),
-             "global_step": trainer.global_step})
-
         if "logits_A" in outputs.keys():
-            to_log[f'metric/entropy/A/{mode}'] = pl_module.decoder.entropy_A(outputs["logits_A"]).sum()
+            to_log[f'metric/entropy/A/{mode}'] = pl_module.decoder.entropy_A(outputs["logits_A"]).mean()
             flattened_logits_A = torch.flatten(pl_module.decoder.param_pA(outputs["logits_A"]))
             trainer.logger.experiment.log(
                 {f"distributions/logits/A/{mode}": wandb.Histogram(flattened_logits_A.to("cpu")),
@@ -287,7 +296,7 @@ class GraphVAELogger(pl.Callback):
             outputs = copy.copy(outputs)
             assert outputs["Z"] is not None and len(outputs.keys()) == 1, \
                 "Setting the interpolation flag restricts outputs to contain only Z as key."
-            outputs["logits_Fx"] = pl_module.decoder(outputs["Z"])
+            outputs["logits_heads"] = pl_module.decoder(outputs["Z"])
         else:
             if mode == "prior":
                 input_batch = {}
@@ -295,7 +304,7 @@ class GraphVAELogger(pl.Callback):
                 outputs = {}
                 Z_dim = pl_module.hparams.config_model.shared_parameters.latent_dim
                 outputs["Z"] = torch.randn(self.num_generated_samples, Z_dim).to(device=pl_module.device)
-                outputs["logits_Fx"] = pl_module.decoder(outputs["Z"])
+                outputs["logits_heads"] = pl_module.decoder(outputs["Z"])
             elif mode == "val":
                 input_batch = copy.copy(self.validation_batch)
                 outputs = copy.copy(self.validation_step_outputs)
@@ -311,7 +320,11 @@ class GraphVAELogger(pl.Callback):
 
             if mode != "prior":
                 for key in outputs.keys():
-                    outputs[key] = outputs[key][:self.num_embedding_samples]
+                    if isinstance(outputs[key], torch.Tensor):
+                        outputs[key] = outputs[key][:self.num_embedding_samples]
+                    elif isinstance(outputs[key], dict):
+                        for subkey in outputs[key].keys():
+                            outputs[key][subkey] = outputs[key][subkey][:self.num_embedding_samples]
                 for key in input_batch.keys():
                     input_batch[key] = input_batch[key][:self.num_embedding_samples]
                 outputs["Z"] = outputs["mean"]
@@ -321,27 +334,34 @@ class GraphVAELogger(pl.Callback):
                                                                      tile_size=self.logging_cfg.tile_size)
 
         assert outputs["Z"].shape[0] == \
-               outputs["logits_Fx"].shape[0], \
-            f"log_latent_embeddings(): Shape mismatch Z={outputs['Z'].shape}, logits_Fx={outputs['logits_Fx'].shape}"
+               outputs['logits_heads'][list(outputs['logits_heads'].keys())[0]].shape[0], \
+            f"log_latent_embeddings(): Shape mismatch Z={outputs['Z'].shape} != " \
+            f"logits_heads={outputs['logits_heads'][list(outputs['logits_heads'].keys())[0]].shape}"
 
-        reconstructed_graphs = pl_module.decoder.to_graph(outputs["logits_Fx"], probabilistic_graph=True, make_batch=False, masked=True)
+        edge_config_nav = {'navigable': self.dataset_metadata.config.graph_edge_descriptors['navigable']}
+
+        reconstructed_graphs = pl_module.decoder.to_graph(outputs["logits_heads"],
+                                                          make_batch=False, masked=True, edge_config=edge_config_nav)
         reconstructed_imgs = self.obtain_imgs(outputs, pl_module)
         reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
-        mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"])
-        start_nodes_ids = mode_Fx[..., pl_module.decoder.attributes.index('start')].argmax(dim=-1)
-        goal_nodes_ids = mode_Fx[..., pl_module.decoder.attributes.index('goal')].argmax(dim=-1)
+        mode_Fx = pl_module.decoder.param_m(outputs["logits_heads"])
+        start_nodes_ids = mode_Fx['start_location'].squeeze(-1).argmax(dim=-1)
+        goal_nodes_ids = mode_Fx['start_location'].squeeze(-1).argmax(dim=-1)
         is_valid = tr.Nav2DTransforms.check_validity_start_goal_dense(
-            start_nodes_ids, goal_nodes_ids, mode_Fx[..., pl_module.decoder.attributes.index('navigable')])
+            start_nodes_ids, goal_nodes_ids, layout_nodes=None)
         reconstruction_metrics["valid"] = is_valid.tolist()
-        reconstruction_metrics, rec_graphs_nx = \
-            compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes_ids, goal_nodes_ids,
-                            labels=input_batch.get("label_ids"))
-        reconstruction_metrics["unique"] = check_unique(mode_Fx).tolist()
-        novel_dataset = check_novel(mode_Fx, self.train_dataset_features).tolist()
+        compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes_ids, goal_nodes_ids,
+                        labels=input_batch.get("label_ids"))
+        rec_Fx = pl_module.decoder.to_graph_features(outputs["logits_heads"])
+        reconstruction_metrics["unique"] = check_unique(rec_Fx).tolist()
+        features_idx = [self.attributes.index(f) for f in rec_Fx.keys()]
+        train_features = self.train_dataset_features[..., features_idx]
+        rec_Fx = torch.stack([rec_Fx[k] for k in rec_Fx.keys()], dim=-1)
+        novel_dataset = check_novel(rec_Fx, train_features).tolist()
         reconstruction_metrics["novel"] = novel_dataset and reconstruction_metrics["solvable"]
-        frac_novel_not_repeated = torch.unique(mode_Fx[reconstruction_metrics["novel"]], dim=0).shape[0] / mode_Fx.shape[0]
+        frac_novel_not_repeated = torch.unique(rec_Fx[reconstruction_metrics["novel"]], dim=0).shape[0] / rec_Fx.shape[0]
 
-        del outputs["logits_Fx"], start_nodes_ids, goal_nodes_ids, rec_graphs_nx, is_valid, reconstructed_graphs
+        del outputs["logits_heads"], start_nodes_ids, goal_nodes_ids, is_valid, reconstructed_graphs, rec_Fx, train_features
 
         if self.label_descriptors_config is not None:
             reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
@@ -552,7 +572,7 @@ class GraphVAELogger(pl.Callback):
         if self.dataset_cfg.encoding == "minimal":
             logits["logits_A"], logits["logits_Fx"] = pl_module.decoder(all_Z)
         elif self.dataset_cfg.encoding == "dense":
-            logits["logits_Fx"] = pl_module.decoder(all_Z)
+            logits["logits_heads"] = pl_module.decoder(all_Z)
         else:
             raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
         del all_Z
@@ -567,15 +587,20 @@ class GraphVAELogger(pl.Callback):
         tag = f"generated/prior/{tag}" if tag is not None else "generated/prior"
         Z_dim = pl_module.hparams.config_model.shared_parameters.latent_dim
         Z = torch.randn(1, self.num_generated_samples, Z_dim).to(device=pl_module.device)
-        logits = {}
         if self.dataset_cfg.encoding == "minimal":
+            logits = {}
             logits["logits_A"], logits["logits_Fx"] = [f.mean(dim=0) for f in pl_module.decoder(Z)]
             to_log = {
             f'metric/entropy/A/{tag}': pl_module.decoder.entropy_A(logits["logits_A"]),
-            f'metric/entropy/Fx/{tag}': pl_module.decoder.entropy_Fx(logits["logits_Fx"]).sum()}
+            f'metric/entropy/Fx/{tag}': pl_module.decoder.entropy_Fx(logits["logits_Fx"]).mean()}
         elif self.dataset_cfg.encoding == "dense":
-            logits["logits_Fx"] = pl_module.decoder(Z).mean(dim=0)
-            to_log = {f'metric/entropy/Fx/{tag}': pl_module.decoder.entropy_Fx(logits["logits_Fx"]).sum()}
+            logits = pl_module.decoder(Z)
+            for key, val in logits.items():
+                logits[key] = val.mean(dim=0)
+            entropy = pl_module.decoder.entropy(logits)
+            to_log = {}
+            for head in entropy:
+                to_log[f'metric/entropy/heads/{head}/{tag}'] = entropy[head].sum()
         else:
             raise ValueError(f"Encoding {self.dataset_cfg.encoding} not recognised.")
         del Z
@@ -583,10 +608,10 @@ class GraphVAELogger(pl.Callback):
 
         for key in logits.keys():
             logits[key] = logits[key][:self.num_image_samples]
-        generated_imgs = self.obtain_imgs(outputs=logits, pl_module=pl_module)
+        generated_imgs = self.obtain_imgs(outputs={"logits_heads": logits}, pl_module=pl_module)
         self.log_images(trainer, tag, generated_imgs, mode="RGB")
         self.log_prob_heatmaps(trainer=trainer, pl_module=pl_module, tag=tag,
-                               outputs=logits)
+                               outputs={"logits_heads": logits})
 
     # Utility methods
 
@@ -603,7 +628,11 @@ class GraphVAELogger(pl.Callback):
         outputs = \
             pl_module.all_model_outputs_pathwise(graphs, num_samples=num_var_samples)
         for key in outputs.keys():
-            outputs[key] = outputs[key][:num_samples]
+            if isinstance(outputs[key], torch.Tensor):
+                outputs[key] = outputs[key][:num_samples]
+            elif isinstance(outputs[key], dict):
+                for subkey in outputs[key].keys():
+                    outputs[key][subkey] = outputs[key][subkey][:num_samples]
 
         return outputs
 
@@ -621,12 +650,18 @@ class GraphVAELogger(pl.Callback):
         batch_dict["label_ids"] = torch.cat(batch_dict["label_ids"])
 
         logger.info(f"Preparing the stored outputs...")
-        for key in output_dict.keys():
-            output_dict[key] = torch.cat(output_dict[key])
 
-        for dict in batch_dict, output_dict:
-            for key in dict.keys():
-                dict[key] = dict[key][:max_num_samples]
+        for key in output_dict.keys():
+            if isinstance(output_dict[key][0], torch.Tensor):
+                output_dict[key] = torch.cat(output_dict[key])
+            elif isinstance(output_dict[key][0], dict):
+                stacked_values = {}
+                for subkey in output_dict[key][0].keys():
+                    stacked_values[subkey] = torch.cat([d[subkey] for d in output_dict[key]])
+                output_dict[key] = stacked_values
+            else:
+                raise ValueError(f"Type {type(output_dict[key][0])} not recognised.")
+
 
         logger.info(f"Successfully unpacked the batches and outputs. Number of stored datapoints: {len(batch_dict['graphs'])}")
         return True
@@ -655,9 +690,9 @@ class GraphVAELogger(pl.Callback):
         assert self.dataset_cfg.data_type == "graph", "Error in obtain_imgs(). This method is only valid for graph datasets."
 
         if self.dataset_cfg.encoding == "dense":
-            mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"], masked=masked)
+            Fx = pl_module.decoder.to_graph_features(logits=outputs["logits_heads"], probabilistic=False, masked=masked)
             if self.logging_cfg.rendering == "minigrid": #Not sure this should be the decider
-                grids = tr.Nav2DTransforms.dense_features_to_minigrid(mode_Fx, node_attributes=pl_module.decoder.attributes)
+                grids = tr.Nav2DTransforms.graph_features_to_minigrid(Fx)
                 images = tr.Nav2DTransforms.minigrid_to_minigrid_render(grids, tile_size=self.logging_cfg.tile_size)
             else:
                 raise NotImplementedError(f"Rendering method {self.logging_cfg.rendering} not implemented for dense graph encoding.")
@@ -706,20 +741,23 @@ class GraphVAELogger(pl.Callback):
         logger.info(f"Progression: Entering log_prob_heatmaps(), tag:{tag}")
         grid_dim = int(np.sqrt(self.dataset_cfg.max_nodes))  # sqrt(num_nodes)
         if self.dataset_cfg.encoding == "dense":
-            logits_Fx = pl_module.decoder.param_p(outputs["logits_Fx"], masked=False)
-            heatmap_layout = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("navigable")], grid_dim)
+            probs_heads = pl_module.decoder.param_p(outputs["logits_heads"])
+            heatmap_layouts = {}
+            for i, node in enumerate(pl_module.decoder.output_distributions.layout.attributes):
+                heatmap_layouts[node] = self.prob_heatmap_fx(probs_heads['layout'][...,i], grid_dim)
         elif self.dataset_cfg.encoding == "minimal":
             logits_A, logits_Fx = pl_module.decoder.param_p((outputs["logits_A"], outputs["logits_Fx"]))
             heatmap_layout = self.prob_heatmap_A(logits_A, grid_dim)
         else:
             raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
 
-        heatmap_start = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("start")], grid_dim)
-        heatmap_goal = self.prob_heatmap_fx(logits_Fx[..., pl_module.decoder.attributes.index("goal")], grid_dim)
+        heatmap_start = self.prob_heatmap_fx(probs_heads['start_location'].squeeze(-1), grid_dim)
+        heatmap_goal = self.prob_heatmap_fx(probs_heads['goal_location'].squeeze(-1), grid_dim)
 
         self.log_images(trainer, tag + "/prob_heatmap/start", heatmap_start, mode="RGBA")
         self.log_images(trainer, tag + "/prob_heatmap/goal", heatmap_goal, mode="RGBA")
-        self.log_images(trainer, tag + "/prob_heatmap/layout", heatmap_layout, mode="RGBA")
+        for node, heatmap_layout in heatmap_layouts.items():
+            self.log_images(trainer, tag + f"/prob_heatmap/{node}", heatmap_layout, mode="RGBA")
 
     def prob_heatmap_fx(self, probs_fx, grid_dim):
         probs_fx = probs_fx.squeeze(0)

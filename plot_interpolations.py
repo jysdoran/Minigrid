@@ -81,9 +81,9 @@ def obtain_imgs_and_grids(outputs,
         # assert self.dataset_cfg.data_type == "graph", "Error in obtain_imgs(). This method is only valid for graph datasets."
 
         if pl_module.decoder.shared_params.data_encoding == "dense":
-            mode_Fx = pl_module.decoder.param_m(outputs["logits_Fx"], masked=masked)
+            Fx = pl_module.decoder.to_graph_features(outputs["logits_heads"], masked=masked, probabilistic=False)
             if rendering_method == "minigrid": #Not sure this should be the decider
-                grids = tr.Nav2DTransforms.dense_features_to_minigrid(mode_Fx, node_attributes=pl_module.decoder.attributes)
+                grids = tr.Nav2DTransforms.graph_features_to_minigrid(Fx)
                 images = tr.Nav2DTransforms.minigrid_to_minigrid_render(grids, tile_size=tile_size)
             else:
                 raise NotImplementedError(f"Rendering method {rendering_method} not implemented for dense graph encoding.")

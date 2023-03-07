@@ -51,6 +51,17 @@ def active_node_count(graph: nx.Graph) -> int:
     graph.remove_nodes_from(list(nx.isolates(graph)))
     return nx.number_of_nodes(graph)
 
+def num_nav_nodes(graph: nx.Graph) -> int:
+    """
+    Compute navigable node count in graph. Input graph should have a grid
+    Inputs:
+    - graph: graph (nx.Graph)
+    - start: starting node (int)
+    Output: number of navigable nodes (int
+    """
+    nav = len([graph.degree[i] for i in range(len(graph.nodes)) if graph.degree[i] != 0])
+    return nav
+
 
 def len_connected_component(graph: nx.Graph, source, target) -> int:
     if not source == target or nx.has_path(graph, source, target):
@@ -112,8 +123,31 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target
     graph = graph.subgraph(component)
     return graph, valid, connected
 
-
 def compute_metrics(graphs: Union[dgl.DGLGraph, nx.Graph],
+                    metrics: Dict[str, List[float]],
+                    start_nodes: Iterable[int], goal_nodes: Iterable[int], labels=None):
+
+    graphs_nx = [nx.Graph(dgl.to_networkx(graph.cpu(), node_attrs=graph.ndata.keys())) for graph in graphs]
+    for i, graph in enumerate(graphs_nx):
+        if start_nodes[i] != goal_nodes[i]:
+            solvable = nx.has_path(graph, start_nodes[i], goal_nodes[i])
+        else:
+            solvable = False
+            assert metrics["valid"][i] == False
+        if not solvable:  # then these metrics do not make sense
+            metrics["solvable"].append(False)
+            metrics["shortest_path"].append(np.nan)
+            metrics["resistance"].append(np.nan)
+            metrics["navigable_nodes"].append(np.nan)
+        else:
+            graph = graph.subgraph(nx.node_connected_component(graph, start_nodes[i]))
+            metrics["solvable"].append(True)
+            metrics["shortest_path"].append(shortest_path_length(graph, start_nodes[i], goal_nodes[i]))
+            metrics["resistance"].append(resistance_distance(graph, start_nodes[i], goal_nodes[i]))
+            metrics["navigable_nodes"].append(num_nav_nodes(graph))
+
+
+def compute_metrics_old(graphs: Union[dgl.DGLGraph, nx.Graph],
                     metrics: Dict[str, List[float]],
                     start_nodes: Iterable[int], goal_nodes: Iterable[int], labels=None) -> Dict[str, List[float]]:
     """

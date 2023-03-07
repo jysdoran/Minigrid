@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from typing import Iterable, Union, List, Dict, Tuple
 import networkx as nx
 
+from . import layers as L
 from .gnn_networks import GIN
 from .networks import FC_ReLU_Network
 from ..util.distributions import sample_gaussian_with_reparametrisation, compute_kld_with_standard_gaussian, \
@@ -25,6 +26,48 @@ logger = logging.getLogger(__name__)
 
 def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, output_keys, predictor=None, labels=None,
                            permutations=None):
+    """
+    Calculates the pathwise ELBO for a graph VAE model, given a set of input graphs X, a trained encoder and decoder
+    networks, the number of samples to use in the Monte Carlo estimate of the ELBO, and the coefficients to use for
+    different terms in the ELBO.
+
+    Parameters
+    ----------
+    X : DGLGraph or list of DGLGraph
+        Input graphs. If a list, must have length B, where B is the batch size.
+    encoder : nn.Module
+        Encoder network for the graph VAE.
+    decoder : nn.Module
+        Decoder network for the graph VAE.
+    num_samples : int
+        Number of samples to use in the Monte Carlo estimate of the ELBO.
+    elbo_coeffs : dict
+        Dictionary of coefficients to use for different terms in the ELBO. Must contain keys 'KLD' and 'Fx', where
+        'KLD' maps to a float and 'Fx' maps to either a float or a list of floats with length equal to the number of
+        feature heads in the decoder. If a float is provided for 'Fx', the same coefficient will be used for all
+        feature heads.
+    output_keys : list of str
+        List of keys to use for the output dictionary. Must contain at least 'KLD' and 'Fx'.
+    predictor : nn.Module, optional
+        Predictor network for semi-supervised learning, by default None.
+    labels : torch.Tensor, optional
+        Labels for semi-supervised learning, by default None.
+    permutations : torch.Tensor, optional
+        Permutations to use for the input graphs. If not None, must be a tensor of size (P, N), where P is the number of
+        permutations and N is the maximum number of nodes in the graphs. Each row of the tensor should contain a
+        permutation of the node indices.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the specified outputs.
+
+    Raises
+    ------
+    ValueError
+        If an invalid key is provided in output_keys.
+    """
+
     # TODO: permutations not functional at the moment, because not implemented for Fx
 
     mean, std = encoder(X)  # (B, H), (B, H)
@@ -41,73 +84,77 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, out
 
     # logits = torch.randn(num_samples, *X.shape) for testing
     logits = decoder(Z)  # (M, B, n_nodes-1, 2)
-    if decoder.adjacency is None and decoder.attributes is not None:
-        logits_Fx = logits
-        logits_A = None
-    elif decoder.adjacency is not None and decoder.attributes is None:
-        logits_Fx = None
-        logits_A = logits
-    elif decoder.adjacency is not None and decoder.attributes is not None:
-        logits_A, logits_Fx = logits
-    else:
-        raise ValueError('Decoder must have at least one of adjacency or attributes head')
+    # if decoder.adjacency is None and decoder.attributes is not None:
+    #     logits_Fx = logits
+    #     logits_A = None
+    # elif decoder.adjacency is not None and decoder.attributes is None:
+    #     logits_Fx = None
+    #     logits_A = logits
+    # elif decoder.adjacency is not None and decoder.attributes is not None:
+    #     logits_A, logits_Fx = logits
+    # else:
+    #     raise ValueError('Decoder must have at least one of adjacency or attributes head')
 
     # Feature head(s) computations
-    if logits_Fx is not None:
-        Fx, _ = decoder.get_node_features(X, node_attributes=decoder.attributes)
-        # mask Fx if needed
-        if decoder.config.attribute_masking == "always":
-            mask = decoder.compute_attribute_mask(probs=Fx)
-            logits_Fx = decoder.mask_logits(logits_Fx, mask)
-        else:
-            mask = None
-
-        # Compute ~E_{q(z|x)}[ p(x | z) ]
-        # Important: the samples are "propagated" all the way to the decoder output,
-        # indeed we are interested in the mean of p(X|z)
-        neg_cross_entropy_Fx = []
-        for i in range(len(decoder.attribute_distributions)):
-            if decoder.attribute_distributions[i] == "bernoulli":
-                neg_cross_entropy_Fx.append(evaluate_logprob_bernoulli(Fx[..., i], logits=logits_Fx[..., i])) # (M,B)
-            # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. M,B,D),
-            # but requires modifying evaluate_logprob_one_hot_categorical()
-            elif decoder.attribute_distributions[i] == "one_hot_categorical":
-                neg_cross_entropy_Fx.append(evaluate_logprob_one_hot_categorical(Fx[..., i], logits=logits_Fx[..., i]))
-            else:
-                raise NotImplementedError(f"Specified Data Distribution '{decoder.attribute_distributions[i]}'"
-                                          f" Invalid or Not Currently Implemented")
-        neg_cross_entropy_Fx = torch.stack(neg_cross_entropy_Fx, dim=-1).to(logits_Fx) # (M, B, D) [to allow for separate coeffs between start and goal]
-
-        if not hasattr(elbo_coeffs.Fx, '__iter__'):
-            elbos_Fx = elbo_coeffs.Fx * neg_cross_entropy_Fx.mean(dim=-1)  # (M, B, D) -> (M, B)
-        else:
-            coeffs_Fx = list(elbo_coeffs.Fx.values())
-            elbos_Fx = torch.einsum('i, m b i -> m b', torch.tensor(coeffs_Fx).to(logits_Fx), neg_cross_entropy_Fx)
-        logits_Fx = logits_Fx.mean(dim=0)
+    # if logits_Fx is not None:
+    Fx = decoder.get_node_features(X, node_attributes=decoder.attributes, as_tensor=False)
+    # mask Fx if needed
+    if decoder.config.attribute_masking == "always":
+        mask = decoder.compute_attribute_mask(Fx=Fx)
+        logits = decoder.masked_logits(logits, mask)
     else:
-        Fx = None
-        neg_cross_entropy_Fx = 0.
-        elbos_Fx = 0
+        mask = None
+
+    # Compute ~E_{q(z|x)}[ p(x | z) ]
+    # Important: the samples are "propagated" all the way to the decoder output,
+    # indeed we are interested in the mean of p(X|z)
+    Fx_elbo = decoder.get_node_features(X, node_attributes=decoder.attributes, as_tensor=False, for_elbo=True)
+    neg_cross_entropy_Fx = decoder.log_prob(logits, Fx_elbo) # (F keys: M, B,)
+    neg_cross_entropy_Fx = torch.stack(list(neg_cross_entropy_Fx.values()), dim=-1).to(Z)  # (M, B, F) [to allow for separate coeffs between start and goal]
+
+    # neg_cross_entropy_Fx = []
+    # for i in range(len(decoder.output_distributions)):
+    #     if decoder.output_distributions[i] == "bernoulli":
+    #         neg_cross_entropy_Fx.append(evaluate_logprob_bernoulli(Fx[..., i], logits=logits_Fx[..., i])) # (M,B)
+    #     # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. M,B,D),
+    #     # but requires modifying evaluate_logprob_one_hot_categorical()
+    #     elif decoder.output_distributions[i] == "one_hot_categorical":
+    #         neg_cross_entropy_Fx.append(evaluate_logprob_one_hot_categorical(Fx[..., i], logits=logits_Fx[..., i]))
+    #     else:
+    #         raise NotImplementedError(f"Specified Data Distribution '{decoder.output_distributions[i]}'"
+    #                                   f" Invalid or Not Currently Implemented")
+    # neg_cross_entropy_Fx = torch.stack(neg_cross_entropy_Fx, dim=-1).to(logits_Fx) # (M, B, D) [to allow for separate coeffs between start and goal]
+
+    if not hasattr(elbo_coeffs.Fx, '__iter__'):
+        elbos_Fx = elbo_coeffs.Fx * neg_cross_entropy_Fx.mean(dim=-1)  # (M, B, F) -> (M, B)
+    else:
+        coeffs_Fx = list(elbo_coeffs.Fx.values())
+        elbos_Fx = torch.einsum('i, m b i -> m b', torch.tensor(coeffs_Fx).to(Z), neg_cross_entropy_Fx)
+
+    # else:
+    #     Fx = None
+    #     neg_cross_entropy_Fx = 0.
+    #     elbos_Fx = 0
 
     # Adjacency head computations
-    if logits_A is not None:
+    if 'adjacency' in logits.keys():
         # Get A
         # TODO: find a way to do this efficiently on GPU, maybe convert logits to sparse tensor
         # is list comprehension plus torch.stack more efficient?
         # should we try to not unbatch the graph and then reshape the big adjacency matrix?
         graphs = dgl.unbatch(X)
         n_nodes = decoder.shared_params.graph_max_nodes
-        A_in = torch.empty((len(graphs), n_nodes, n_nodes)).to(logits_A)
+        A_in = torch.empty((len(graphs), n_nodes, n_nodes)).to(logits['adjacency'])
         for m in range(len(graphs)):
             A_in[m] = graphs[m].adj().to_dense()
 
         # Note: permutations implemented for layout only
         if permutations is not None:
-            permutations = permutations.to(logits_A.device)
+            permutations = permutations.to(logits['adjacency'].device)
             A_in = [A_in[:, permutations[i]][:, :, permutations[i]] for i in range(permutations.shape[0])]
-            A_in = torch.stack(A_in, dim=1).to(logits_A.device)  # B, P, N, N
+            A_in = torch.stack(A_in, dim=1).to(logits['adjacency'].device)  # B, P, N, N
             A_in = A_in.reshape(A_in.shape[0] * A_in.shape[1], *A_in.shape[2:])  # B*P, N, N
-            logits_A = logits_A.repeat_interleave(permutations.shape[0],
+            logits['adjacency'] = logits['adjacency'].repeat_interleave(permutations.shape[0],
                                                   dim=1)  # (M, B, n_nodes-1, 2) -> (M, B*P, n_nodes-1, 2)
 
         if decoder.shared_params.data_encoding == "minimal":
@@ -117,10 +164,9 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, out
         # Important: the samples are "propagated" all the way to the decoder output,
         # indeed we are interested in the mean of p(X|z)
         A_in = A_in.reshape(A_in.shape[0], -1)  # (B | B * P, d1, d2, ..., dn) -> (B | B*P, D=2*(n_nodes - 1))
-        logits_A = logits_A.reshape(*logits_A.shape[0:2], -1)  # (M, B, n_nodes-1, 2) -> (M, B, D=2*(n_nodes - 1))
+        logits['adjacency'] = logits['adjacency'].reshape(*logits['adjacency'].shape[0:2], -1)  # (M, B, n_nodes-1, 2) -> (M, B, D=2*(n_nodes - 1))
         neg_cross_entropy_A = evaluate_logprob_bernoulli(A_in,
-                                                         logits=logits_A)  # (M, B, D)->(M,B) | (M, B*P, D)->(M,B*P)
-        logits_A = logits_A.mean(dim=0)
+                                                         logits=logits['adjacency'])  # (M, B, D)->(M,B) | (M, B*P, D)->(M,B*P)
 
         if permutations is not None:
             neg_cross_entropy_A = neg_cross_entropy_A.reshape(neg_cross_entropy_A.shape[0], -1,
@@ -132,6 +178,9 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, out
         A_in = None
         neg_cross_entropy_A = 0.
         elbos_A = 0.
+
+    for head in logits.keys():
+        logits[head] = logits[head].mean(dim=0)  # (B, N)
 
     elbos = elbos_A + elbos_Fx - elbo_coeffs.beta * kld  # (M,B,)
     unweighted_elbos = neg_cross_entropy_A + neg_cross_entropy_Fx.mean(dim=-1) - kld
@@ -153,7 +202,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, out
             # y =
         else:
             reconstructed_graphs, start_nodes, goal_nodes, is_valid = \
-                tr.Nav2DTransforms.encode_decoder_output_to_graph(logits_A, logits_Fx, decoder,
+                tr.Nav2DTransforms.encode_decoder_output_to_graph(logits, decoder,
                                                                   correct_A=True)
             y = predictor.target_metric_fn(reconstructed_graphs, start_nodes, goal_nodes).to(Z.device)
             y = einops.repeat(y, 'b -> m b 1', m=num_samples) # (B,) -> (M,B,1)
@@ -194,9 +243,14 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, out
             output_dict[key] = y
         elif key == "y_hat":
             output_dict[key] = y_hat
+        elif key == "logits_heads":
+            output_dict[key] = logits
         elif key == "logits_A":
+            logits_A = logits['adjacency']
             output_dict[key] = logits_A
         elif key == "logits_Fx":
+            logits_Fx = decoder.to_graph_features(logits=logits, probabilistic=True)
+            # logits_Fx = torch.stack([logits[feat] for feat in decoder.output_distributions], dim=-1)
             output_dict[key] = logits_Fx
         elif key == "std":
             output_dict[key] = std
@@ -271,7 +325,7 @@ class GraphGCNEncoder(nn.Module):
         """
 
         graph = X
-        features, _ = self.get_node_features(graph, node_attributes=self.attributes, reshape=False)
+        features = self.get_node_features(graph, node_attributes=self.attributes, reshape=False, as_tensor=True)
         features = self.gcn(graph, features)
 
         for net in self.model[1:]:
@@ -302,15 +356,20 @@ class GraphGCNEncoder(nn.Module):
         return evaluate_logprob_diagonal_gaussian(Z, mean=mean, std=std)
 
     def get_node_features(self, graph: Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attributes:List[str]=None,
-                          reshape:bool=True) -> Tuple[torch.Tensor, List[str]]:
+                          reshape:bool=True, as_tensor=True) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
 
         if node_attributes is None:
             node_attributes = self.attributes
 
-        features, node_attributes = util.get_node_features(graph, node_attributes=node_attributes, device=None,
+        features, _ = util.get_node_features(graph, node_attributes=node_attributes, device=None,
                                                            reshape=reshape)
-
-        return features.float(), node_attributes
+        if as_tensor:
+            return features.float()
+        else:
+            features_dict = {}
+            for i, key in enumerate(node_attributes):
+                features_dict[key] = features[..., i].float()
+            return features_dict
 
 
 class GraphMLPDecoder(nn.Module):
@@ -326,7 +385,7 @@ class GraphMLPDecoder(nn.Module):
         else:
             self.attributes = self.config.attributes
 
-        self.attribute_distributions = self.config.distributions
+        self.output_distributions = self.config.distributions
 
         # model creation
         hidden_dims = [self.shared_params.latent_dim, self.config.bottleneck_dim]
@@ -336,19 +395,18 @@ class GraphMLPDecoder(nn.Module):
         else:
             self.config.hidden_dim = self.config.bottleneck_dim
         self.model = self.create_model(hidden_dims)
+
+
+        # create heads
+        self.heads = nn.ModuleDict()
         if self.config.adjacency is not None:
-            self.adjacency = nn.Linear(self.config.hidden_dim, self.config.output_dim.adjacency)
-        else:
-            self.adjacency = None
-
+            self.heads["adjacency"] = nn.Linear(self.config.hidden_dim, self.config.output_dim.adjacency)
         if self.attributes is not None:
-            self.attribute_heads = nn.ModuleList()
-            for i in range(len(self.attributes)):
-                self.attribute_heads.append(nn.Linear(self.config.hidden_dim, self.config.output_dim.attributes))
-        else:
-            self.attribute_heads = None
-
-        self.populate_methods()
+            for head in self.output_distributions:
+                output_dim = self.shared_params.graph_max_nodes * len(self.output_distributions[head].attributes)
+                self.heads[head] = nn.ModuleList([
+                    nn.Linear(self.config.hidden_dim, output_dim),
+                    L.Reshape(-1, self.shared_params.graph_max_nodes, len(self.output_distributions[head].attributes))])
 
     def create_model(self, dims: Iterable[int]):
         self.bottleneck = FC_ReLU_Network(dims[0:2],
@@ -368,7 +426,7 @@ class GraphMLPDecoder(nn.Module):
         else:
             return [self.bottleneck]
 
-    def forward(self, Z):
+    def forward(self, Z: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
         Computes the parameters of the generative distribution p(x | z)
 
@@ -376,7 +434,7 @@ class GraphMLPDecoder(nn.Module):
             Z (Tensor):  latent vectors, a batch of shape (M, B, K)
 
         Returns:
-            adj_out, f_out (Tensors):
+            out (Dict[str, torch.Tensor]): logits of distributions parametrised by self.output_distributions
         """
 
         logits = Z.reshape(-1, Z.shape[-1])
@@ -387,266 +445,539 @@ class GraphMLPDecoder(nn.Module):
 
         for net in self.model:
             logits = net(logits)
-
-        if self.attribute_heads is not None:
-            f_out = []
-            for net in self.attribute_heads:
-                f_out.append(net(logits))
-            f_out = torch.stack(f_out, dim=-1)
+            
+        out = {}
+        for head in self.heads:
+            out[head] = logits.clone()
+            for net in self.heads[head]:
+                out[head] = net(out[head])
+            # out[head] = self.heads[head](logits)
             if reshape:
-                f_out = f_out.reshape(*Z.shape[:-1], *f_out.shape[1:])
-        else:
-            f_out = None
+                out[head] = out[head].reshape(*Z.shape[:-1], *out[head].shape[1:])
+        return out
 
-        if self.adjacency is not None:
-            adj_out = self.adjacency(logits)
-            if reshape:
-                adj_out = adj_out.reshape(*Z.shape[:-1], *adj_out.shape[1:])
-        else:
-            adj_out = None
-
-        if adj_out is None:
-            return f_out
-        elif f_out is None:
-            return adj_out
-        else:
-            return adj_out, f_out
-
-    def populate_methods(self):
-
-        # Note : self.shared_params.data_encoding checks may break backward compatibility.
-        if self.adjacency is not None and self.shared_params.data_encoding == "minimal":
-            self.sample = self._sample_minimal_graph
-            self.log_prob = self._log_prob_minimal_graph
-            self.param_p = self._param_p_minimal_graph
-            self.param_m = self._param_m_minimal_graph
-            self.entropy = self._entropy_minimal_graph
-            self.to_graph = self._to_minimal_graph
-        elif self.adjacency is None and self.attributes is not None and self.shared_params.data_encoding == "dense":
-            self.sample = self.sample_Fx
-            self.log_prob = self.log_prob_Fx
-            self.param_p = self.param_pFx
-            self.param_m = self.param_mFx
-            self.entropy = self.entropy_Fx
-            self.to_graph = self._to_dense_graph
-        else:
-            raise NotImplementedError(f"Decoder setup with adjacency head {self.adjacency} and "
-                                      f"attribute heads {self.attributes} is not supported for data encoding"
-                                      f"{self.shared_params.data_encoding}.")
-
-    def log_prob(self, logits: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
-                 X: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]) -> \
-            Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    def log_prob(self, logits: Dict[str, torch.Tensor], X: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
-        Evaluates the log_probability of X given the distributions parameters.
+        Computes the log probability of the generative distribution p(x | z) given the output logits
 
-        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
-        :param logits:
-        :param X:
-        :return:
+        Args:
+            logits (Dict[str, torch.Tensor]): output logits of distributions parametrised by self.output_distributions
+            X (Dict[str, torch.Tensor]): input data dictionary, with keys corresponding to output distributions
+
+        Returns:
+            logp (Dict[str, torch.Tensor]): log probability dictionary of each output distribution
+        Raises:
+            AssertionError: If Bernoulli distribution is not over "node" domain
+            NotImplementedError: If distribution family or domain is not implemented
         """
 
-        raise NotImplementedError("Method was not initialised at init call")
+        logp = {}
+        for head in logits:
+            if self.output_distributions[head].family == "bernoulli":
+                assert self.output_distributions[head].domain == "node", \
+                    "Bernoulli distribution must be over node domain."
+                logp[head] = evaluate_logprob_bernoulli(X[head].to(logits[head]), logits=logits[head])
+            elif self.output_distributions[head].family == "one_hot_categorical":
+                if self.output_distributions[head].domain == "nodeset":
+                    feats = self.output_distributions[head].attributes
+                    assert len(feats) == 1, "One-hot categorical distribution over nodeset domain must be univariate."
+                    x = X[feats[0]]
+                    logp[head] = evaluate_logprob_one_hot_categorical(x.to(logits[head]),
+                                                                      logits=logits[head].squeeze(-1))
+                elif self.output_distributions[head].domain == "node":
+                    feats = self.output_distributions[head].attributes
+                    x = torch.stack([X[f] for f in feats], dim=-1)
+                    logp[head] = evaluate_logprob_one_hot_categorical(x.to(logits[head]),logits=logits[head])
+                    # TODO: by doing this we lose ability to monitor the cross-entropy over the different nodes in layout
+                    logp[head] = logp[head].mean(dim=-1)
+                else:
+                    raise NotImplementedError(f"Domain {self.output_distributions[head].domain} not implemented.")
+            else:
+                raise NotImplementedError(f"Family {self.output_distributions[head].family} not implemented.")
+        return logp
 
-    def sample(self, logits:Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], *, num_samples=1) -> \
-            Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    def sample(self, logits: Dict[str, torch.Tensor], *, num_samples=1) -> Dict[str, torch.Tensor]:
         """
-        Samples from the generative distribution p(x | z)
+        Sample from the output distribution of the generative model p(x | z)
 
-        Points to _sample_minimal_graph() or sample_Fx() depending on self.config.
-        :param num_samples:
-        :param logits:
-        :return:
+        Args:
+            logits (Dict[str, torch.Tensor]): logits of distributions parametrised by self.output_distributions
+            num_samples (int): the number of samples to draw from each distribution (default: 1)
+
+        Returns:
+            samples (Dict[str, torch.Tensor]): dictionary of samples, where each sample has the same shape as the corresponding logits input.
         """
-        raise NotImplementedError("Method was not initialised at init call")
 
-    def param_p(self, logits:Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]) -> \
-            Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        samples = {}
+        for head in logits:
+            if head == "adjacency":
+                samples[head] = self.sample_A_red(logits[head], num_samples=num_samples)
+            else:
+                if self.output_distributions[head].family == "bernoulli":
+                    assert self.output_distributions[head].domain == "node", \
+                        "Bernoulli distribution must be over node domain."
+                    samples[head] = torch.distributions.Bernoulli(logits=logits[head]).sample((num_samples,))
+                elif self.output_distributions[head].family == "one_hot_categorical":
+                    samples[head] = torch.distributions.OneHotCategorical(logits=logits[head]).sample((num_samples,))
+                else:
+                    raise NotImplementedError(f"Family {self.output_distributions[head].family} not implemented.")
+        return samples
+
+    def param_p(self, logits: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
-        Evaluates the log_probability of X given the distributions parameters.
+        Computes the probability parameters (probs) for each output head of the decoder, given the input logits.
 
-        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
-        :param logits:
-        :return:
+        Args:
+            logits (Dict[str, torch.Tensor]): A dictionary where the keys are the output head names and the values are
+                                               the logits tensors.
+            masked (bool, optional): Whether to mask the logits or not. Defaults to True.
+            mask (torch.Tensor, optional): A binary mask tensor to apply to the logits. Defaults to None.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary where the keys are the output head names and the values are the
+                                     corresponding probability parameters (probs) tensors.
+                - param_p["adjacency"]: A tensor of shape (*, N, N) where * are any additional dimensions in the logits
+                and N is the number of nodes in the graph.
+                - For distribution heads, the shape is (*, N, C) where C is the number of classes in the distribution.
+
+        Raises:
+            RuntimeError: If `config.attribute_masking` is set to None and `mask` is not provided.
+            ValueError: If `mask` is provided but `masked` is set to False.
+            NotImplementedError: If the output distribution family of an output head is not implemented in the function.
+
+        Note:
+            This function assumes that an instance of the class containing it has already been created with a `config`
+            attribute. The `config` attribute is used to determine whether to use auto-masking or not. If `config.attribute_masking`
+            is set to None, this function requires a mask to be provided explicitly through the `mask` argument.
         """
-        raise NotImplementedError("Method was not initialised at init call")
 
-    def param_m(self, logits:Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]) -> \
-            Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        param_p = {}
+        for head in logits:
+            if self.output_distributions[head].family == "bernoulli":
+                assert self.output_distributions[head].domain == "node", \
+                    "Bernoulli distribution must be over node domain."
+                param_p[head] = torch.distributions.Bernoulli(logits[head]).probs
+            elif self.output_distributions[head].family == "one_hot_categorical":
+                if self.output_distributions[head].domain == "nodeset":
+                    param_p[head] = torch.distributions.OneHotCategorical(logits=logits[head].squeeze(-1)).probs.unsqueeze(-1)
+                else:
+                    param_p[head] = torch.distributions.OneHotCategorical(logits=logits[head]).probs
+            else:
+                raise NotImplementedError(f"Family {self.output_distributions[head].family} not implemented.")
+
+        return param_p
+
+    def param_m(self, logits: Dict[str, torch.Tensor] = None, probs: Dict[str, torch.Tensor] = None,
+                thresholds: Dict[str, float]=None) \
+            -> Dict[str, torch.Tensor]:
         """
-        Evaluates the log_probability of X given the distributions parameters.
+        Transforms probabilities or logits to the corresponding parameters for the distribution family of each head.
 
-        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
-        :param logits:
-        :return:
+        Args:
+            logits (Dict[str, torch.Tensor]): A dictionary containing the logits for each head. Either `logits` or `probs` must be provided.
+            probs (Dict[str, torch.Tensor]): A dictionary containing the probabilities for each head. Either `logits` or `probs` must be provided.
+            thresholds (Dict[str, float]): A dictionary containing the threshold values for each head. If not provided, it is set to 0.5 for each head.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary containing the transformed parameters for each head. The keys are the heads and the values are the transformed parameters.
+
+        Raises:
+            ValueError: If neither `logits` nor `probs` is provided, or if both `logits` and `probs` are provided.
+            NotImplementedError: If the distribution family of a head is not implemented.
         """
-        raise NotImplementedError("Method was not initialised at init call")
-
-    def entropy(self, logits:Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]) -> \
-        Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Evaluates the log_probability of X given the distributions parameters.
-
-        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
-        :param logits:
-        :return:
-        """
-        raise NotImplementedError("Method was not initialised at init call")
-
-    def to_graph(self, logits:Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], node_attributes:List[str]=None,
-                 dim_gridgraph:tuple=None, make_batch:bool=False) -> Union[List[dgl.DGLGraph], dgl.DGLGraph]:
-        """
-        Evaluates the log_probability of X given the distributions parameters.
-
-        Points to _log_prob_minimal_graph() or log_prob_Fx() depending on self.config.
-        :param logits:
-        :return:
-        """
-        raise NotImplementedError("Method was not initialised at init call")
-
-    def get_node_features(self, graph: Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attributes:List[str]=None,
-                          reshape:bool=True) -> Tuple[torch.Tensor, List[str]]:
-
-        if node_attributes is None:
-            node_attributes = self.attributes
-
-        features, node_attributes = util.get_node_features(graph, node_attributes=node_attributes, device=None,
-                                                           reshape=reshape)
-
-        return features.float(), node_attributes
-
-    def compute_attribute_mask(self, probs:torch.Tensor=None, logits:torch.Tensor=None, node_attributes=None) -> torch.Tensor:
 
         if probs is None and logits is None:
             raise ValueError("Either probs or logits must be provided")
         elif probs is not None and logits is not None:
             raise ValueError("Only one of probs or logits can be provided")
         elif probs is None and logits is not None:
-            probs = torch.sigmoid(logits) #not mathematically correct for the categorical distribution, but works for masking
+            probs = self.param_p(logits)
 
-        if node_attributes is None:
-            node_attributes = self.attributes
-        assert len(node_attributes) == probs.shape[-1], "Number of node attributes does not match the input tensor"
+        if thresholds is None:
+            thresholds = dict.fromkeys(probs.keys(), 0.5) #only for bernoulli
 
-        attribute_mask = torch.ones(*probs.shape, dtype=torch.bool).to(probs.device)
+        param_m = {}
+        for head in probs:
+            if self.output_distributions[head].family == "bernoulli":
+                assert self.output_distributions[head].domain == "node", \
+                    "Bernoulli distribution must be over node domain."
+                binary_transform = tr.BinaryTransform(thresholds[head])
+                param_m[head] = binary_transform(probs[head])
+            elif self.output_distributions[head].family == "one_hot_categorical":
+                if self.output_distributions[head].domain == "nodeset":
+                    pp = probs[head].squeeze(-1)
+                elif self.output_distributions[head].domain == "node":
+                    pp = probs[head]
+                else:
+                    raise NotImplementedError(f"Domain {self.output_distributions[head].domain} not implemented.")
+                mode = pp.argmax(dim=-1)
+                param_m[head] = F.one_hot(mode, num_classes=pp.shape[-1]).to(pp)
+                param_m[head] = torch.reshape(param_m[head], probs[head].shape)
+            else:
+                raise NotImplementedError(f"Family {self.output_distributions[head].family} not implemented.")
+        return param_m
 
-        assert node_attributes.index("navigable") < node_attributes.index("start") < node_attributes.index("goal")
+    def entropy(self, logits: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        This function calculates the entropy of the distributions represented by the given logits. The logits argument should be a dictionary with keys corresponding to the different heads of the output distributions, and values corresponding to the logits of each head. The output of the function is also a dictionary, with keys corresponding to the different heads of the output distributions, and values corresponding to the entropy of each head.
 
-        for i, attr in enumerate(node_attributes):
-            if attr == "navigable":
-                continue #attribute_mask[..., i] = 1
-            elif attr == "start":
-                attribute_mask[..., i] = probs[..., node_attributes.index("navigable")] >= 0.5
-            elif attr == "goal":
-                attribute_mask[..., i] = probs[..., node_attributes.index("navigable")] >= 0.5
-                start_nodes = (attribute_mask[..., node_attributes.index("start")] *
-                               probs[..., node_attributes.index("start")]).argmax(dim=-1)
-                ids = torch.arange(start_nodes.shape[0], device=start_nodes.device)
-                attribute_mask[..., ids, start_nodes, i] = False
+        Args:
+        logits (Dict[str, torch.Tensor]): A dictionary with keys corresponding to the different heads of the output
+        distributions, and values corresponding to the logits of each head.
+
+        Returns:
+        Dict[str, torch.Tensor]: A dictionary with keys corresponding to the different heads of the output
+        distributions, and values corresponding to the entropy of each head.
+
+        The shape of each value will depend on the distribution family and domain of the corresponding head.
+            - If the distribution family is bernoulli, the shape will be (*, max_nodes).
+            - If the distribution family is one_hot_categorical and the domain is nodeset, the shape will be (*, max_nodes, 1).
+            - If the distribution family is one_hot_categorical and the domain is node, the shape will be (*,).
+
+        Where * represents the first dimension(s) of the input tensor that are reserved for parallelization
+        (e.g. batchsize B, num of variational samples M).
+
+        If the distribution family is not implemented, a NotImplementedError will be raised.
+        """
+        entropy = {}
+        for head in logits:
+            if self.output_distributions[head].family == "bernoulli":
+                assert self.output_distributions[head].domain == "node", \
+                    "Bernoulli distribution must be over node domain."
+                entropy[head] = torch.distributions.Bernoulli(logits=logits[head]).squeeze(-1).entropy()
+            elif self.output_distributions[head].family == "one_hot_categorical":
+                if self.output_distributions[head].domain == "nodeset":
+                    lo = logits[head].squeeze(-1)
+                elif self.output_distributions[head].domain == "node":
+                    lo = logits[head]
+                else:
+                    raise NotImplementedError(f"Domain {self.output_distributions[head].domain} not implemented.")
+                entropy[head] = torch.distributions.OneHotCategorical(logits=lo).entropy()
+            else:
+                raise NotImplementedError(f"Family {self.output_distributions[head].family} not implemented.")
+        return entropy
+
+    def compute_attribute_mask(self, logits:Dict[str, torch.Tensor]=None, probs:Dict[str, torch.Tensor]=None,
+                               Fx:Dict[str, torch.Tensor]=None) \
+            -> Dict[str, torch.Tensor]:
+
+        """
+        Computes the attribute mask for each head in the output distribution.
+
+        The attribute mask is a boolean tensor indicating which logits/probs of the output distribution should be kept
+        during decoding.
+
+        Args:
+            logits (Dict[str, torch.Tensor], optional): Dictionary of logits for each head in the output distribution.
+                The shape of each tensor should be (*, B, max_nodes, d), where * is any number of additional dimensions,
+                B is the batch size, max_nodes is the maximum number of nodes in the graph, and d is the dimensionality
+                of the output distribution. Either `logits` or `probs` should be provided.
+            probs (Dict[str, torch.Tensor], optional): Dictionary of probabilities for each head in the output
+                distribution. The shape of each tensor should be the same as for `logits`. Either `logits` or `probs`
+                should be provided.
+            Fx (Dict[str, torch.Tensor], optional): Dictionary of input features for each head in the output
+                distribution. The shape of each tensor should be (*, B, max_nodes, D), where * is any number of
+                additional dimensions, B is the batch size, max_nodes is the maximum number of nodes in the graph,
+                and D is the dimensionality of the input features. If `Fx` is provided, `logits` and `probs` should
+                not be provided.
+
+        Returns:
+            attribute_mask (Dict[str, torch.Tensor]): Dictionary of attribute masks for each head in the output
+                distribution. The shape of each tensor is (*, B, max_nodes, d), where * is any number of additional
+                dimensions, B is the batch size, max_nodes is the maximum number of nodes in the graph, and d is the
+                dimensionality of the output distribution.
+        """
+
+        if Fx is None:
+            modes = self.param_m(logits=logits, probs=probs)
+        else:
+            assert logits is None and probs is None, "Cannot specify both Fx and logits/probs"
+            modes = {}
+            for head in self.output_distributions.keys():
+                modes[head] = torch.stack([Fx[attr] for attr in self.output_distributions[head].attributes], dim=-1)
+
+        attribute_mask = {}
+        for head in modes:
+            mask = torch.zeros(*modes[head].shape, dtype=torch.bool).to(modes[head].device)
+            if self.output_distributions[head].conditioning_transform == "mask":
+                for i, hc in enumerate(self.output_distributions[head].condition_on):
+                    if self.output_distributions[hc].domain == "node":
+                        feat_modes = {hc: torch.argmax(modes[hc], dim=-1) for hc in
+                                      self.output_distributions[head].condition_on}
+                        masked_attributes = self.output_distributions[head].masked_attributes[i]
+                        distribution_attributes = list(self.output_distributions[hc].attributes)
+                        masked_attributes_idx = torch.tensor([distribution_attributes.index(attr)
+                                                              for attr in masked_attributes]).to(modes[hc].device)
+                        mask_layer = ((torch.isin(feat_modes[hc], masked_attributes_idx)) & (modes[hc].sum(dim=-1) != 0)).unsqueeze(-1)
+                        mask = mask | mask_layer
+                    elif self.output_distributions[hc].domain == "nodeset":
+                        feat_modes = {hc: torch.argmax(modes[hc].squeeze(), dim=-1) for hc in
+                                      self.output_distributions[head].condition_on}
+                        ids = torch.arange(feat_modes[hc].shape[0], device=feat_modes[hc].device)
+                        mask[ids, feat_modes[hc]] = True
+            else:
+                pass
+            attribute_mask[head] = ~mask
 
         return attribute_mask
 
-    def mask_logits(self, logits, mask, value=float('-inf')):
+    def masked_logits(self, logits: Dict[str, torch.Tensor], mask: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        Masks the given logits with the provided binary mask
 
-        # TODO: Or logits_Fx + float('-inf') * (1 - Fx_mask) to preserve gradients?
+        Args:
+            logits (Dict[str, torch.Tensor]): The input logits to be masked
+            mask (Dict[str, torch.Tensor]): The binary mask to be applied on the logits
 
+        Returns:
+            masked_logits (Dict[str, torch.Tensor]): The masked logits
+        """
+        masked_logits = {}
+        for head in logits:
+            masked_logits[head] = self.mask_logits(logits[head], mask[head])
+        return masked_logits
+
+    def mask_logits(self, logits: torch.Tensor, mask: torch.Tensor, value=float('-inf')) -> torch.Tensor:
+        """
+        Masks logits according to a boolean mask.
+
+        Args:
+            logits (Tensor): Logits tensor of shape (batch_size, num_nodes, num_classes)
+            mask (Tensor): Boolean mask tensor of shape (batch_size, num_nodes, num_classes)
+            value (float, optional): Value to fill in the masked positions. Defaults to float('-inf').
+
+        Returns:
+            Tensor: Masked logits tensor of shape (batch_size, num_nodes, num_classes)
+        """
         return logits.masked_fill(mask == 0, value)
-
-    def _log_prob_minimal_graph(self, logits: tuple, X: tuple):
-        """
-        Evaluates the log_probability of X given the distributions parameters.
-
-        Args:
-            logits (Tuple): probabilistic graph representation (logits_A, logits_Fx)
-                logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-                logits_Fx (Tensor): shape (*, B, max_nodes, D)
-            X (tuple):     Batch of Graphs (A, Fx)
-                A (Tensor): shape (*, B, max_nodes, reduced_edges)
-                Fx (Tensor): shape (*, B, max_nodes, D)
-
-        Returns:
-            logpx (tuple):  log-probability of X (logp_A, logp_Fx)
-                logp_A (Tensor): shape (*, B)
-                logp_Fx (Tensor): shape (*, B, D)
-        """
-
-        A, Fx = X
-        logits_A, logits_Fx = logits
-        logp_A = self.log_prob_A(logits_A, A)
-        if logits_Fx is not None:
-            logp_Fx = self.log_prob_Fx(logits_Fx, Fx)
-        else:
-            logp_Fx = None
-
-        return logp_A, logp_Fx
-
-    def log_prob_A(self, logits_A, A):
-        """
-        Evaluates the log_probability of X given the distributions parameters
-
-        Args:
-            logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-            A (Tensor):     Batch of adjacency matrices (*, B, max_nodes, reduced_edges)
-
-        Returns:
-            logp_A (Tensor):  log-probability of A, a batch of shape (*, B)
-        """
-
-        # A: always Bernoulli
-        return evaluate_logprob_bernoulli(A, logits=logits_A)
-
-    def log_prob_Fx(self, logits_Fx, Fx):
-        """
-        Evaluates the log_probability of X given the distributions parameters
-
-        Args:
-            logits_Fx (Tensor): probabilistic attribute matrix representation
-            Fx (Tensor):     Batch of attribute matrices shape (*, B, max_nodes, D)
-
-        Returns:
-            logp_Fx (Tensor):  log-probability of Fx, a batch of shape (*, B, D)
-                                Note: returning (*, B, D) to give option of individually weighting logprobs per attribute
-        """
-
-        # Fx #TODO: figure how to explicitly include the distributions_domains property.
-        logp_Fx = []
-        for i in range(len(self.attribute_distributions)):
-            if self.attribute_distributions[i] == "bernoulli":
-                logp_Fx.append(evaluate_logprob_bernoulli(Fx[..., i], logits=logits_Fx[..., i]))
-            # Note: more efficient way to do this is to "bundle" start and goal within a single batch (i.e. B,D),
-            # but requires modifying evaluate_logprob_one_hot_categorical()
-            elif self.attribute_distributions[i] == "one_hot_categorical":
-                logp_Fx.append(evaluate_logprob_one_hot_categorical(Fx[..., i], logits=logits_Fx[..., i]))
-            else:
-                raise NotImplementedError(f"Specified Data Distribution '{self.attribute_distributions[i]}'"
-                                          f" Invalid or Not Currently Implemented")
-        logp_Fx = torch.stack(logp_Fx, dim=-1).to(logits_Fx)
-        return logp_Fx
 
     # Some extra methods for analysis
 
-    def _sample_minimal_graph(self, logits: tuple, *, num_samples=1):
+    def force_valid_masking(self, logits_Fx_masked: Dict[str, torch.Tensor], mask: Dict[str, torch.Tensor]):
         """
-        Samples a graph representation from the probabilistic graph tuple
+        The force_valid_masking function modifies the masked logits such that any invalid logit entries are replaced with valid ones. Specifically, for any output distribution with a domain of "nodeset", it checks for any invalid logits by checking if all logit entries for a batch are equal to -inf. If any such invalid logits are detected, it selects a random node within the corresponding mask, and sets its logit entry to 1.0. If no valid nodes exist in the mask, it selects a random node from all possible nodes (assuming that the layout is then guaranteed to be invalid). The function returns the modified masked logits.
 
         Args:
-            logits (Tuple): probabilistic graph representation (logits_A, logits_Fx)
-                logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-                logits_Fx (Tensor): shape (*, B, max_nodes, D)
-            num_samples (int): number of samples
+
+            logits_Fx_masked (Dict[str, torch.Tensor]): A dictionary with keys corresponding to output distributions and values corresponding to masked logits (i.e., logits with invalid entries set to -inf).
+            mask (Dict[str, torch.Tensor]): A dictionary with keys corresponding to output distributions and values corresponding to boolean masks indicating which entries in the original logits are valid.
 
         Returns:
-            A (Tensor):  reduced adjacency matrix, shape (num_samples, *, B, max_nodes, reduced_edges)
-            Fx (Tensor): attribute matrix, shape (num_samples, *, B, max_nodes, D)
+
+            logits_Fx_masked (Dict[str, torch.Tensor]): A dictionary with keys corresponding to output distributions and values corresponding to modified masked logits, where any invalid entries have been replaced with valid ones.
         """
 
-        A = self.sample_A_red(logits[0], num_samples=num_samples)
-        if logits[1] is not None:
-            Fx = self.sample_Fx(logits[1], num_samples=num_samples)
-        else:
-            Fx = None
+        for key in self.output_distributions:
+            if self.output_distributions[key].domain == "nodeset":
+                logits_invalid = torch.all(logits_Fx_masked[key].squeeze(-1) == float('-inf'), dim=-1)
+                if logits_invalid.any():
+                    invalid_batch_idx = logits_invalid.nonzero().flatten()
+                    logger.warning(f"Invalid logits detected for {self.output_distributions[key]} at "
+                                   f"batch indices: {invalid_batch_idx.tolist()}."
+                                   f" Sampling object at random within masked logits instead.")
+                    sampled_idx = []
+                    for idx in invalid_batch_idx:
+                        sampling_set = torch.where(mask[key][idx])[0]
+                        if len(sampling_set) == 0:
+                            logger.warning(f"Invalid masks detected for {self.output_distributions[key]} at "
+                                           f"batch indices: {invalid_batch_idx.tolist()}."
+                                           f" Sampling object at random within all nodes instead "
+                                           f" (layout is guaranteed to be invalid).")
+                            sampling_set = torch.randperm(logits_Fx_masked[key].shape[-2])
+                            sampled_idx.append(sampling_set[0])
+                            # a bit hacky, will only work for nav tasks
+                            if key == "start_location" or key == "goal_location":
+                                if key == "start_location":
+                                    logits_Fx_masked["goal_location"][idx, sampling_set[1]] = 1.0
+                                else:
+                                    logits_Fx_masked["start_location"][idx, sampling_set[1]] = 1.0
+                        else:
+                            sampled_idx.append(sampling_set[torch.randint(low=0, high=len(sampling_set), size=(1,))])
+                    logits_Fx_masked[key][invalid_batch_idx, sampled_idx] = 1.0  # can be set to any value > -inf
 
-        return A, Fx
+        return logits_Fx_masked
+
+    def get_node_features(self, graph: Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attributes:List[str]=None,
+                          reshape:bool=True, as_tensor=True, for_elbo=False) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Given a graph, returns the node features specified by the `node_attributes` list.
+
+        Args:
+            graph (Union[dgl.DGLGraph, List[dgl.DGLGraph]]): A DGLGraph or a list of DGLGraphs.
+            node_attributes (List[str], optional): A list of node feature names to extract. If None, uses the default attributes.
+            reshape (bool, optional): Whether to reshape the returned features to have an additional dimension. Defaults to True.
+            as_tensor (bool, optional): Whether to return the features as a tensor or as a dictionary of tensors. Defaults to True.
+            for_elbo (bool, optional): Whether to apply preprocessing to handle the ELBO loss computation. Defaults to False.
+
+        Returns:
+            Union[torch.Tensor, Dict[str, torch.Tensor]]:
+                - If `as_tensor` is True, returns a tensor of the extracted node features of dimensions (*, B, num_nodes, D)
+                - If `as_tensor` is False, returns a dictionary of tensors of dimensions (*, B, num_nodes), where each key is a node feature name.
+
+        Raises:
+            AssertionError: If `as_tensor` and `for_elbo` flags are both True.
+        """
+        assert not (as_tensor and for_elbo), "Cannot use as_tensor and for_elbo flags at the same time."
+
+        if node_attributes is None:
+            node_attributes = self.attributes
+
+        features, _ = util.get_node_features(graph, node_attributes=node_attributes, device=None,
+                                                           reshape=reshape)
+
+        if as_tensor:
+            return features.float()
+        else:
+            features_dict = {}
+            for i, key in enumerate(node_attributes):
+                features_dict[key] = features[..., i].float()
+
+            if for_elbo:
+                # TODO URGENT: review and decide + this is not the best place to do this
+                # 1. preprocess start / goal nodes as empty
+                # features['empty'] += features['goal']
+                # features['empty'] += features['start']
+
+                # 2. preprocess start/goal nodes as max entropy (i.e. uniform distribution over wall/lava/moss/empty)
+
+                # 3. preprocess start/goal nodes as max entropy over nav nodes (i.e. uniform distribution over moss/empty)
+
+                # 4. add inductive biases about most likely node type "underneath/closeby"
+                features_dict['moss'] += features_dict['goal']
+                features_dict['empty'] += features_dict['start']
+
+                # 5. ignore start/goal nodes in the loss computation (requires modification to the cross-entropy loss)
+                # 6. marginalise cross-entropy loss over navigable nodes (i.e sum p(x = {moss, empty})) (requires modification to the cross-entropy loss)
+
+            return features_dict
+
+    def to_graph_features(self, logits:Dict[str, torch.Tensor]=None, probabilistic=False, masked=True, mask=None,
+                          force_valid=True) \
+            -> Dict[str, torch.Tensor]:
+
+        """
+        Convert logits to graph features using the specified output distribution.
+
+        Args:
+            logits (Dict[str, torch.Tensor]): A dictionary containing the logits for each head of the model. If masked
+                is True, then these logits must correspond to the attributes that will be used.
+            probabilistic (bool):
+                - If True, features will be a one-hot vector over their respective domain.
+                - If False, features will be expressed as sampling probabilities \in [0,1] over their respective domain.
+            masked (bool): If True, mask the logits prior to computing features.
+            mask (torch.Tensor): A mask for the logits.
+            force_valid (bool): If True, ensure that there is at least one valid option for each attribute.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary containing the graph features.
+        """
+
+        if masked:
+            if mask is None:
+                if self.config.attribute_masking is None:
+                    raise RuntimeError("Cannot do auto-masking when attribute masking set to None in decoder config.")
+                mask = self.compute_attribute_mask(logits=logits)
+            logits = self.masked_logits(logits, mask=mask)
+            if force_valid:
+                logits = self.force_valid_masking(logits, mask=mask)
+        else:
+            if mask is not None:
+                raise ValueError("Mask provided but masked=False")
+
+        if probabilistic:
+            param = self.param_p(logits=logits)
+        else:
+            param = self.param_m(logits=logits)
+        feats = {}
+        for head in param:
+            if head == "adjacency":
+                continue
+            if self.output_distributions[head].family == "one_hot_categorical":
+                if self.output_distributions[head].domain == "node":
+                    for i, attr in enumerate(self.output_distributions[head].attributes):
+                        feats[attr] = param[head][..., i]
+                elif self.output_distributions[head].domain == "nodeset":
+                    assert len(self.output_distributions[head].attributes) == 1, \
+                        "Only one attribute can be specified for a nodeset distribution"
+                    attr = self.output_distributions[head].attributes[0]
+                    feats[attr] = param[head].squeeze(-1)
+                else:
+                    raise NotImplementedError(f"Domain {self.output_distributions[head].domain} not implemented.")
+            else:
+                raise NotImplementedError(f"Family {self.output_distributions[head].family} not implemented.")
+
+        assert len(feats) == len(self.attributes), "Number of features does not match number of attributes"
+        assert all([feats[attr].shape == feats[self.attributes[0]].shape for attr in feats]), \
+            "Features must have the same shape"
+        return feats
+
+    def to_graph(self, logits:Dict[str, torch.Tensor], dim_gridgraph:tuple=None, make_batch:bool=False,
+                 edge_config=None, masked=True, mask=None, force_valid=True) \
+            -> Union[List[dgl.DGLGraph], dgl.DGLGraph]:
+        """
+        Converts a dictionary of logits to a list of DGLGraph objects / a batched DGLGraph representing the navigation environment.
+
+        Args:
+        - logits: A dictionary of logits from which to extract graph features.
+        - dim_gridgraph: A tuple containing the dimensions of the 2D gridworld used to represent the navigation environment. If not specified, default dimensions are used.
+        - make_batch: A boolean indicating whether to convert the graphs to a batch format or not. Default is False.
+        - edge_config: A dictionary specifying the type and/or number of edges for each graph. Default is None.
+        - masked: A boolean indicating whether to mask the logits before extracting features. Default is True.
+        - mask: A tensor mask to use when masking the logits. Default is None.
+        - force_valid: A boolean indicating whether to force valid masking when masking the logits. Default is True.
+
+        Returns:
+        - graphs: A list of dense DGLGraph objects representing the navigation environment. If make_batch is True, a single batched DGLGraph object is returned instead.
+        """
+        if self.shared_params.data_encoding == "dense":
+            return self._to_dense_graph(logits, dim_gridgraph=dim_gridgraph, make_batch=make_batch,
+                                        edge_config=edge_config, masked=masked, mask=mask, force_valid=force_valid)
+        elif self.shared_params.data_encoding == "minimal":
+            return self._to_minimal_graph(logits)
+        else:
+            raise NotImplementedError(f"to_graph() not implemented for {self.shared_params.data_encoding} encoding.")
+
+    def _to_dense_graph(self,
+                        logits:Dict[str, torch.Tensor],
+                        dim_gridgraph:tuple=None,
+                        make_batch: bool = False,
+                        edge_config=None,
+                        masked=True,
+                        mask=None,
+                        force_valid=True) \
+            -> Union[List[dgl.DGLGraph], dgl.DGLGraph]:
+        """
+        Converts a dictionary of logits to a list of dense DGLGraph objects / a batched DGLGraph representing the navigation environment.
+
+        Args:
+        - logits: A dictionary of logits from which to extract graph features.
+        - dim_gridgraph: A tuple containing the dimensions of the 2D gridworld used to represent the navigation environment. If not specified, default dimensions are used.
+        - make_batch: A boolean indicating whether to convert the graph to a batch format or not. Default is False.
+        - edge_config: A dictionary specifying the type and/or number of edges for the graph. Default is None.
+        - masked: A boolean indicating whether to mask the logits before extracting features. Default is True.
+        - mask: A tensor mask to use when masking the logits. Default is None.
+        - force_valid: A boolean indicating whether to force valid masking when masking the logits. Default is True.
+
+        Returns:
+        - graphs: A list of dense DGLGraph objects representing the navigation environment. If make_batch is True, a single batched DGLGraph object is returned instead.
+        """
+
+        Fx = self.to_graph_features(logits=logits, probabilistic=False, masked=masked, mask=mask,
+                                    force_valid=force_valid)
+
+        if dim_gridgraph is None:
+            dim_gridgraph = tuple([x - 2 for x in self.shared_params.gridworld_data_dim[1:]])
+
+        assert len(dim_gridgraph) == 2, "Only 2D Gridworlds are currently supported"
+
+        graphs, _ = tr.Nav2DTransforms.features_to_dense_graph(Fx, dim_gridgraph, edge_config=edge_config,
+                                                   to_dgl=True, make_batch=make_batch)
+
+        return graphs
+
+    def _to_minimal_graph(self, logits:Dict[str, torch.Tensor]) -> dgl.DGLGraph:
+
+        raise NotImplementedError()
 
     def sample_A_red(self, logits_A: torch.tensor, *, num_samples=1):
         """
@@ -662,341 +993,6 @@ class GraphMLPDecoder(nn.Module):
 
         return torch.distributions.Bernoulli(logits=logits_A).sample((num_samples,))
 
-    def sample_Fx(self, logits: torch.tensor, *, num_samples=1):
-        """
-        Samples attribute matrix from non-normalised probabilities outputted by decoder
-
-        Args:
-            logits (Tensor): shape (*, B, max_nodes, D)
-            num_samples (int): number of samples
-
-        Returns:
-            A (Tensor):  reduced adjacency matrix, shape (num_samples, *, B, max_nodes, reduced_edges)
-            Fx (Tensor): attribute matrix, shape (num_samples, *, B, max_nodes, D)
-        """
-
-        # [e, s, g]
-        Fx = []
-        for i in range(len(self.attribute_distributions)):
-            if self.attribute_distributions[i] == "bernoulli":
-                empties = torch.distributions.Bernoulli(logits=logits[..., i]).sample((num_samples,))
-                Fx.append(empties)
-            elif self.attribute_distributions[i] == "one_hot_categorical":
-                Fx.append(torch.distributions.OneHotCategorical(logits=logits[..., i]).sample((num_samples,)))
-            else:
-                raise NotImplementedError(f"Specified Data Distribution '{self.attribute_distributions[i]}'"
-                                          f" Invalid or Not Currently Implemented")
-        Fx = torch.stack(Fx, dim=-1).to(logits)
-
-        return Fx
-
-    def _param_p_minimal_graph(self, logits: tuple):
-        """
-        Returns the distributions parameters
-
-        Args:
-            logits (Tuple): probabilistic graph representation (logits_A, logits_Fx)
-                logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-                logits_Fx (Tensor): shape (*, B, max_nodes, D)
-
-        Returns:
-            pA (Tensor): parameters of the reduced adjacency matrix distribution, shape (*, B, max_nodes, reduced_edges)
-            pFx (Tensor): parameters of the feature matrix distribution, shape (*, B, max_nodes, D)
-        """
-
-        logits_A, logits_Fx = logits
-        pA = self.param_pA(logits_A)
-        if logits_Fx is not None:
-            pFx = self.param_pFx(logits_Fx)
-        else:
-            pFx = None
-
-        return pA, pFx
-
-    def param_pA(self, logits_A):
-        """
-        Returns the distributions parameters
-
-        Args:
-            logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-
-        Returns:
-            pA (Tensor): parameters of the reduced adjacency matrix distribution, shape (*, B, max_nodes, reduced_edges)
-        """
-
-        return torch.distributions.Bernoulli(logits=logits_A).probs
-
-    def param_pFx(self, logits_Fx, masked=True, mask=None):
-        """
-        Returns the distributions parameters
-
-        Args:
-            logits_Fx (Tensor): shape (*, B, max_nodes, D)
-
-        Returns:
-            pFx (Tensor): parameters of the feature matrix distribution, shape (*, B, max_nodes, D)
-        """
-
-        if masked:
-            if mask is None:
-                if self.config.attribute_masking is None:
-                    raise RuntimeError("Cannot do auto-masking when attribute masking set to None in decoder config.")
-                mask = self.compute_attribute_mask(logits=logits_Fx)
-            logits_Fx = self.mask_logits(logits_Fx, mask=mask)
-            logits_Fx = self.force_valid_masking(logits_Fx, mask=mask)
-        else:
-            if mask is not None:
-                raise ValueError("Mask provided but masked=False")
-
-        pFx = []
-        for i in range(len(self.attribute_distributions)):
-            if self.attribute_distributions[i] == "bernoulli":
-                dist = torch.distributions.Bernoulli(logits=logits_Fx[..., i])
-            elif self.attribute_distributions[i] == "one_hot_categorical":
-                dist = torch.distributions.OneHotCategorical(logits=logits_Fx[..., i])
-            else:
-                raise NotImplementedError(f"Specified Data Distribution '{self.attribute_distributions[i]}'"
-                                          f" Invalid or Not Currently Implemented")
-            pFx.append(dist.probs)
-        pFx = torch.stack(pFx, dim=-1).to(logits_Fx)
-
-        return pFx
-
-    def _entropy_minimal_graph(self, logits:tuple):
-        """
-        Returns the distributions entropy
-
-        Args:
-            logits (Tuple): probabilistic graph representation (logits_A, logits_Fx)
-                logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-                logits_Fx (Tensor): shape (*, B, max_nodes, D)
-
-        Returns:
-            H_A (Tensor): Entropy of the distribution, shape (1)
-            H_Fx (Tensor): Entropy of the distribution, shape (D)
-        """
-
-        logits_A, logits_Fx = logits
-        H_A = self.entropy_A(logits_A)
-        if logits_Fx is not None:
-            H_Fx = self.entropy_Fx(logits_Fx)
-        else:
-            H_Fx = None
-
-        return H_A, H_Fx
-
-    def entropy_A(self, logits_A):
-        """
-        Returns the distributions parameters
-
-        Args:
-            logits_A (Tensor): reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-
-        Returns:
-            H_A (Tensor): Entropy of the distribution, shape (1)
-        """
-
-        return torch.distributions.Bernoulli(logits=logits_A).entropy().mean()
-
-    def entropy_Fx(self, logits_Fx):
-        """
-        Returns the distributions parameters
-
-        Args:
-            logits_Fx (Tensor): shape (*, B, max_nodes, D)
-
-        Returns:
-            H_Fx (Tensor): Entropy of the distribution, shape (D)
-        """
-
-        H_Fx = []
-        for i in range(len(self.attribute_distributions)):
-            if self.attribute_distributions[i] == "bernoulli":
-                dist = torch.distributions.Bernoulli(logits=logits_Fx[..., i])
-            elif self.attribute_distributions[i] == "one_hot_categorical":
-                dist = torch.distributions.OneHotCategorical(logits=logits_Fx[..., i])
-            else:
-                raise NotImplementedError(f"Specified Data Distribution '{self.attribute_distributions[i]}'"
-                                          f" Invalid or Not Currently Implemented")
-            H_Fx.append(dist.entropy().mean())
-        H_Fx = torch.stack(H_Fx, dim=-1).to(logits_Fx)
-
-        return H_Fx
-
-    def _param_m_minimal_graph(self, logits: tuple, threshold: float = 0.5):
-        """
-        Returns the mode given the distribution parameters. An optional threshold parameter
-        can be specified to tune cutoff point between sampling 0 or 1 (only applied to Bernoulli distributions).
-
-        Args:
-            logits (Tuple): probabilistic graph representation (logits_A, logits_Fx)
-                logits_A (Tensor): reduced probabilistic adjacency matrix logits, shape (*, B, max_nodes, reduced_edges)
-                logits_Fx (Tensor): probabilistic feature attributes matrix logits, shape (*, B, max_nodes, D)
-            :param threshold (float): Threshold for binary transformation of Bernoulli distributions, [0,1]
-                                      when threshold = 0.5, this is equivalent to taking the mode of the distribution
-
-        Returns:
-            m (Tuple): mode of distributions parameters (mA, mFx)
-                mA (Tensor): mode of reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-                mFx (Tensor): mode of probabilistic feature attributes matrix, shape (*, B, max_nodes, D)
-        """
-
-        logits_A, logits_Fx = logits
-        mA = self.param_mA(logits_A, threshold=threshold)
-        if logits_Fx is not None:
-            mFx = self.param_mFx(logits_Fx, threshold=threshold)
-        else:
-            mFx = None
-
-        return mA, mFx
-
-    def param_mA(self, logits_A, threshold: float = 0.5):
-        """
-        Returns the mode of the probabilistic reduced adjacency matrix given the distribution parameters.
-        An optional threshold parameter can be specified to tune cutoff point between sampling 0 or 1
-        (only applied to Bernoulli distributions).
-
-        Args:
-            logits_A (Tensor): reduced probabilistic adjacency matrix logits, shape (*, B, max_nodes, reduced_edges)
-            :param threshold (float): Threshold for binary transformation of Bernoulli distributions, [0,1]
-                                      when threshold = 0.5, this is equivalent to taking the mode of the distribution
-
-        Returns:
-            mA (Tensor): mode of reduced probabilistic adjacency matrix, shape (*, B, max_nodes, reduced_edges)
-        """
-
-        binary_transform = tr.BinaryTransform(threshold)
-        return binary_transform(self.param_pA(logits_A))
-
-    def param_mFx(self, logits_Fx, threshold: float = 0.5, masked=True, mask=None):
-        """
-        Returns the mode given the distribution parameters. An optional threshold parameter
-        can be specified to tune cutoff point between sampling 0 or 1 (only applied to Bernoulli distributions)
-
-        Args:
-            logits_Fx (Tensor): probabilistic feature attributes matrix logits, shape (*, B, max_nodes, D)
-            :param threshold (float): Threshold for binary transformation of Bernoulli distributions, [0,1]
-                                      when threshold = 0.5, this is equivalent to taking the mode of the distribution
-
-        Returns:
-            mFx (Tensor): mode of probabilistic feature attributes matrix, shape (*, B, max_nodes, D)
-        """
-
-        if masked:
-            if mask is None:
-                if self.config.attribute_masking is None:
-                    raise RuntimeError("Cannot do auto-masking when attribute masking set to None in decoder config.")
-                mask = self.compute_attribute_mask(logits=logits_Fx)
-            logits_Fx = self.mask_logits(logits_Fx, mask=mask)
-            logits_Fx = self.force_valid_masking(logits_Fx, mask=mask)
-        else:
-            if mask is not None:
-                raise ValueError("Mask provided but masked=False")
-
-        binary_transform = tr.BinaryTransform(threshold)
-        pFx = self.param_pFx(logits_Fx, masked=False)
-
-        mFx = []
-        for i in range(len(self.attribute_distributions)):
-            if self.attribute_distributions[i] == "bernoulli":
-                mfx = binary_transform(pFx[..., i])
-            elif self.attribute_distributions[i] == "one_hot_categorical":
-                mfx = pFx[..., i].argmax(axis=-1)
-                mfx = F.one_hot(mfx, num_classes=pFx[..., i].shape[-1]).to(logits_Fx)
-            else:
-                raise NotImplementedError(f"Specified Data Distribution '{self.attribute_distributions[i]}'"
-                                          f" Invalid or Not Currently Implemented")
-            mFx.append(mfx)
-
-        mFx = torch.stack(mFx, dim=-1).to(logits_Fx)
-        return mFx
-
-    def force_valid_masking(self, logits_Fx_masked, mask):
-
-        for i in range(len(self.attribute_distributions)):
-            if self.attribute_distributions[i] == "one_hot_categorical":
-                logits_invalid = torch.all(logits_Fx_masked[..., i] == float('-inf'), dim=-1)
-                if logits_invalid.any():
-                    invalid_batch_idx = logits_invalid.nonzero().flatten()
-                    logger.warning(f"Invalid logits detected for {self.attributes[i]} at "
-                                   f"batch indices: {invalid_batch_idx.tolist()}."
-                                   f" Sampling object at random within masked logits instead.")
-                    sampled_idx = []
-                    for idx in invalid_batch_idx:
-                        sampling_set = torch.where(mask[idx, ..., i])[0]
-                        if len(sampling_set) == 0:
-                            logger.warning(f"Invalid masks detected for {self.attributes[i]} at "
-                                           f"batch indices: {invalid_batch_idx.tolist()}."
-                                           f" Sampling object at random within all nodes instead "
-                                           f" (layout is guaranteed to be invalid).")
-                            sampling_set = torch.randperm(logits_Fx_masked.shape[-2])
-                            sampled_idx.append(sampling_set[0])
-                            # a bit hacky, will only work for [active, start, goal] ordering
-                            if i != len(self.attribute_distributions) - 1:
-                                logits_Fx_masked[idx, sampling_set[1], i + 1] = 1.0
-                        else:
-                            sampled_idx.append(sampling_set[torch.randint(low=0, high=len(sampling_set), size=(1,))])
-                    logits_Fx_masked[invalid_batch_idx, sampled_idx, i] = 1.0  # can be set to any value > -inf
-
-        return logits_Fx_masked
-
-    def _to_dense_graph(self, logits_Fx:torch.Tensor, node_attributes:List[str]=None, dim_gridgraph:tuple=None,
-                        probabilistic_graph:bool=True, make_batch:bool=False, masked=True, mask=None) \
-            -> Union[List[dgl.DGLGraph], dgl.DGLGraph]:
-
-
-        if probabilistic_graph:
-            Fx = self.param_pFx(logits_Fx, masked=masked, mask=mask)
-        else:
-            Fx = self.param_mFx(logits_Fx, masked=masked, mask=mask)
-
-        if node_attributes is None:
-            node_attributes = self.attributes
-        if dim_gridgraph is None:
-            dim_gridgraph = tuple([x - 2 for x in self.shared_params.gridworld_data_dim[1:]])
-
-        assert len(dim_gridgraph) == 2, "Only 2D Gridworlds are currently supported"
-
-        if Fx.shape[1:] == (*dim_gridgraph, len(node_attributes)):
-            Fx = Fx.reshape(Fx.shape[0], -1, len(node_attributes))
-
-        if Fx.shape[1:] != (*dim_gridgraph, len(node_attributes)):
-            grid_Fx = Fx.reshape(Fx.shape[0], *dim_gridgraph, len(node_attributes))
-        else:
-            grid_Fx = copy.deepcopy(Fx)
-            Fx = Fx.reshape(Fx.shape[0], -1, len(node_attributes))
-
-        Fx_dict = {}
-        for i, attr in enumerate(node_attributes):
-            Fx_dict[attr] = Fx[..., i].flatten()
-
-        ids = list(zip(*torch.where(grid_Fx[..., node_attributes.index("navigable")] <= 0.5)))
-        inactive_nodes = defaultdict(list)
-        for tup in ids:
-            inactive_nodes[tup[0]].append(tup[1:])
-
-        graphs = []
-        for m in range(grid_Fx.shape[0]):
-            g_temp = nx.grid_2d_graph(*dim_gridgraph)
-            g_temp.remove_nodes_from(inactive_nodes[m])
-            g_temp.add_nodes_from(inactive_nodes[m])
-            g = nx.Graph()
-            g.add_nodes_from(sorted(g_temp.nodes(data=True)))
-            g.add_edges_from(g_temp.edges(data=True))
-            g = dgl.from_networkx(g).to(logits_Fx.device)
-            graphs.append(g)
-
-        graphs = dgl.batch(graphs).to(logits_Fx.device)
-        graphs.ndata.update(Fx_dict)
-        if not make_batch:
-            graphs = dgl.unbatch(graphs)
-
-        return graphs
-
-    def _to_minimal_graph(self, logits:tuple) -> dgl.DGLGraph:
-
-        # TODO(low priority.)
-        raise NotImplementedError()
 
 class Predictor(nn.Module):
 

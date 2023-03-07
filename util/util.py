@@ -80,7 +80,9 @@ def seed_everything(seed=20211201):
 
 def check_unique(input: torch.Tensor):
     """Returns a mask of all unique elements in the input."""
-    if not isinstance(input, torch.Tensor):
+    if isinstance(input, dict):
+        input = torch.stack(list(input.values()), dim=-1)
+    elif not isinstance(input, torch.Tensor):
         input = torch.tensor(input)
     _, ind, counts = torch.unique(input, dim=0, return_inverse=True, return_counts=True, sorted=False)
     return counts[ind] == 1
@@ -94,9 +96,15 @@ def check_novel(batch, dataset):
     dataset: a batch of tensors to check each batch tensor against with dim (N, ...)
     """
 
-    if not isinstance(batch, torch.Tensor):
+    if isinstance(batch, dict):
+        assert isinstance(dataset, dict), "If batch is a dict, dataset must also be a dict"
+        min_feature_set = list(set(dataset.keys()).intersection(set(batch.keys())))
+        batch = torch.stack([batch[key] for key in min_feature_set], dim=-1)
+    elif not isinstance(batch, torch.Tensor):
         batch = torch.tensor(batch)
-    if not isinstance(dataset, torch.Tensor):
+    if isinstance(dataset, dict):
+        dataset = torch.stack([dataset[key] for key in min_feature_set], dim=-1)
+    elif not isinstance(dataset, torch.Tensor):
         dataset = torch.tensor(dataset)
 
     #Best to avoid loading dataset on GPU as it is likely to be large

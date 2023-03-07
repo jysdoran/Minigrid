@@ -4,6 +4,7 @@ import os.path
 import pickle
 from typing import Any, Callable, Optional, Tuple, Dict, List
 
+import numpy as np
 import torch
 import pytorch_lightning as pl
 import dgl
@@ -76,7 +77,7 @@ class GridNav_Dataset(VisionDataset):
 
         self.data: Any = []
         self.targets = []
-        self.target_contents: Dict = None
+        self.target_contents: Dict = {}
         self.batches_metadata: Any = []
         self.held_out_tasks = held_out_tasks
 
@@ -122,24 +123,33 @@ class GridNav_Dataset(VisionDataset):
                 # as behavior is order dependent
                 try:
                     self.batches_metadata.append(entry["batch_meta"])
-                    if self.target_contents is None:
-                        self.target_contents = entry["label_contents"]
-                    else:
-                        try:
-                            for key in entry["label_contents"].keys():
-                                if key == '__dict__': #handles DotDict objects
-                                    continue
-                                if isinstance(entry["label_contents"][key], list):
+                    try:
+                        for key in entry["label_contents"].keys():
+                            if key == '__dict__': #handles DotDict objects
+                                continue
+                            if isinstance(entry["label_contents"][key], list):
+                                if key not in self.target_contents:
+                                    self.target_contents[key] = entry["label_contents"][key]
+                                else:
                                     self.target_contents[key].extend(entry["label_contents"][key])
-                                elif isinstance(entry["label_contents"][key], torch.Tensor):
+                            elif isinstance(entry["label_contents"][key], torch.Tensor):
+                                if key not in self.target_contents:
+                                    self.target_contents[key] = entry["label_contents"][key]
+                                else:
                                     self.target_contents[key] = \
                                         torch.cat((self.target_contents[key], entry["label_contents"][key]))
+                            elif isinstance(entry["label_contents"][key], np.ndarray):
+                                val = torch.from_numpy(entry["label_contents"][key])
+                                if key not in self.target_contents:
+                                    self.target_contents[key] = val
                                 else:
-                                    raise ValueError("Unsupported type for target_contents")
-                        except KeyError as e:
-                            raise KeyError(
-                                f"{e} not found in {self.target_contents.keys()}. Mismatch in label contents "
-                                f"across batch files")
+                                    self.target_contents[key] = torch.cat((self.target_contents[key], val))
+                            else:
+                                raise ValueError("Unsupported type for target_contents")
+                    except KeyError as e:
+                        raise KeyError(
+                            f"{e} not found in {self.target_contents.keys()}. Mismatch in label contents "
+                            f"across batch files")
 
                     # these ones will usually be skipped
                     self.data.extend(entry["data"])
@@ -333,7 +343,7 @@ class GridNavDataModule(pl.LightningDataModule):
         return loader
 
     def create_dataloader(self, data, batch_size, shuffle=True):
-        data_type = self.dataset_metadata['data_type']
+        data_type = self.dataset_metadata.config['data_type']
         if data_type == 'graph':
             data_loader = GraphDataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle, num_workers=self.num_workers)
         else:
