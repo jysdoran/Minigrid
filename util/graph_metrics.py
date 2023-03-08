@@ -57,9 +57,9 @@ def num_nav_nodes(graph: nx.Graph) -> int:
     Inputs:
     - graph: graph (nx.Graph)
     - start: starting node (int)
-    Output: number of navigable nodes (int
+    Output: number of navigable nodes (int)
     """
-    nav = len([graph.degree[i] for i in range(len(graph.nodes)) if graph.degree[i] != 0])
+    nav = len([graph.degree[i] for i in graph.nodes if graph.degree[i] != 0])
     return nav
 
 
@@ -123,28 +123,36 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target
     graph = graph.subgraph(component)
     return graph, valid, connected
 
-def compute_metrics(graphs: Union[dgl.DGLGraph, nx.Graph],
-                    metrics: Dict[str, List[float]],
-                    start_nodes: Iterable[int], goal_nodes: Iterable[int], labels=None):
+
+def compute_metrics(graphs: Union[List[dgl.DGLGraph], List[nx.Graph]],
+                    metrics: Dict[str, List[float]],labels=None):
 
     graphs_nx = [nx.Graph(dgl.to_networkx(graph.cpu(), node_attrs=graph.ndata.keys())) for graph in graphs]
     for i, graph in enumerate(graphs_nx):
-        if start_nodes[i] != goal_nodes[i]:
-            solvable = nx.has_path(graph, start_nodes[i], goal_nodes[i])
+        start_node = [n for n in graph.nodes if graph.nodes[n]['start'] == 1.0]
+        goal_node = [n for n in graph.nodes if graph.nodes[n]['goal'] == 1.0]
+        assert len(start_node) == 1
+        assert len(goal_node) == 1
+        start_node = start_node[0]
+        goal_node = goal_node[0]
+        if start_node != goal_node:
+            metrics["valid"].append(True)
+            solvable = nx.has_path(graph, start_node, goal_node)
         else:
+            metrics["valid"].append(False)
             solvable = False
-            assert metrics["valid"][i] == False
+            # assert metrics["valid"][i] == False
         if not solvable:  # then these metrics do not make sense
             metrics["solvable"].append(False)
             metrics["shortest_path"].append(np.nan)
             metrics["resistance"].append(np.nan)
             metrics["navigable_nodes"].append(np.nan)
         else:
-            graph = graph.subgraph(nx.node_connected_component(graph, start_nodes[i]))
+            subg = graph.subgraph(nx.node_connected_component(graph, start_node))
             metrics["solvable"].append(True)
-            metrics["shortest_path"].append(shortest_path_length(graph, start_nodes[i], goal_nodes[i]))
-            metrics["resistance"].append(resistance_distance(graph, start_nodes[i], goal_nodes[i]))
-            metrics["navigable_nodes"].append(num_nav_nodes(graph))
+            metrics["shortest_path"].append(shortest_path_length(subg, start_node, goal_node))
+            metrics["resistance"].append(resistance_distance(subg, start_node, goal_node))
+            metrics["navigable_nodes"].append(num_nav_nodes(subg))
 
 
 def compute_metrics_old(graphs: Union[dgl.DGLGraph, nx.Graph],

@@ -344,14 +344,14 @@ class GraphVAELogger(pl.Callback):
                                                           make_batch=False, masked=True, edge_config=edge_config_nav)
         reconstructed_imgs = self.obtain_imgs(outputs, pl_module)
         reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
-        mode_Fx = pl_module.decoder.param_m(outputs["logits_heads"])
-        start_nodes_ids = mode_Fx['start_location'].squeeze(-1).argmax(dim=-1)
-        goal_nodes_ids = mode_Fx['start_location'].squeeze(-1).argmax(dim=-1)
-        is_valid = tr.Nav2DTransforms.check_validity_start_goal_dense(
-            start_nodes_ids, goal_nodes_ids, layout_nodes=None)
-        reconstruction_metrics["valid"] = is_valid.tolist()
-        compute_metrics(reconstructed_graphs, reconstruction_metrics, start_nodes_ids, goal_nodes_ids,
-                        labels=input_batch.get("label_ids"))
+        # TODO: remove
+        # mode_Fx = pl_module.decoder.param_m(outputs["logits_heads"])
+        # start_nodes_ids = mode_Fx['start_location'].squeeze(-1).argmax(dim=-1)
+        # goal_nodes_ids = mode_Fx['start_location'].squeeze(-1).argmax(dim=-1)
+        # is_valid = tr.Nav2DTransforms.check_validity_start_goal_dense(
+        #     start_nodes_ids, goal_nodes_ids, layout_nodes=None)
+        # reconstruction_metrics["valid"] = is_valid.tolist()
+        compute_metrics(reconstructed_graphs, reconstruction_metrics, labels=input_batch.get("label_ids"))
         rec_Fx = pl_module.decoder.to_graph_features(outputs["logits_heads"])
         reconstruction_metrics["unique"] = check_unique(rec_Fx).tolist()
         features_idx = [self.attributes.index(f) for f in rec_Fx.keys()]
@@ -361,7 +361,7 @@ class GraphVAELogger(pl.Callback):
         reconstruction_metrics["novel"] = novel_dataset and reconstruction_metrics["solvable"]
         frac_novel_not_repeated = torch.unique(rec_Fx[reconstruction_metrics["novel"]], dim=0).shape[0] / rec_Fx.shape[0]
 
-        del outputs["logits_heads"], start_nodes_ids, goal_nodes_ids, is_valid, reconstructed_graphs, rec_Fx, train_features
+        del outputs["logits_heads"], reconstructed_graphs, rec_Fx, train_features
 
         if self.label_descriptors_config is not None:
             reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
@@ -535,9 +535,14 @@ class GraphVAELogger(pl.Callback):
         # reassembly
         if remove_dims and mode!="prior":
             temp = interp_Z.clone().to(device=pl_module.device)
-            interp_Z = torch.zeros(*interp_Z.shape[:-1], Z_dim,
-                                                      dtype=torch.float).to(pl_module.device)
+            interp_Z = torch.zeros(*interp_Z.shape[:-1], Z_dim, dtype=torch.float).to(pl_module.device)
             interp_Z[..., kept_dims] = temp
+            temp = mean.clone().to(device=pl_module.device)
+            mean = torch.zeros(*mean.shape[:-1], Z_dim, dtype=torch.float).to(pl_module.device)
+            mean[..., kept_dims] = temp
+            temp = std.clone().to(device=pl_module.device)
+            std = torch.ones(*std.shape[:-1], Z_dim, dtype=torch.float).to(pl_module.device)
+            std[..., kept_dims] = temp
             del temp
 
         to_log = {

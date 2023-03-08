@@ -711,7 +711,7 @@ class GraphMLPDecoder(nn.Module):
                         mask_layer = ((torch.isin(feat_modes[hc], masked_attributes_idx)) & (modes[hc].sum(dim=-1) != 0)).unsqueeze(-1)
                         mask = mask | mask_layer
                     elif self.output_distributions[hc].domain == "nodeset":
-                        feat_modes = {hc: torch.argmax(modes[hc].squeeze(), dim=-1) for hc in
+                        feat_modes = {hc: torch.argmax(modes[hc].squeeze(-1), dim=-1) for hc in
                                       self.output_distributions[head].condition_on}
                         ids = torch.arange(feat_modes[hc].shape[0], device=feat_modes[hc].device)
                         mask[ids, feat_modes[hc]] = True

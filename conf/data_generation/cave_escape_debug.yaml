@@ -25,8 +25,8 @@ gridworld_data_dim: [3,15,15]
 generating_algorithm: [wave_function_collapse]
 task_type: cave_escape
 task_structure_split: #Assumed similar across train and test batches
-                     obstacles_blackdots : 1
-                     obstacles_hogs2 : 1
+                     obstacles_blackdots : 0
+                     obstacles_hogs2 : 0
                      obstacles_hogs3 : 1
                      obstacles_angular : 1
                      dungeon_mazescaled : 1

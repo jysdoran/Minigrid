@@ -11,11 +11,3 @@ gridworld_data_dim: [3,15,15]
 encoding: dense
 max_nodes: null #AUTO
 node_attributes: ["non_navigable", "navigable", "start", "goal", "moss", "lava", "wall", "empty"]
-label_descriptors: #TODO: update or make auto
-  - task_structure # AUTO {maze, rooms_unstructured}
-  - shortest_path
-  - resistance
-  - optimal_trajectories
-  - generating_algorithm #{'prims', 'multiroom'}
-  - seed
-  - images
