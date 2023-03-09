@@ -772,14 +772,14 @@ class GraphMLPDecoder(nn.Module):
                 logits_invalid = torch.all(logits_Fx_masked[key].squeeze(-1) == float('-inf'), dim=-1)
                 if logits_invalid.any():
                     invalid_batch_idx = logits_invalid.nonzero().flatten()
-                    logger.warning(f"Invalid logits detected for {self.output_distributions[key]} at "
+                    logger.warning(f"Invalid logits detected for {key} at "
                                    f"batch indices: {invalid_batch_idx.tolist()}."
                                    f" Sampling object at random within masked logits instead.")
                     sampled_idx = []
                     for idx in invalid_batch_idx:
                         sampling_set = torch.where(mask[key][idx])[0]
                         if len(sampling_set) == 0:
-                            logger.warning(f"Invalid masks detected for {self.output_distributions[key]} at "
+                            logger.warning(f"Invalid masks detected for {key} at "
                                            f"batch indices: {invalid_batch_idx.tolist()}."
                                            f" Sampling object at random within all nodes instead "
                                            f" (layout is guaranteed to be invalid).")
