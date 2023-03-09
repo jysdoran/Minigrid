@@ -1,5 +1,5 @@
-name: cave_escape_dense_graph_16k_4ts
-dir_name: cave_escape_dense_graph_16k_4ts
+name: cave_escape_16k_4ts
+dir_name: cave_escape_16k_4ts
 source_dataset: minigrid_dense_graph_1M
 
 size: null #AUTO
@@ -24,8 +24,31 @@ ensure_connected: true #make sure layouts have a single component
 gridworld_data_dim: [3,15,15]
 generating_algorithm: [wave_function_collapse]
 task_type: cave_escape
+#task_structure_split: #Assumed similar across train and test batches
+#                     obstacles_blackdots : 0
+#                     obstacles_hogs2 : 0
+#                     obstacles_hogs3 : 1
+#                     obstacles_angular : 0
+#                     dungeon_mazescaled : 0
+#                     maze_wall : 0
+#                     maze_simple : 0
+#                     rooms_fabric : 0
+#                     dungeon_rooms : 0
+#                     maze_knot : 0
+#                     maze_paths : 0
+#                     rooms_office : 0
+#                     skew_2 : 0
+#                     skew_cave : 0
+#                     dungeon_spirals_neg : 0
+#                     maze_like : 0
+#                     maze_spirals : 0
+#                     dungeon_lessrooms : 0
+#                     rooms_magicoffice : 0
+#                     dungeon_ : 0
+#                     skew_lake : 0
+#                     maze_ : 0
 task_structure_split: #Assumed similar across train and test batches
-                     obstacles_blackdots : 1
+                     obstacles_blackdots : 0
                      obstacles_hogs2 : 0
                      obstacles_hogs3 : 1
                      obstacles_angular : 0
@@ -121,11 +144,11 @@ graph_feature_descriptors:
 # NAME: BETWEEN, STRUCTURE, WEIGHT)
 graph_edge_descriptors:
   navigable:
-    between: [navigable, navigable]
+    between: [navigable]
     structure: grid
     weight: null
   non_navigable:
-    between: [non_navigable, non_navigable]
+    between: [non_navigable]
     structure: grid
     weight: null
   lava_goal:
@@ -156,14 +179,14 @@ lava_distribution_params:
   score_metric: shortest_path
   distribution: power_rank #power_rank or power
   fraction: 0.25 #range if randomised
-  temperature: 0.5 #range if randomised
+  temperature: 1 #range if randomised
   nodes:
-    - non_navigable
+    - wall
 
 moss_distribution_params:
   score_metric: shortest_path
   distribution: power_rank #power_rank or power
   fraction: 0.25 #range if randomised
-  temperature: 0.5 #range if randomised
+  temperature: 1 #range if randomised
   nodes:
-    - navigable
+    - empty

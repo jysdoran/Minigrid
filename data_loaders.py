@@ -15,6 +15,7 @@ from torchvision.datasets.vision import VisionDataset
 from dgl.dataloading import GraphDataLoader
 
 #import memory_profiler
+import data_generators as dg
 import maze_representations.util.util as util
 import maze_representations.util.transforms as tr
 from util import DotDict
@@ -97,6 +98,7 @@ class GridNav_Dataset(VisionDataset):
 
         try:
             meta_file_path = file_path + '.meta'
+            extra_data_file_path = file_path + '.dgl.extra'
             with open(meta_file_path, "rb") as f:
                 entry = pickle.load(f, encoding="latin1")
                 if isinstance(entry['label_contents'], DotDict):
@@ -112,6 +114,11 @@ class GridNav_Dataset(VisionDataset):
                 if self.data_type == 'graph':
                     if not os.path.exists(file_path): raise FileNotFoundError()
                     graphs, labels = dgl.load_graphs(file_path)
+                    if os.path.exists(extra_data_file_path):
+                        extra_data = dgl.load_graphs(extra_data_file_path)
+                        extra_data = dg.GridNavDatasetGenerator.assemble_extra_data(extra_data)
+                        entry['label_contents']['edge_graphs'] = extra_data['edge_graphs']
+
                     self.data.extend(graphs)
                     self.targets.extend(labels['labels'])
                 if self.no_images:
@@ -144,6 +151,15 @@ class GridNav_Dataset(VisionDataset):
                                     self.target_contents[key] = val
                                 else:
                                     self.target_contents[key] = torch.cat((self.target_contents[key], val))
+                            elif isinstance(entry["label_contents"][key], dict):
+                                if key not in self.target_contents:
+                                    self.target_contents[key] = entry["label_contents"][key]
+                                else:
+                                    for k in entry["label_contents"][key].keys():
+                                        if k not in self.target_contents[key]:
+                                            self.target_contents[key][k] = entry["label_contents"][key][k]
+                                        else:
+                                            self.target_contents[key][k].extend(entry["label_contents"][key][k])
                             else:
                                 raise ValueError("Unsupported type for target_contents")
                     except KeyError as e:
@@ -161,13 +177,13 @@ class GridNav_Dataset(VisionDataset):
 
     def _load_meta(self) -> None:
         path = os.path.join(self.root, self.base_folder, self.meta["filename"])
-        # if not check_integrity(path, self.meta["md5"]): #TODO: reenable
+        # if not check_integrity(path, self.meta["md5"]):
         #     raise RuntimeError("Dataset metadata file not found or corrupted.")
         with open(path, "rb") as infile:
             self.dataset_metadata = pickle.load(infile, encoding="latin1")
             self.label_descriptors = self.dataset_metadata.config.label_descriptors
             self.data_type = self.dataset_metadata.config.data_type
-        self.label_to_idx = {_class: i for i, _class in enumerate(self.label_descriptors)} #TODO: decide if we replace by self.label_to_idx
+        self.label_to_idx = {_class: i for i, _class in enumerate(self.label_descriptors)}
 
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
         """
@@ -317,6 +333,9 @@ class GridNavDataModule(pl.LightningDataModule):
                     self.target_contents[key] = \
                         torch.cat((self.target_contents[key], dataset_test.target_contents[key]))
                     self.target_contents[key] = self.target_contents[key].tolist()
+                elif isinstance(self.target_contents[key], dict):
+                    for k in self.target_contents[key].keys():
+                        self.target_contents[key][k].extend(dataset_test.target_contents[key][k])
                 else:
                     raise ValueError("Unsupported type for target_contents")
                 self.target_contents[key] = dict(zip(targets, self.target_contents[key]))
@@ -367,7 +386,6 @@ class GridNavDataModule(pl.LightningDataModule):
     @property
     def task_structures(self):
         return self.target_contents['task_structure']
-
 
 
 class WrappedDataLoader:
