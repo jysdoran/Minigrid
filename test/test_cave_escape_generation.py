@@ -11,12 +11,15 @@
 # - update_edge_graph function to add nodes to the edged graphs
 import copy
 
+import dgl
 import pytest
+import torch
 from mock import patch
 import numpy as np
 import networkx as nx
 import maze_representations.data_generators as dg
 from util import DotDict
+from maze_representations.util.util import dgl_to_nx, nx_to_dgl
 
 
 @pytest.fixture
@@ -254,9 +257,11 @@ def test_add_edges_stage1(grid_graph_6x6, wfc_batch):
     edge_config = DotDict({'navigable':{'between':['navigable'], 'structure':'grid', 'weight':None}})
     g_test = nx.create_empty_copy(g, with_data=True)
     edge_g = b._add_edges([g_test], edge_config)
-    edge_g = edge_g[0]
+    g = nx.convert_node_labels_to_integers(g)
+    g_test = nx.convert_node_labels_to_integers(g_test)
+    nav_g = dgl_to_nx(edge_g['navigable'][0])
     assert set(g_test.edges()) == set(g.edges())
-    assert set(g_test.edges()) == set(edge_g['navigable'].edges())
+    assert set(g_test.edges()) == set(nav_g.edges())
     nav_nodes = [n for n in g.nodes if g.nodes[n]['navigable'] == 1.0]
     for n in nav_nodes:
         for m in nav_nodes:
@@ -266,6 +271,9 @@ def test_add_edges_stage1(grid_graph_6x6, wfc_batch):
 def test_add_edges_stage2(grid_graph_6x6, wfc_batch):
     gl = [grid_graph_6x6]
     b = wfc_batch
+    edge_config = DotDict({'navigable':{'between':['navigable'], 'structure':'grid', 'weight':None}})
+    g_test = nx.create_empty_copy(gl[0], with_data=True)
+    edge_graphs = b._add_edges([g_test], edge_config)
     spl = dg.WaveCollapseBatch._place_goal_random(gl)
     _ = b._place_moss_cave_escape(gl, spl)
     _ = b._place_lava_cave_escape(gl, spl)
@@ -273,16 +281,17 @@ def test_add_edges_stage2(grid_graph_6x6, wfc_batch):
 
     g = gl[0]
 
-    edge_graphs = {'navigable':g}
+    # edge_graphs = {'navigable':[g]}
     edge_config = DotDict({
                               'non_navigable':{'between':['non_navigable'], 'structure':'grid', 'weight':None},
                               'lava_goal'    :{'between':['lava', 'goal'], 'structure':None, 'weight':'lava_prob'},
                               'moss_goal'    :{'between':['moss', 'goal'], 'structure':None, 'weight':'moss_prob'},
                               'start_goal'   :{'between':['start', 'goal'], 'structure':None, 'weight':None}
                               })
-    edge_g = b._add_edges([g], edge_config, [edge_graphs])
-    edge_g = edge_g[0]
-    for attr in edge_config:
+    edge_g = b._add_edges([g], edge_config, edge_graphs)
+    g = nx.convert_node_labels_to_integers(g)
+    for attr in edge_g:
+        edge_g[attr] = dgl_to_nx(edge_g[attr][0]) #converting 1 element list to element for convenience
         assert set(edge_g[attr].edges()).issubset(set(g.edges()))
 
     stacked_edges = set().union(*[set(edge_g[attr].edges()) for attr in edge_g])
@@ -316,11 +325,13 @@ def test_add_edges_stage2(grid_graph_6x6, wfc_batch):
 def test_update_graph_features(grid_graph_6x6, wfc_batch):
     gl = [grid_graph_6x6]
     b = wfc_batch
+    edge_config = DotDict({'navigable':{'between':['navigable'], 'structure':'grid', 'weight':None}})
+    g_test = nx.create_empty_copy(gl[0], with_data=True)
+    edge_graphs = b._add_edges([g_test], edge_config)
     spl = dg.WaveCollapseBatch._place_goal_random(gl)
     _ = b._place_moss_cave_escape(gl, spl)
     _ = b._place_lava_cave_escape(gl, spl)
     _ = b._place_start_cave_escape(gl, spl)
-    edge_graphs = [{'navigable':gl[0]}]
     edge_config = DotDict({
                               'non_navigable':{'between':['non_navigable'], 'structure':'grid', 'weight':None},
                               'lava_goal'    :{'between':['lava', 'goal'], 'structure':None, 'weight':'lava_prob'},
@@ -331,9 +342,12 @@ def test_update_graph_features(grid_graph_6x6, wfc_batch):
     edge_g = b._add_edges(gl, edge_config, edge_graphs)
     g = gl[0]
     edge_g = edge_g[0]
+    g = nx_to_dgl(g)
 
-    b._update_graph_features(graphs=[edge_g], reference_graphs=[g])
-    for n in g.nodes:
-        for key in edge_g:
-            for attr in g.nodes[n]:
-                assert g.nodes[n][attr] == edge_g[key].nodes[n][attr]
+    b._update_graph_features(graphs=edge_g, reference_graphs=[g])
+    for key in edge_g:
+        for i, ed_g in enumerate(edge_g[key]):
+            for attr in g.ndata:
+                assert ed_g.ndata[attr].shape == g.ndata[attr].shape
+                assert ed_g.ndata[attr].dtype == g.ndata[attr].dtype
+                assert torch.all(ed_g.ndata[attr] == g.ndata[attr])

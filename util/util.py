@@ -1,9 +1,11 @@
+import logging
 import torch
 import torchvision
 import dgl
 from dgl.dataloading import GraphDataLoader
 import os
 import numpy as np
+import networkx as nx
 import random
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -13,6 +15,8 @@ from typing import Tuple, List, Union, Any
 import sys
 
 from . import transforms as tr
+
+logger = logging.getLogger(__name__)
 
 #WIP section
 
@@ -152,6 +156,17 @@ def get_node_features(graph:Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attrib
 
     return Fx, node_attributes
 
+
+def dgl_to_nx(graph: dgl.DGLGraph) -> nx.Graph:
+    """Converts a DGLGraph to a NetworkX graph."""
+    return nx.Graph(dgl.to_networkx(graph, node_attrs=graph.ndata.keys()))
+
+def nx_to_dgl(graph: nx.Graph) -> dgl.DGLGraph:
+    """Converts a NetworkX graph to a DGLGraph."""
+    if any([not isinstance(n, int) for n in graph.nodes()]):
+        logger.warning("Supplied Nx graph had non-integer node labels. Will convert to integers prior to changing to dgl.")
+        graph = nx.convert_node_labels_to_integers(graph)
+    return dgl.from_networkx(graph, node_attrs=graph.nodes[0].keys())
 
 def interpolate_between_pairs(pairs: List[Tuple[int, int]], data: torch.Tensor, num_interpolations: int,
                               scheme: str) -> Tuple[torch.Tensor, List[Any]]:
