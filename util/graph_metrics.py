@@ -124,9 +124,9 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target
     return graph, valid, connected
 
 
-def compute_metrics(graphs: Union[List[dgl.DGLGraph], List[nx.Graph]],
-                    metrics: Dict[str, List[float]],labels=None):
+def compute_metrics(graphs: Union[List[dgl.DGLGraph], List[nx.Graph]],labels=None) -> Dict[str, torch.Tensor]:
 
+    metrics = {"valid": [], "solvable": [], "shortest_path": [], "resistance": [], "navigable_nodes":[]}
     graphs_nx = [nx.Graph(dgl.to_networkx(graph.cpu(), node_attrs=graph.ndata.keys())) for graph in graphs]
     for i, graph in enumerate(graphs_nx):
         start_node = [n for n in graph.nodes if graph.nodes[n]['start'] == 1.0]
@@ -154,44 +154,12 @@ def compute_metrics(graphs: Union[List[dgl.DGLGraph], List[nx.Graph]],
             metrics["resistance"].append(resistance_distance(subg, start_node, goal_node))
             metrics["navigable_nodes"].append(num_nav_nodes(subg))
 
-
-def compute_metrics_old(graphs: Union[dgl.DGLGraph, nx.Graph],
-                    metrics: Dict[str, List[float]],
-                    start_nodes: Iterable[int], goal_nodes: Iterable[int], labels=None) -> Dict[str, List[float]]:
-    """
-     Compute nx specific metrics. Also returns the always solvable graph.
-     If the graph is not solvable, the metrics are set to np.nan.
-     Assumes the metrics["valid"] as already been computed.
-    """
-
-    graphs_nx = []
-    for i, graph in enumerate(graphs):
-        start_node = int(start_nodes[i])
-        goal_node = int(goal_nodes[i])
-        graph, valid, solvable = prepare_graph(graph, start_node, goal_node)
-        if valid != metrics["valid"][i]:
-            if labels is None:
-                logger.warning(f"compute_metrics() - Graph {i}/{len(graphs)} was marked valid:{valid}, which contradicts the metric provided valid:{metrics['valid'][i]}."
-                               f"No labels were supplied.")
-            else:
-                logger.warning(
-                    f"compute_metrics() - Graph (label:{labels[i]}) was marked valid:{valid}, which contradicts the metric provided valid:{metrics['valid'][i]}.")
-        graphs_nx.append(graph)
-        try:
-            nodes = set(graph.nodes)
-            assert start_node in nodes and goal_node in nodes
-            _ = metrics['solvable'][i]
-        except (IndexError, AssertionError) as e:
-            if isinstance(e, AssertionError):
-                solvable = False
-            metrics["solvable"].append(solvable)
-        if not solvable:  # then this metrics do not make sense
-            metrics["shortest_path"].append(np.nan)
-            metrics["resistance"].append(np.nan)
-            metrics["navigable_nodes"].append(np.nan)
+    for metric in metrics:
+        if metric in ["valid", "solvable"]:
+            metrics[metric] = torch.tensor(metrics[metric], dtype=torch.bool)
+        elif metric in ["shortest_path", "resistance", "navigable_nodes"]:
+            metrics[metric] = torch.tensor(metrics[metric], dtype=torch.float)
         else:
-            metrics["shortest_path"].append(shortest_path_length(graph, start_node, goal_node))
-            metrics["resistance"].append(resistance_distance(graph, start_node, goal_node))
-            metrics["navigable_nodes"].append(graph.number_of_nodes())  # already reduced to principal component
+            raise ValueError("Unknown metric")
 
-    return metrics, graphs_nx
+    return metrics

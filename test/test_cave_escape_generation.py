@@ -86,8 +86,8 @@ def grid_graph_6x6(grid_nodes_6x6):
 
 @pytest.fixture
 def wfc_batch(grid_graph_6x6):
-    with patch.object(dg.WaveCollapseBatch, '__init__', lambda self:None):
-        b = dg.WaveCollapseBatch()
+    with patch.object(dg.CaveEscapeWaveCollapseBatch, '__init__', lambda self:None):
+        b = dg.CaveEscapeWaveCollapseBatch()
         b.dataset_meta = DotDict({'config':DotDict({})})
         b.dataset_meta.config.moss_distribution_params = DotDict({
                                                                      'score_metric':'shortest_path',
@@ -113,7 +113,7 @@ def wfc_batch(grid_graph_6x6):
 def test_place_goal(grid_graph_6x6):
     lg = [grid_graph_6x6]
     updated_g = copy.deepcopy(lg)
-    spl = dg.WaveCollapseBatch._place_goal_random(updated_g)
+    spl = dg.CaveEscapeWaveCollapseBatch._place_goal_random(updated_g)
 
     updated_g = updated_g[0]
     spl = spl[0]
@@ -141,7 +141,7 @@ def test_place_goal(grid_graph_6x6):
 def test_place_moss(grid_graph_6x6, wfc_batch):
     gl = [grid_graph_6x6]
     b = wfc_batch
-    spl = dg.WaveCollapseBatch._place_goal_random(gl)
+    spl = dg.CaveEscapeWaveCollapseBatch._place_goal_random(gl)
     gl_orig = copy.deepcopy(gl)
     probs = b._place_moss_cave_escape(gl, spl)
 
@@ -180,7 +180,7 @@ def test_place_moss(grid_graph_6x6, wfc_batch):
 def test_place_lava(grid_graph_6x6, wfc_batch):
     gl = [grid_graph_6x6]
     b = wfc_batch
-    spl = dg.WaveCollapseBatch._place_goal_random(gl)
+    spl = dg.CaveEscapeWaveCollapseBatch._place_goal_random(gl)
     _ = b._place_moss_cave_escape(gl, spl)
     gl_orig = copy.deepcopy(gl)
     probs = b._place_lava_cave_escape(gl, spl)
@@ -212,7 +212,7 @@ def test_place_lava(grid_graph_6x6, wfc_batch):
 def test_place_start(grid_graph_6x6, wfc_batch):
     gl = [grid_graph_6x6]
     b = wfc_batch
-    spl = dg.WaveCollapseBatch._place_goal_random(gl)
+    spl = dg.CaveEscapeWaveCollapseBatch._place_goal_random(gl)
     _ = b._place_moss_cave_escape(gl, spl)
     _ = b._place_lava_cave_escape(gl, spl)
     gl_orig = copy.deepcopy(gl)
@@ -274,7 +274,7 @@ def test_add_edges_stage2(grid_graph_6x6, wfc_batch):
     edge_config = DotDict({'navigable':{'between':['navigable'], 'structure':'grid', 'weight':None}})
     g_test = nx.create_empty_copy(gl[0], with_data=True)
     edge_graphs = b._add_edges([g_test], edge_config)
-    spl = dg.WaveCollapseBatch._place_goal_random(gl)
+    spl = dg.CaveEscapeWaveCollapseBatch._place_goal_random(gl)
     _ = b._place_moss_cave_escape(gl, spl)
     _ = b._place_lava_cave_escape(gl, spl)
     _ = b._place_start_cave_escape(gl, spl)
@@ -328,7 +328,7 @@ def test_update_graph_features(grid_graph_6x6, wfc_batch):
     edge_config = DotDict({'navigable':{'between':['navigable'], 'structure':'grid', 'weight':None}})
     g_test = nx.create_empty_copy(gl[0], with_data=True)
     edge_graphs = b._add_edges([g_test], edge_config)
-    spl = dg.WaveCollapseBatch._place_goal_random(gl)
+    spl = dg.CaveEscapeWaveCollapseBatch._place_goal_random(gl)
     _ = b._place_moss_cave_escape(gl, spl)
     _ = b._place_lava_cave_escape(gl, spl)
     _ = b._place_start_cave_escape(gl, spl)

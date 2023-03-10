@@ -338,7 +338,11 @@ class GridNavDataModule(pl.LightningDataModule):
                         self.target_contents[key][k].extend(dataset_test.target_contents[key][k])
                 else:
                     raise ValueError("Unsupported type for target_contents")
-                self.target_contents[key] = dict(zip(targets, self.target_contents[key]))
+                if isinstance(self.target_contents[key], dict):
+                    for k in self.target_contents[key].keys():
+                        self.target_contents[key][k] = dict(zip(targets, self.target_contents[key][k]))
+                else:
+                    self.target_contents[key] = dict(zip(targets, self.target_contents[key]))
 
     def train_dataloader(self):
         loader = self.create_dataloader(self.train, batch_size=self.batch_size, shuffle=True)

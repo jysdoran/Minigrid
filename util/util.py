@@ -143,7 +143,7 @@ def get_node_features(graph:Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attrib
         graph = dgl.batch(graph).to(device)
 
     if node_attributes is None:
-        node_attributes = graph.ndata.keys()
+        node_attributes = list(graph.ndata.keys())
 
     # Get node features
     Fx = []
@@ -159,7 +159,7 @@ def get_node_features(graph:Union[dgl.DGLGraph, List[dgl.DGLGraph]], node_attrib
 
 def dgl_to_nx(graph: dgl.DGLGraph) -> nx.Graph:
     """Converts a DGLGraph to a NetworkX graph."""
-    return nx.Graph(dgl.to_networkx(graph, node_attrs=graph.ndata.keys()))
+    return nx.Graph(dgl.to_networkx(graph.cpu(), node_attrs=graph.ndata.keys()))
 
 def nx_to_dgl(graph: nx.Graph) -> dgl.DGLGraph:
     """Converts a NetworkX graph to a DGLGraph."""
