@@ -7,6 +7,9 @@ import dgl
 import networkx as nx
 import numpy as np
 
+import maze_representations.util.transforms as tr
+import maze_representations.util.util as util
+
 logger = logging.getLogger(__name__)
 
 
@@ -124,11 +127,13 @@ def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target
     return graph, valid, connected
 
 
-def compute_metrics(graphs: Union[List[dgl.DGLGraph], List[nx.Graph]],labels=None) -> Dict[str, torch.Tensor]:
+def compute_metrics(graphs: Union[List[dgl.DGLGraph], List[nx.Graph]], labels=None) -> Dict[str, torch.Tensor]:
+
+    if isinstance(graphs[0], dgl.DGLGraph):
+        graphs = [util.dgl_to_nx(graph) for graph in graphs]
 
     metrics = {"valid": [], "solvable": [], "shortest_path": [], "resistance": [], "navigable_nodes":[]}
-    graphs_nx = [nx.Graph(dgl.to_networkx(graph.cpu(), node_attrs=graph.ndata.keys())) for graph in graphs]
-    for i, graph in enumerate(graphs_nx):
+    for i, graph in enumerate(graphs):
         start_node = [n for n in graph.nodes if graph.nodes[n]['start'] == 1.0]
         goal_node = [n for n in graph.nodes if graph.nodes[n]['goal'] == 1.0]
         assert len(start_node) == 1
@@ -163,3 +168,39 @@ def compute_metrics(graphs: Union[List[dgl.DGLGraph], List[nx.Graph]],labels=Non
             raise ValueError("Unknown metric")
 
     return metrics
+
+
+def get_non_nav_spl(non_nav_nodes: List[Tuple[int, int]], spl_nav: Dict[Tuple[int, int], int],
+                    grid_size: Tuple[int, int], depth: int = 3) -> Dict[Tuple[int, int], int]:
+    neighbors_of_non_nav_nodes = get_neighbors(non_nav_nodes, list(spl_nav.keys()), grid_size)
+    shortest_path_lengths = {}
+    for node_ind, neighbors in enumerate(neighbors_of_non_nav_nodes):
+        neighbors = [n for n in neighbors if n in spl_nav]
+        if neighbors:
+            pathlength = int(np.min([spl_nav[neighbor] for neighbor in neighbors])) + 1
+        else:
+            pathlength = None  # pathlength = np.max(list(shortest_path_lengths_nav.values())) + 1
+        shortest_path_lengths[non_nav_nodes[node_ind]] = pathlength
+    border_nodes = [n for n in shortest_path_lengths if shortest_path_lengths[n] is not None]
+    nodes_to_remove = []
+    for node in shortest_path_lengths:
+        if shortest_path_lengths[node] is None:
+            grid_graph = nx.grid_2d_graph(*grid_size)
+            spl_ = dict(nx.single_target_shortest_path_length(grid_graph, node))
+            if np.min([spl_[border_node] for border_node in border_nodes]) > depth:
+                nodes_to_remove.append(node)
+            else:
+                spl_goal = [spl_[border_node] + shortest_path_lengths[border_node] for border_node in border_nodes]
+                pathlength = np.min(spl_goal)
+                shortest_path_lengths[node] = pathlength
+    [shortest_path_lengths.pop(node) for node in nodes_to_remove]
+
+    return shortest_path_lengths
+
+
+def get_neighbors(nodes: List[Tuple[int, int]], neighbors_set: List[Tuple[int, int]],
+                  grid_size: Tuple[int, int] = None):
+    grid_graph = nx.grid_2d_graph(*grid_size)
+    neighbors_grid = [list(grid_graph.neighbors(node)) for node in nodes]
+    neighbors_grid = [list(set(neighbors_grid[i]) & set(neighbors_set)) for i in range(len(neighbors_grid))]
+    return neighbors_grid

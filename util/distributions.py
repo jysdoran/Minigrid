@@ -1,5 +1,6 @@
 import torch
-
+import numpy as np
+from omegaconf import DictConfig
 
 def evaluate_logprob_continuous_bernoulli(X, *, logits):
     """
@@ -123,3 +124,24 @@ def sample_gaussian_without_reparametrisation(mean, std, *, num_samples=1):
         Z (Tensor):      Samples Z from the diagonal Gaussian q, a batch of shape (num_samples, B, K)
     """
     return sample_gaussian_with_reparametrisation(mean, std, num_samples=num_samples).detach()
+
+
+def compute_weights(scores: np.ndarray, params: DictConfig)-> np.ndarray:
+    if params.distribution == 'power':
+        weights = (scores.clip(0)) ** (1. / params.temperature)
+    elif params.distribution == 'power_rank':
+        temp = np.flip(scores.argsort())
+        ranks = np.empty_like(temp)
+        ranks[temp] = np.arange(len(temp)) + 1
+        weights = 1 / ranks ** (1. / params.temperature)
+    else:
+        raise ValueError(f"Unknown distribution: {params.distribution}")
+
+    z = np.sum(weights)
+    if z > 0:
+        weights /= z
+    else:
+        weights = np.ones_like(weights, dtype=np.float) / len(weights)
+        weights /= np.sum(weights)
+
+    return weights

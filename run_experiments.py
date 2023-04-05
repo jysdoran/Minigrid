@@ -26,6 +26,26 @@ def run_experiment(cfg: DictConfig) -> None:
     process_cfg(cfg)
     seed_everything(cfg.seed)
     test_mode = True if cfg.run_name == "test" else False
+    eval_mode = cfg.get("eval_only", False)
+
+    if eval_mode:
+        logger.info("Evaluating model only")
+        assert cfg.get("checkpoint_path", None) is not None, "Must provide a checkpoint path to evaluate a model"
+        logger.info("Loading model from checkpoint: {}".format(cfg.checkpoint_path))
+        model = LightningGraphVAE.load_from_checkpoint(cfg.checkpoint_path)
+    else:
+        model = LightningGraphVAE(config=cfg.models,
+                                        config_model=cfg.models.configuration,
+                                        config_optim=cfg.optim,
+                                        hparams_model=cfg.models.hyperparameters,
+                                        config_logging =cfg.results)
+
+        # model = hydra.utils.instantiate(config=cfg.models,
+        #                                 config_model=cfg.models.configuration,
+        #                                 config_optim=cfg.optim,
+        #                                 hparams_model=cfg.models.hyperparameters,
+        #                                 config_logging =cfg.results,
+        #                                 _recursive_=False)
 
     dataset_full_dir, cfg.data.dataset.path = get_dataset_dir(cfg.data.dataset, test_mode)
     data_module = GridNavDataModule(dataset_full_dir,
@@ -37,19 +57,6 @@ def run_experiment(cfg: DictConfig) -> None:
                                     no_images=cfg.data.dataset.no_images,
                                     held_out_tasks=cfg.data.dataset.held_out_tasks)
 
-    model = LightningGraphVAE(config=cfg.models,
-                                    config_model=cfg.models.configuration,
-                                    config_optim=cfg.optim,
-                                    hparams_model=cfg.models.hyperparameters,
-                                    config_logging =cfg.results)
-
-    # model = hydra.utils.instantiate(config=cfg.models,
-    #                                 config_model=cfg.models.configuration,
-    #                                 config_optim=cfg.optim,
-    #                                 hparams_model=cfg.models.hyperparameters,
-    #                                 config_logging =cfg.results,
-    #                                 _recursive_=False)
-    #wandb.login(key='x'*40)
     wandb_logger = WandbLogger(project="auto-curriculum-design", save_dir=os.getcwd(), offline=cfg.offline, entity="francelico", log_model=(not cfg.offline))
     if wandb_logger.experiment.name is not None:
         wandb_logger.experiment.name = cfg.run_name + "_" + wandb_logger.experiment.name
@@ -67,11 +74,15 @@ def run_experiment(cfg: DictConfig) -> None:
     ]
     trainer = pl.Trainer(accelerator=cfg.accelerator, devices=cfg.num_devices, max_epochs=cfg.epochs,
                          logger=wandb_logger, callbacks=logging_callbacks)
-    trainer.fit(model, train_dataloaders=data_module.train_dataloader(), val_dataloaders=[data_module.val_dataloader(), data_module.predict_dataloader()])    # run prediction (latent space viz and interpolation) in inference mode
-    trainer.predict(dataloaders=data_module.predict_dataloader())
-    # evaluate the model on a test set
-    trainer.test(datamodule=data_module,
-                 ckpt_path=None)  # uses last-saved model
+    if eval_mode:
+        logger.info("Evaluating trained model")
+        trainer.predict(dataloaders=data_module.predict_dataloader(), model=model)
+        trainer.test(datamodule=data_module, ckpt_path=None, model=model)  # uses last-saved model
+    else:
+        trainer.fit(model, train_dataloaders=data_module.train_dataloader(), val_dataloaders=[data_module.val_dataloader(), data_module.predict_dataloader()])    # run prediction (latent space viz and interpolation) in inference mode
+        trainer.predict(dataloaders=data_module.predict_dataloader())
+        # evaluate the model on a test set
+        trainer.test(datamodule=data_module, ckpt_path=None)  # uses last-saved model
 
     logger.info("Terminating wandb...")
     wandb.finish()

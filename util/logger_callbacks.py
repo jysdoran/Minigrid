@@ -6,18 +6,21 @@ import networkx as nx
 import numpy as np
 import torchvision
 from typing import List, Union, Tuple, Optional, Any, Dict
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 import torch
 import pytorch_lightning as pl
 import wandb
 import einops
 import pandas as pd
+import scipy
+import seaborn as sns
+import matplotlib.pyplot as plt
 from PIL import Image as PILImage
 from envs.multigrid.multigrid import Grid
 
 from . import transforms as tr
-from .graph_metrics import compute_metrics
-from .util import check_unique, check_novel, get_node_features, cdist_polar, interpolate_between_pairs, rgba2rgb
+from .graph_metrics import compute_metrics, get_non_nav_spl
+from .util import check_unique, check_novel, get_node_features, cdist_polar, interpolate_between_pairs, rgba2rgb, dgl_to_nx
 from copy import deepcopy
 from maze_representations.data_loaders import GridNavDataModule
 
@@ -36,6 +39,7 @@ class GraphVAELogger(pl.Callback):
         self.logging_cfg = logging_cfg
         self.dataset_cfg = dataset_cfg
 
+        self.data_module = data_module
         self.label_contents = data_module.target_contents
         self.label_descriptors_config = data_module.dataset_metadata.config.label_descriptors_config
         self.dataset_metadata = data_module.dataset_metadata
@@ -70,6 +74,12 @@ class GraphVAELogger(pl.Callback):
         self.predict_batch = deepcopy(self.batch_template)
         self.validation_step_outputs = deepcopy(self.outputs_template)
         self.predict_step_outputs = deepcopy(self.outputs_template)
+        self.predict_aggregate_metrics = {"prob_moss": pd.DataFrame(columns=["source", "spl", "prob", "use"]),
+                                          "prob_lava": pd.DataFrame(columns=["source", "spl", "prob", "use"]),
+                                          "start_spl": pd.DataFrame(columns=["source", "spl", "count", "use"]),
+                                          "spl_med":   pd.DataFrame(columns=["source", "spl", "count", "use"]),
+                                          #"start_loc": pd.DataFrame(columns=["source", "spl_med", "start_loc"])
+                                          }
 
         try:
             for key in ["train", "val", "test"]:
@@ -87,16 +97,14 @@ class GraphVAELogger(pl.Callback):
             logger.info(f"{key} dataset was not supplied in the samples provided to the GraphVAELogger")
 
         for key in self.graphs.keys():
-            if self.dataset_cfg.encoding == "minimal": #TODO: uniformise with new standard
-                self.gw[key] = self.encode_graph_to_gridworld(self.graphs[key], self.attributes).to(device)
-                self.imgs[key] = self.gridworld_to_img(self.gw[key][:self.num_image_samples]).to(device)
-            elif self.dataset_cfg.encoding == "dense":
+            if self.dataset_cfg.encoding == "dense":
                 self.gw[key] = None
                 if "images" in self.label_contents.keys():
                     self.imgs[key] = self.label_contents["images"][self.labels[key]][:self.num_image_samples]
                 else:
                     self.imgs[key] = tr.Nav2DTransforms.dense_graph_to_minigrid_render(self.graphs[key], tile_size=16)[:self.num_image_samples]
-
+            else:
+                raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not supported.")
         self.resize_transform = torchvision.transforms.Resize((100, 100),
                                                interpolation=torchvision.transforms.InterpolationMode.NEAREST)
 
@@ -225,6 +233,19 @@ class GraphVAELogger(pl.Callback):
                                       latent_sampling=self.logging_cfg.sample_interpolation.sample_latents,
                                       interpolation_scheme=self.logging_cfg.sample_interpolation.interpolation_scheme)
 
+        for metric, data in self.predict_aggregate_metrics.items():
+            fig, ax = plt.subplots(figsize=(16, 14))
+            if metric in ["prob_moss", "prob_lava"]:
+                sns.histplot(data=data, x="spl", hue="source", weights="prob", discrete=True, ax=ax) #kde fit is bad
+                ax.set_ylabel(metric)
+            elif metric in ["start_spl", "spl_med"]: #["start_loc"]:
+                sns.histplot(data=data, x="spl", hue="source", discrete=True, ax=ax, kde=True)
+            else:
+                raise NotImplementedError(f"Metric {metric} not implemented for plotting")
+            # plt.show() #only for debug, comment out
+            fig = wandb.Image(fig) #plotly does not support seaborn
+            wandb.log({f"chart_{metric}_predict":fig})
+
     def on_test_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
         logger.info(f"Progression: Entering on_test_end()")
         if "test" in self.graphs.keys():
@@ -329,10 +350,6 @@ class GraphVAELogger(pl.Callback):
                     input_batch[key] = input_batch[key][:self.num_embedding_samples]
                 outputs["Z"] = outputs["mean"]
 
-        if input_batch.get("graphs") is not None:
-            input_imgs = tr.Nav2DTransforms.dense_graph_to_minigrid_render(input_batch["graphs"],
-                                                                     tile_size=self.logging_cfg.tile_size)
-
         assert outputs["Z"].shape[0] == \
                outputs['logits_heads'][list(outputs['logits_heads'].keys())[0]].shape[0], \
             f"log_latent_embeddings(): Shape mismatch Z={outputs['Z'].shape} != " \
@@ -342,37 +359,124 @@ class GraphVAELogger(pl.Callback):
 
         reconstructed_graphs = pl_module.decoder.to_graph(outputs["logits_heads"],
                                                           make_batch=False, masked=True, edge_config=edge_config_nav)
+        reconstructed_graphs = tr.Nav2DTransforms.graph_to_grid_graph(reconstructed_graphs, level_info=self.dataset_metadata.level_info)
         reconstructed_imgs = self.obtain_imgs(outputs, pl_module)
-        reconstruction_metrics = {k: [] for k in ["valid","solvable","shortest_path", "resistance", "navigable_nodes"]}
-        # TODO: remove
-        # mode_Fx = pl_module.decoder.param_m(outputs["logits_heads"])
-        # start_nodes_ids = mode_Fx['start_location'].squeeze(-1).argmax(dim=-1)
-        # goal_nodes_ids = mode_Fx['start_location'].squeeze(-1).argmax(dim=-1)
-        # is_valid = tr.Nav2DTransforms.check_validity_start_goal_dense(
-        #     start_nodes_ids, goal_nodes_ids, layout_nodes=None)
-        # reconstruction_metrics["valid"] = is_valid.tolist()
-        compute_metrics(reconstructed_graphs, reconstruction_metrics, labels=input_batch.get("label_ids"))
+        reconstruction_metrics = compute_metrics(reconstructed_graphs, labels=input_batch.get("label_ids"))
         rec_Fx = pl_module.decoder.to_graph_features(outputs["logits_heads"])
-        reconstruction_metrics["unique"] = check_unique(rec_Fx).tolist()
+        reconstruction_metrics["unique"] = check_unique(rec_Fx)
         features_idx = [self.attributes.index(f) for f in rec_Fx.keys()]
         train_features = self.train_dataset_features[..., features_idx]
         rec_Fx = torch.stack([rec_Fx[k] for k in rec_Fx.keys()], dim=-1)
-        novel_dataset = check_novel(rec_Fx, train_features).tolist()
-        reconstruction_metrics["novel"] = novel_dataset and reconstruction_metrics["solvable"]
+        novel_dataset = check_novel(rec_Fx, train_features).cpu()
+        reconstruction_metrics["novel"] = novel_dataset & reconstruction_metrics["solvable"]
         frac_novel_not_repeated = torch.unique(rec_Fx[reconstruction_metrics["novel"]], dim=0).shape[0] / rec_Fx.shape[0]
+        # solvable_graphs only
+        solvable_graphs = [g for g, s in zip(reconstructed_graphs, reconstruction_metrics["solvable"]) if s]
+        model_p_cn_cm = self.prob_moss_over_spl(solvable_graphs)
+        model_p_cnn_cl = self.prob_lava_over_spl(solvable_graphs)
+        model_spl_start, model_spl_med = self.spl_start(solvable_graphs, normalise=None)
 
-        del outputs["logits_heads"], reconstructed_graphs, rec_Fx, train_features
+        count_threshold = 100  # TODO: make param
+        if input_batch.get("graphs") is not None:
+            input_imgs = tr.Nav2DTransforms.dense_graph_to_minigrid_render(input_batch["graphs"],
+                                                                     tile_size=self.logging_cfg.tile_size)
+            dataset_nav_graphs = [self.label_contents['edge_graphs']['navigable'][t.item()] for t in input_batch["label_ids"]]
+            dataset_nav_graphs = tr.Nav2DTransforms.graph_to_grid_graph(dataset_nav_graphs, level_info=self.dataset_metadata.level_info)
+            # refers to graphs that have solvable reconstructions.
+            dataset_solvable_graphs = [g for g, s in zip(dataset_nav_graphs, reconstruction_metrics["solvable"]) if s]
+            solvable_targets = [t for t, s in zip(input_batch.get("label_ids"), reconstruction_metrics["solvable"]) if s]
+            dataset_p_cn_cm = self.prob_moss_over_spl(dataset_solvable_graphs, targets=solvable_targets)
+            dataset_p_cnn_cl = self.prob_lava_over_spl(dataset_solvable_graphs, targets=solvable_targets)
+            dataset_spl_start, dataset_spl_med = self.spl_start(dataset_solvable_graphs, targets=solvable_targets)
+            for spl, count in dataset_p_cn_cm[1].items():
+                if count < count_threshold:
+                    spl_nav_threshold = spl #NOTE: spl < spl_threshold and not spl <= spl_threshold
+                    break
+            for spl, count in dataset_p_cnn_cl[1].items():
+                if count < count_threshold:
+                    spl_non_nav_threshold = spl
+                    break
+            del dataset_nav_graphs, dataset_solvable_graphs, solvable_targets
+        else:
+            for spl, count in model_p_cn_cm[1].items():
+                if count < count_threshold:
+                    spl_nav_threshold = spl #NOTE: spl < spl_threshold and not spl <= spl_threshold
+                    break
+            for spl, count in model_p_cnn_cl[1].items():
+                if count < count_threshold:
+                    spl_non_nav_threshold = spl
+                    break
+
+        #TODO:
+        # - only compute spl_prob if we get a minimum of total counts. [Implemented but not applied.]
+
+        if mode == "predict":
+            if not interpolation:
+                aggregate_data = {"dataset": {"prob_moss": dataset_p_cn_cm,
+                                    "prob_lava": dataset_p_cnn_cl,
+                                    "start_spl": dataset_spl_start,
+                                    "spl_med": dataset_spl_med}}
+                id_mode = "rec"
+            else:
+                aggregate_data = {}
+                id_mode = "interp"
+
+            aggregate_data["model"] = {"prob_moss": model_p_cn_cm,
+                             "prob_lava": dataset_p_cnn_cl,
+                             "start_spl": model_spl_start,
+                             "spl_med" : model_spl_med,
+                             #"start_loc" : {"spl_start": model_spl_start, "spl_med": model_spl_med}
+                                       }
+
+            for data_source, data_dict in aggregate_data.items(): #i.e. model, {"prob_X": data_X, "prob_Y": data_Y}
+                frames = defaultdict(list)
+                if data_source == "dataset":
+                    source = f"dataset"
+                elif data_source == "model":
+                    source = f"{id_mode}_model"
+                else:
+                    raise ValueError(f"Invalid data source {data_source}")
+                for query, data in data_dict.items(): #i.e "prob_X": data_X
+                    if query in ["prob_moss", "prob_lava"]:
+                        use_data = [1 if spl < spl_nav_threshold else 0 for spl in data.keys()]
+                        # TODO: hacky, a better way would be to log all points in a df and then compute the histogram by filtering the spl.
+                        probs = (np.array(list(data[0].values())) * np.array(use_data)).tolist()
+                        if query == "prob_moss":
+                            kw1, kw2 = "nav", "moss"
+                        elif query == "prob_lava":
+                            kw1, kw2 = "non_nav", "lava"
+                        frames[query].append({"source": [source]*len(data[0]),
+                                     "spl": list(data[0].keys()),
+                                     "prob": probs,
+                                     f"count_{kw1}": list(data[1].values()),
+                                     f"count_{kw2}": list(data[2].values()),
+                                     "use": use_data,
+                                    })
+                    elif query in ["start_spl", "spl_med"]:
+                        frames[query].append({"source": [source]*len(data),
+                                     "spl": data.tolist(),
+                                     "count": [1]*len(data),
+                                     "use": [1]*len(data),
+                                    })
+                    else:
+                        raise ValueError(f"Invalid query {query}")
+                for query, frame in frames.items():
+                    frame = [pd.DataFrame(f) for f in frame]
+                    self.predict_aggregate_metrics[query] = pd.concat([self.predict_aggregate_metrics[query], *frame])
+
+
+        del outputs["logits_heads"], reconstructed_graphs, rec_Fx, train_features, solvable_graphs
 
         if self.label_descriptors_config is not None:
-            reconstruction_metrics = self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
+            self.normalise_metrics(reconstruction_metrics, device=pl_module.device)
             logger.info(f"log_latent_embeddings(): graph metrics normalised.")
 
         # Log average metrics
         to_log = {}
         for key in reconstruction_metrics.keys():
-            data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
-            data = data[~torch.isnan(data)]
-            to_log[f'metric/{tag}/task_metric/R/{key}/{mode}'] = data.mean()
+            data = reconstruction_metrics[key].to(pl_module.device, torch.float)
+            data = data[~torch.isnan(data)].mean()
+            to_log[f'metric/{tag}/task_metric/R/{key}/{mode}'] = data
         to_log[f'metric/{tag}/task_metric/R/novel_unique/{mode}'] = frac_novel_not_repeated
         if outputs.get("unweighted_elbos") is not None:
             to_log[f'metric/unweighted_elbo/{mode}'] = outputs["unweighted_elbos"].mean()
@@ -393,9 +497,9 @@ class GraphVAELogger(pl.Callback):
 
         # Store Reconstruction metrics in the embeddings table
         for key in reversed(["valid", "solvable", "unique", "novel", "shortest_path", "resistance", "navigable_nodes"]):
-            df.insert(0, f"R_{key}", reconstruction_metrics[key])
+            df.insert(0, f"R_{key}", reconstruction_metrics[key].tolist())
             if key in ["shortest_path", "resistance", "navigable_nodes"]:
-                hist_data = torch.tensor(reconstruction_metrics[key]).to(pl_module.device, torch.float)
+                hist_data = reconstruction_metrics[key].to(pl_module.device, torch.float)
                 hist_data = hist_data[~hist_data.isnan()].cpu().numpy()
                 trainer.logger.experiment.log(
                     {
@@ -574,9 +678,7 @@ class GraphVAELogger(pl.Callback):
         del mean, std, interp_Z
 
         logits = {}
-        if self.dataset_cfg.encoding == "minimal":
-            logits["logits_A"], logits["logits_Fx"] = pl_module.decoder(all_Z)
-        elif self.dataset_cfg.encoding == "dense":
+        if self.dataset_cfg.encoding == "dense":
             logits["logits_heads"] = pl_module.decoder(all_Z)
         else:
             raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
@@ -592,13 +694,7 @@ class GraphVAELogger(pl.Callback):
         tag = f"generated/prior/{tag}" if tag is not None else "generated/prior"
         Z_dim = pl_module.hparams.config_model.shared_parameters.latent_dim
         Z = torch.randn(1, self.num_generated_samples, Z_dim).to(device=pl_module.device)
-        if self.dataset_cfg.encoding == "minimal":
-            logits = {}
-            logits["logits_A"], logits["logits_Fx"] = [f.mean(dim=0) for f in pl_module.decoder(Z)]
-            to_log = {
-            f'metric/entropy/A/{tag}': pl_module.decoder.entropy_A(logits["logits_A"]),
-            f'metric/entropy/Fx/{tag}': pl_module.decoder.entropy_Fx(logits["logits_Fx"]).mean()}
-        elif self.dataset_cfg.encoding == "dense":
+        if self.dataset_cfg.encoding == "dense":
             logits = pl_module.decoder(Z)
             for key, val in logits.items():
                 logits[key] = val.mean(dim=0)
@@ -701,12 +797,6 @@ class GraphVAELogger(pl.Callback):
                 images = tr.Nav2DTransforms.minigrid_to_minigrid_render(grids, tile_size=self.logging_cfg.tile_size)
             else:
                 raise NotImplementedError(f"Rendering method {self.logging_cfg.rendering} not implemented for dense graph encoding.")
-        elif self.dataset_cfg.encoding == "minimal":
-            assert self.logging_cfg.rendering != "minigrid", "Error in obtain_imgs(). Minigrid rendering is not implemented for minimal graph encoding."
-            logger.warning(f"Warning {self.logging_cfg.rendering} is Deprecated. Correct behavior not guaranteed.")
-            mode_probs = pl_module.decoder.param_m((outputs["logits_A"], outputs["logits_Fx"]))
-            reconstructed_gws = self.encode_graph_to_gridworld(mode_probs, attributes=pl_module.decoder.attributes)
-            images = self.gridworld_to_img(reconstructed_gws)
         else:
             raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
 
@@ -750,9 +840,6 @@ class GraphVAELogger(pl.Callback):
             heatmap_layouts = {}
             for i, node in enumerate(pl_module.decoder.output_distributions.layout.attributes):
                 heatmap_layouts[node] = self.prob_heatmap_fx(probs_heads['layout'][...,i], grid_dim)
-        elif self.dataset_cfg.encoding == "minimal":
-            logits_A, logits_Fx = pl_module.decoder.param_p((outputs["logits_A"], outputs["logits_Fx"]))
-            heatmap_layout = self.prob_heatmap_A(logits_A, grid_dim)
         else:
             raise NotImplementedError(f"Encoding {self.dataset_cfg.encoding} not implemented.")
 
@@ -779,73 +866,99 @@ class GraphVAELogger(pl.Callback):
 
         return heat_map
 
-    def prob_heatmap_A(self, probs_A, grid_dim):
-
-        assert len(probs_A.shape) == 2 #check A is flattened
-
-        probs_A = probs_A.reshape(probs_A.shape[0], -1, 2)
-
-        flip_bits = tr.FlipBinaryTransform()
-        threshold = .5
-        layout_dim = int(grid_dim * 2 + 1)
-        layout_gw = tr.Nav2DTransforms.encode_reduced_adj_to_gridworld_layout(probs_A, (layout_dim, layout_dim), probalistic_mode=True, prob_threshold=threshold)
-
-        heat_map = torch.zeros((*layout_gw.shape, 4)).to(layout_gw)  # (B, H, W, C), C=RGBA
-        heat_map[..., 0][layout_gw >= threshold] = 1 #val >= threshold go to red channel
-        heat_map[..., 3][layout_gw >= threshold] = (layout_gw[layout_gw >= threshold] - threshold)*2 #set transparency according to prob rescaled from [treshold,1] to [0,1]
-        heat_map[..., 2][layout_gw < threshold] = 1 #val <= threshold go to red channel
-        heat_map[..., 3][layout_gw < threshold] = flip_bits((layout_gw[layout_gw < threshold])*2)  #set transparency according to prob rescaled from [0,treshold] to [0,1], then flipped to [1,0]
-        heat_map = einops.rearrange(heat_map, 'b h w c -> b c h w')
-
-        return heat_map
-
-    def encode_graph_to_gridworld(self, graphs, attributes):
-        raise NotImplementedError("Deprecated")
-        return tr.Nav2DTransforms.encode_graph_to_gridworld(graphs, attributes, self.used_attributes)
-
-    def gridworld_to_img(self, gws):
-        """
-        :param gws: [B, C, H, W]
-        :param gws:
-        :return: imgs: rgb image tensor with dimensions [B, C, H, W]
-        """
-        colors = {
-            'wall': [0., 0., 0., 1.],   #black
-            'empty': [0., 0., 0., 0.],  #white
-            'start': [0., 0., 1., 1.],  #blue
-            'goal': [0., 1., 0., 1.],   #green
-            # "bright_red" : [1, 0, 0, 1],
-            # "light_red"  : [1, 0, 0, 0.1],
-            # "bright_blue": [0, 0, 1, 1],
-            # "light_blue" : [0, 0, 1, 0.1],
-        }
-
-        assert tr.OBJECT_TO_CHANNEL_AND_IDX["wall"][1] != 0 or tr.OBJECT_TO_CHANNEL_AND_IDX["empty"][1] != 0
-        if tr.OBJECT_TO_CHANNEL_AND_IDX["empty"][1] != 0:
-            colors.pop("wall")
-        else:
-            colors.pop("empty")
-
-        imgs = torch.zeros((gws.shape[0], 4, *gws.shape[-2:])).to(gws.device)
-
-        for feat in colors.keys():
-            mask = gws[:, tr.OBJECT_TO_CHANNEL_AND_IDX[feat][0], ...] == tr.OBJECT_TO_CHANNEL_AND_IDX[feat][1]
-            color = torch.tensor(colors[feat]).to(gws)
-            cm = torch.einsum('c, b h w -> b c h w', color, mask)
-            imgs[cm>0] = cm[cm>0]
-
-        imgs = rgba2rgb(imgs)
-
-        return imgs
-
     def normalise_metrics(self, metrics, device=torch.device("cpu")):
 
         for key in metrics.keys():
+            if isinstance(metrics[key], list):
+                metrics[key] = torch.tensor(metrics[key])
             if key in self.label_descriptors_config.keys():
-                if isinstance(metrics[key], list):
-                    metrics[key] = torch.tensor(metrics[key]).to(device, torch.float)
+                metrics[key] = metrics[key].to(device)
                 metrics[key] /= self.label_descriptors_config[key].normalisation_factor
-                if isinstance(metrics[key], torch.Tensor):
-                    metrics[key] = metrics[key].tolist()
+                # if isinstance(metrics[key], torch.Tensor):
+                #     metrics[key] = metrics[key].tolist()
 
-        return metrics
+    def prob_moss_over_spl(self, graphs:List[nx.Graph], targets=None) -> Dict[int, float]:
+
+        spl_moss = defaultdict(int)
+        spl_nav = defaultdict(int)
+
+        for m, g_nx in enumerate(graphs):
+            if targets is None:
+                goal_node = [n for n in g_nx.nodes if g_nx.nodes[n]['goal'] == 1.0]
+                assert len(goal_node) == 1
+                goal_node = goal_node[0]
+                spl_graph = dict(nx.single_target_shortest_path_length(g_nx, goal_node))
+            else:
+                spl_graph = self.label_contents['shortest_path_dist'][targets[m].item()]
+            for n, s in spl_graph.items():
+                if g_nx.nodes[n]['goal'] != 1.0 and (g_nx.nodes[n]['moss'] == 1.0 or g_nx.nodes[n]['empty'] == 1.0):
+                    spl_nav[s] += 1
+                    if g_nx.nodes[n]['moss'] == 1.0:
+                        assert g_nx.nodes[n]['empty'] != 1.0
+                        spl_moss[s] += 1
+
+        spl_nav = {k: spl_nav[k] for k in sorted(spl_nav.keys())}
+        spl_moss = {k: spl_moss[k] for k in sorted(spl_nav.keys())}
+        moss_vs_spl_p = {k: spl_moss[k]/spl_nav[k] for k in spl_nav.keys()}
+        return moss_vs_spl_p, spl_nav, spl_moss
+
+    def prob_lava_over_spl(self, graphs:List[nx.Graph], targets=None) -> Dict[int, float]:
+
+        grid_size = tuple([int(np.sqrt(self.dataset_cfg.max_nodes))] * 2)
+        depth = self.dataset_metadata.config.lava_distribution_params.get("sampling_depth", 3)
+
+        spl_lava = defaultdict(int)
+        spl_non_nav = defaultdict(int)
+
+        for m, g_nx in enumerate(graphs):
+            if targets is None:
+                goal_node = [n for n in g_nx.nodes if g_nx.nodes[n]['goal'] == 1.0]
+                assert len(goal_node) == 1
+                goal_node = goal_node[0]
+                spl_nav_graph = dict(nx.single_target_shortest_path_length(g_nx, goal_node))
+            else:
+                spl_nav_graph = self.label_contents['shortest_path_dist'][targets[m].item()]
+            non_nav_nodes = [n for n in g_nx.nodes if g_nx.nodes[n]['wall'] == 1.0 or g_nx.nodes[n]['lava'] == 1.0]
+            spl_non_nav_graph = get_non_nav_spl(non_nav_nodes, spl_nav_graph, grid_size, depth)
+            for n, s in spl_non_nav_graph.items():
+                if g_nx.nodes[n]['lava'] == 1.0 or g_nx.nodes[n]['wall'] == 1.0:
+                    spl_non_nav[s] += 1
+                    if g_nx.nodes[n]['lava'] == 1.0:
+                        assert g_nx.nodes[n]['wall'] != 1.0
+                        spl_lava[s] += 1
+
+        spl_non_nav = {k: spl_non_nav[k] for k in sorted(spl_non_nav.keys())}
+        spl_lava = {k: spl_lava[k] for k in sorted(spl_non_nav.keys())}
+        lava_vs_spl_p = {k: spl_lava[k]/spl_non_nav[k] for k in spl_non_nav.keys()}
+        return lava_vs_spl_p, spl_non_nav, spl_lava
+
+    def spl_start(self, graphs:List[nx.Graph], targets=None, normalise=None) -> Tuple[np.ndarray, np.ndarray]:
+
+        spl = []
+        spl_start = []
+        for m, g in enumerate(graphs):
+            goal_node_id = [n for n in g.nodes if g.nodes[n]['goal'] == 1.0]
+            assert len(goal_node_id) == 1
+            goal_node_id = goal_node_id[0]
+            if targets is None:
+                s = dict(nx.single_target_shortest_path_length(g, goal_node_id))
+            else:
+                s = self.label_contents['shortest_path_dist'][targets[m].item()]
+            if goal_node_id in s.keys():
+                s.pop(goal_node_id)
+            spl.append(np.array(list(s.values())))
+            start_node_id = [n for n in g.nodes if g.nodes[n]['start'] == 1.0]
+            assert len(start_node_id) == 1
+            start_node_id = start_node_id[0]
+            spl_start.append(s[start_node_id])
+
+        spl_start = np.array(spl_start)
+        spl_med = np.array([np.median(s) for s in spl])
+        # idea: look at histogram of abs(spl_start - spl_med)
+        #from https://journalspress.com/LJRS_Volume19/600_Data-Normalization-using-Median-&-Median-Absolute-Deviation-(MMAD)-based-Z-Score-for-Robust-Predictions-vs-Min%E2%80%93Max-Normalization.pdf
+        if normalise == "MMAP":
+            spl_dev_med = np.array([scipy.stats.median_abs_deviation(s) for s in spl])
+            spl = [(s - spl_med[m])/spl_dev_med[m] for m, s in enumerate(spl)]
+            spl_start = (spl_start - spl_med)/spl_dev_med
+
+        return spl_start, spl_med

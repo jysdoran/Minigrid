@@ -157,6 +157,7 @@ lava_distribution_params:
   distribution: power_rank #power_rank or power
   fraction: 0.25 #range if randomised
   temperature: 1 #range if randomised
+  sampling_depth: 3
   nodes:
     - wall
 

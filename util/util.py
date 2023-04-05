@@ -161,10 +161,12 @@ def dgl_to_nx(graph: dgl.DGLGraph) -> nx.Graph:
     """Converts a DGLGraph to a NetworkX graph."""
     return nx.Graph(dgl.to_networkx(graph.cpu(), node_attrs=graph.ndata.keys()))
 
-def nx_to_dgl(graph: nx.Graph) -> dgl.DGLGraph:
+def nx_to_dgl(graph: nx.Graph, enable_warnings=True) -> dgl.DGLGraph:
     """Converts a NetworkX graph to a DGLGraph."""
     if any([not isinstance(n, int) for n in graph.nodes()]):
-        logger.warning("Supplied Nx graph had non-integer node labels. Will convert to integers prior to changing to dgl.")
+        if enable_warnings:
+            logger.warning("Supplied Nx graph had non-integer node labels. "
+                           "Will convert to integers prior to changing to dgl.")
         graph = nx.convert_node_labels_to_integers(graph)
     return dgl.from_networkx(graph, node_attrs=graph.nodes[0].keys())
 

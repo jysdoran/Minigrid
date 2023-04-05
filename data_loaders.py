@@ -15,7 +15,7 @@ from torchvision.datasets.vision import VisionDataset
 from dgl.dataloading import GraphDataLoader
 
 #import memory_profiler
-import data_generators as dg
+import maze_representations.data_generators as dg
 import maze_representations.util.util as util
 import maze_representations.util.transforms as tr
 from util import DotDict
