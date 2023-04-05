@@ -100,7 +100,7 @@ def graphVAE_elbo_pathwise(X, *, encoder, decoder, num_samples, elbo_coeffs, out
     Fx = decoder.get_node_features(X, node_attributes=decoder.attributes, as_tensor=False)
     # mask Fx if needed
     if decoder.config.attribute_masking == "always":
-        mask = decoder.compute_attribute_mask(Fx=Fx)
+        mask = decoder.compute_attribute_mask_from_Fx(Fx=Fx)
         logits = decoder.masked_logits(logits, mask)
     else:
         mask = None
@@ -518,7 +518,17 @@ class GraphMLPDecoder(nn.Module):
                         "Bernoulli distribution must be over node domain."
                     samples[head] = torch.distributions.Bernoulli(logits=logits[head]).sample((num_samples,))
                 elif self.output_distributions[head].family == "one_hot_categorical":
-                    samples[head] = torch.distributions.OneHotCategorical(logits=logits[head]).sample((num_samples,))
+                    if self.output_distributions[head].domain == "nodeset":
+                        ll = logits[head].squeeze(-1)
+                        samples[head] = torch.distributions.OneHotCategorical(logits=ll).sample((num_samples,)).unsqueeze(-1)
+                    elif self.output_distributions[head].domain == "node":
+                        ll = logits[head]
+                        samples[head] = torch.distributions.OneHotCategorical(logits=ll).sample((num_samples,))
+                    else:
+                        raise NotImplementedError(f"Domain {self.output_distributions[head].domain} "
+                                                  f"not implemented for distribution "
+                                                  f"{self.output_distributions[head].family}.")
+
                 else:
                     raise NotImplementedError(f"Family {self.output_distributions[head].family} not implemented.")
         return samples
@@ -657,8 +667,7 @@ class GraphMLPDecoder(nn.Module):
                 raise NotImplementedError(f"Family {self.output_distributions[head].family} not implemented.")
         return entropy
 
-    def compute_attribute_mask(self, logits:Dict[str, torch.Tensor]=None, probs:Dict[str, torch.Tensor]=None,
-                               Fx:Dict[str, torch.Tensor]=None) \
+    def compute_attribute_mask_from_Fx(self, Fx:Dict[str, torch.Tensor]=None) \
             -> Dict[str, torch.Tensor]:
 
         """
@@ -668,18 +677,10 @@ class GraphMLPDecoder(nn.Module):
         during decoding.
 
         Args:
-            logits (Dict[str, torch.Tensor], optional): Dictionary of logits for each head in the output distribution.
-                The shape of each tensor should be (*, B, max_nodes, d), where * is any number of additional dimensions,
-                B is the batch size, max_nodes is the maximum number of nodes in the graph, and d is the dimensionality
-                of the output distribution. Either `logits` or `probs` should be provided.
-            probs (Dict[str, torch.Tensor], optional): Dictionary of probabilities for each head in the output
-                distribution. The shape of each tensor should be the same as for `logits`. Either `logits` or `probs`
-                should be provided.
             Fx (Dict[str, torch.Tensor], optional): Dictionary of input features for each head in the output
                 distribution. The shape of each tensor should be (*, B, max_nodes, D), where * is any number of
                 additional dimensions, B is the batch size, max_nodes is the maximum number of nodes in the graph,
-                and D is the dimensionality of the input features. If `Fx` is provided, `logits` and `probs` should
-                not be provided.
+                and D is the dimensionality of the input features.
 
         Returns:
             attribute_mask (Dict[str, torch.Tensor]): Dictionary of attribute masks for each head in the output
@@ -688,36 +689,94 @@ class GraphMLPDecoder(nn.Module):
                 dimensionality of the output distribution.
         """
 
-        if Fx is None:
-            modes = self.param_m(logits=logits, probs=probs)
-        else:
-            assert logits is None and probs is None, "Cannot specify both Fx and logits/probs"
-            modes = {}
-            for head in self.output_distributions.keys():
-                modes[head] = torch.stack([Fx[attr] for attr in self.output_distributions[head].attributes], dim=-1)
-
+        probs = {}
+        for head in self.output_distributions.keys():
+            probs[head] = torch.stack([Fx[attr] for attr in self.output_distributions[head].attributes], dim=-1)
         attribute_mask = {}
-        for head in modes:
-            mask = torch.zeros(*modes[head].shape, dtype=torch.bool).to(modes[head].device)
+        for head in probs:
+            mask = torch.zeros(*probs[head].shape, dtype=torch.bool).to(probs[head].device)
             if self.output_distributions[head].conditioning_transform == "mask":
                 for i, hc in enumerate(self.output_distributions[head].condition_on):
                     if self.output_distributions[hc].domain == "node":
-                        feat_modes = {hc: torch.argmax(modes[hc], dim=-1) for hc in
+                        feat_modes = {hc: torch.argmax(probs[hc], dim=-1) for hc in
                                       self.output_distributions[head].condition_on}
                         masked_attributes = self.output_distributions[head].masked_attributes[i]
                         distribution_attributes = list(self.output_distributions[hc].attributes)
                         masked_attributes_idx = torch.tensor([distribution_attributes.index(attr)
-                                                              for attr in masked_attributes]).to(modes[hc].device)
-                        mask_layer = ((torch.isin(feat_modes[hc], masked_attributes_idx)) & (modes[hc].sum(dim=-1) != 0)).unsqueeze(-1)
+                                                              for attr in masked_attributes]).to(probs[hc].device)
+                        mask_layer = ((torch.isin(feat_modes[hc], masked_attributes_idx)) & (probs[hc].sum(dim=-1) != 0)).unsqueeze(-1)
                         mask = mask | mask_layer
                     elif self.output_distributions[hc].domain == "nodeset":
-                        feat_modes = {hc: torch.argmax(modes[hc].squeeze(-1), dim=-1) for hc in
+                        feat_modes = {hc: torch.argmax(probs[hc].squeeze(-1), dim=-1) for hc in
                                       self.output_distributions[head].condition_on}
                         ids = torch.arange(feat_modes[hc].shape[0], device=feat_modes[hc].device)
                         mask[ids, feat_modes[hc]] = True
             else:
                 pass
             attribute_mask[head] = ~mask
+
+        return attribute_mask
+
+    def compute_attribute_mask_from_decoder_output(self, logits:Dict[str, torch.Tensor]=None,
+                                                   probs:Dict[str, torch.Tensor]=None):
+
+        """
+        Computes the attribute mask for each head in the output distribution. At the moment this is exclusive to the
+        cave escape environment.
+
+        The attribute mask is a boolean tensor indicating which logits/probs of the output distribution should be kept
+        during decoding.
+
+        Masking logic:
+            1. compute a mask that filters for p(nav) > 0.5
+            2. compute a mask to sample layout nodes according to p({moss, empty}|nav) and p({lava, wall}|~nav)
+            3. goal will be sampled from p(goal|nav)
+            4. start will be sampled from p(start|nav,~goal)
+
+        Args:
+            logits (Dict[str, torch.Tensor], optional): Dictionary of logits for each head in the output distribution.
+                The shape of each tensor should be (*, B, max_nodes, d), where * is any number of additional dimensions,
+                B is the batch size, max_nodes is the maximum number of nodes in the graph, and d is the dimensionality
+                of the output distribution. Either `logits` or `probs` should be provided.
+            probs (Dict[str, torch.Tensor], optional): Dictionary of probabilities for each head in the output
+                distribution. The shape of each tensor should be the same as for `logits`. Either `logits` or `probs`
+                should be provided.
+
+        Returns:
+            attribute_mask (Dict[str, torch.Tensor]): Dictionary of attribute masks for each head in the output
+                distribution. The shape of each tensor is (*, B, max_nodes, d), where * is any number of additional
+                dimensions, B is the batch size, max_nodes is the maximum number of nodes in the graph, and d is the
+                dimensionality of the output distribution.
+        """
+
+        if probs is None:
+            assert logits is not None, "Must provide either Fx, logits or probs"
+            probs = self.param_p(logits=logits)
+        else:
+            assert logits is None, "Cannot specify both logits and probs"
+
+        # 1. compute a mask that filters for p(nav) > 0.5
+        nav_attributes_idx = [i for i, attr in enumerate(self.output_distributions['layout'].attributes)
+                          if attr in ['moss', 'empty']]
+        nav_probs = torch.stack([probs['layout'][..., i] for i in nav_attributes_idx], dim=-1).sum(dim=-1)
+        nav_mask = torch.zeros_like(nav_probs, dtype=torch.bool)
+        nav_mask[nav_probs > 0.5] = True
+
+        # 2. compute a mask to sample layout nodes according to p({moss, empty}|nav) and p({lava, wall}|~nav)
+        attribute_mask = {'layout': torch.zeros_like(probs['layout'], dtype=torch.bool)}
+        for i in range(len(self.output_distributions['layout'].attributes)):
+            if i in nav_attributes_idx:
+                attribute_mask['layout'][..., i] = nav_mask
+            else:
+                attribute_mask['layout'][..., i] = ~nav_mask
+        # 3. goal will be sampled from p(goal|nav)
+        attribute_mask['goal_location'] = nav_mask.unsqueeze(-1)
+        # 4. start will be sampled from p(start|nav,~goal)
+        attribute_mask['start_location'] = attribute_mask['goal_location'].clone()
+        probs['goal_location'] = probs['goal_location'] * nav_mask.unsqueeze(-1)
+        goal_ids = torch.argmax(probs['goal_location'].squeeze(-1), dim=-1)
+        batch_ids = torch.arange(goal_ids.shape[0]).to(goal_ids.device)
+        attribute_mask['start_location'][batch_ids, goal_ids] = False
 
         return attribute_mask
 
@@ -852,7 +911,7 @@ class GraphMLPDecoder(nn.Module):
             return features_dict
 
     def to_graph_features(self, logits:Dict[str, torch.Tensor]=None, probabilistic=False, masked=True, mask=None,
-                          force_valid=True) \
+                          force_valid=True, sample=True) \
             -> Dict[str, torch.Tensor]:
 
         """
@@ -867,6 +926,8 @@ class GraphMLPDecoder(nn.Module):
             masked (bool): If True, mask the logits prior to computing features.
             mask (torch.Tensor): A mask for the logits.
             force_valid (bool): If True, ensure that there is at least one valid option for each attribute.
+            sample (bool): If True, attributes will be sampled instead of taking their mode. Only done if probabilistic
+                is set to False.
 
         Returns:
             Dict[str, torch.Tensor]: A dictionary containing the graph features.
@@ -876,7 +937,7 @@ class GraphMLPDecoder(nn.Module):
             if mask is None:
                 if self.config.attribute_masking is None:
                     raise RuntimeError("Cannot do auto-masking when attribute masking set to None in decoder config.")
-                mask = self.compute_attribute_mask(logits=logits)
+                mask = self.compute_attribute_mask_from_decoder_output(logits=logits)
             logits = self.masked_logits(logits, mask=mask)
             if force_valid:
                 logits = self.force_valid_masking(logits, mask=mask)
@@ -886,8 +947,15 @@ class GraphMLPDecoder(nn.Module):
 
         if probabilistic:
             param = self.param_p(logits=logits)
+            sample = False
         else:
-            param = self.param_m(logits=logits)
+            if sample:
+                param = self.sample(logits=logits, num_samples=1)
+                for head in param:
+                    param[head] = param[head].squeeze(0)
+            else:
+                param = self.param_m(logits=logits)
+
         feats = {}
         for head in param:
             if head == "adjacency":
@@ -912,7 +980,7 @@ class GraphMLPDecoder(nn.Module):
         return feats
 
     def to_graph(self, logits:Dict[str, torch.Tensor], dim_gridgraph:tuple=None, make_batch:bool=False,
-                 edge_config=None, masked=True, mask=None, force_valid=True) \
+                 edge_config=None, masked=True, mask=None, force_valid=True, sample=True) \
             -> Union[List[dgl.DGLGraph], dgl.DGLGraph]:
         """
         Converts a dictionary of logits to a list of DGLGraph objects / a batched DGLGraph representing the navigation environment.
@@ -925,13 +993,16 @@ class GraphMLPDecoder(nn.Module):
         - masked: A boolean indicating whether to mask the logits before extracting features. Default is True.
         - mask: A tensor mask to use when masking the logits. Default is None.
         - force_valid: A boolean indicating whether to force valid masking when masking the logits. Default is True.
+        - sample (bool): If True, attributes will be sampled instead of taking their mode. Only done if probabilistic
+        is set to False.
 
         Returns:
         - graphs: A list of dense DGLGraph objects representing the navigation environment. If make_batch is True, a single batched DGLGraph object is returned instead.
         """
         if self.shared_params.data_encoding == "dense":
             return self._to_dense_graph(logits, dim_gridgraph=dim_gridgraph, make_batch=make_batch,
-                                        edge_config=edge_config, masked=masked, mask=mask, force_valid=force_valid)
+                                        edge_config=edge_config, masked=masked, mask=mask, force_valid=force_valid,
+                                        sample=sample)
         elif self.shared_params.data_encoding == "minimal":
             return self._to_minimal_graph(logits)
         else:
@@ -944,7 +1015,8 @@ class GraphMLPDecoder(nn.Module):
                         edge_config=None,
                         masked=True,
                         mask=None,
-                        force_valid=True) \
+                        force_valid=True,
+                        sample=True) \
             -> Union[List[dgl.DGLGraph], dgl.DGLGraph]:
         """
         Converts a dictionary of logits to a list of dense DGLGraph objects / a batched DGLGraph representing the navigation environment.
@@ -957,13 +1029,14 @@ class GraphMLPDecoder(nn.Module):
         - masked: A boolean indicating whether to mask the logits before extracting features. Default is True.
         - mask: A tensor mask to use when masking the logits. Default is None.
         - force_valid: A boolean indicating whether to force valid masking when masking the logits. Default is True.
-
+        - sample (bool): If True, attributes will be sampled instead of taking their mode. Only done if probabilistic
+        is set to False.
         Returns:
         - graphs: A list of dense DGLGraph objects representing the navigation environment. If make_batch is True, a single batched DGLGraph object is returned instead.
         """
 
         Fx = self.to_graph_features(logits=logits, probabilistic=False, masked=masked, mask=mask,
-                                    force_valid=force_valid)
+                                    force_valid=force_valid, sample=sample)
 
         if dim_gridgraph is None:
             dim_gridgraph = tuple([x - 2 for x in self.shared_params.gridworld_data_dim[1:]])
