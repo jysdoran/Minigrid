@@ -77,7 +77,7 @@ def run_experiment(cfg: DictConfig) -> None:
     if eval_mode:
         logger.info("Evaluating trained model")
         trainer.predict(dataloaders=data_module.predict_dataloader(), model=model)
-        trainer.test(datamodule=data_module, ckpt_path=None, model=model)  # uses last-saved model
+        # trainer.test(datamodule=data_module, ckpt_path=None, model=model)  # uses last-saved model
     else:
         trainer.fit(model, train_dataloaders=data_module.train_dataloader(), val_dataloaders=[data_module.val_dataloader(), data_module.predict_dataloader()])    # run prediction (latent space viz and interpolation) in inference mode
         trainer.predict(dataloaders=data_module.predict_dataloader())

@@ -78,7 +78,6 @@ class GraphVAELogger(pl.Callback):
                                           "prob_lava": pd.DataFrame(columns=["source", "spl", "prob", "use"]),
                                           "start_spl": pd.DataFrame(columns=["source", "spl", "count", "use"]),
                                           "spl_med":   pd.DataFrame(columns=["source", "spl", "count", "use"]),
-                                          #"start_loc": pd.DataFrame(columns=["source", "spl_med", "start_loc"])
                                           }
 
         try:
@@ -237,11 +236,12 @@ class GraphVAELogger(pl.Callback):
             fig, ax = plt.subplots(figsize=(16, 14))
             if metric in ["prob_moss", "prob_lava"]:
                 sns.histplot(data=data, x="spl", hue="source", weights="prob", discrete=True, ax=ax) #kde fit is bad
-                ax.set_ylabel(metric)
+                ax.set_ylabel(metric, fontsize=20)
             elif metric in ["start_spl", "spl_med"]: #["start_loc"]:
-                sns.histplot(data=data, x="spl", hue="source", discrete=True, ax=ax, kde=True)
+                sns.histplot(data=data, x="spl", hue="source", discrete=True, ax=ax, kde=True, common_norm=False)
             else:
                 raise NotImplementedError(f"Metric {metric} not implemented for plotting")
+            ax.set_xlabel('shortest_path_length', fontsize=20)
             # plt.show() #only for debug, comment out
             fig = wandb.Image(fig) #plotly does not support seaborn
             wandb.log({f"chart_{metric}_predict":fig})
@@ -381,9 +381,10 @@ class GraphVAELogger(pl.Callback):
             input_imgs = tr.Nav2DTransforms.dense_graph_to_minigrid_render(input_batch["graphs"],
                                                                      tile_size=self.logging_cfg.tile_size)
             dataset_nav_graphs = [self.label_contents['edge_graphs']['navigable'][t.item()] for t in input_batch["label_ids"]]
-            dataset_nav_graphs = tr.Nav2DTransforms.graph_to_grid_graph(dataset_nav_graphs, level_info=self.dataset_metadata.level_info)
             # refers to graphs that have solvable reconstructions.
             dataset_solvable_graphs = [g for g, s in zip(dataset_nav_graphs, reconstruction_metrics["solvable"]) if s]
+            dataset_solvable_graphs = tr.Nav2DTransforms.graph_to_grid_graph(dataset_solvable_graphs, level_info=self.dataset_metadata.level_info)
+
             solvable_targets = [t for t, s in zip(input_batch.get("label_ids"), reconstruction_metrics["solvable"]) if s]
             dataset_p_cn_cm = self.prob_moss_over_spl(dataset_solvable_graphs, targets=solvable_targets)
             dataset_p_cnn_cl = self.prob_lava_over_spl(dataset_solvable_graphs, targets=solvable_targets)
@@ -407,9 +408,6 @@ class GraphVAELogger(pl.Callback):
                     spl_non_nav_threshold = spl
                     break
 
-        #TODO:
-        # - only compute spl_prob if we get a minimum of total counts. [Implemented but not applied.]
-
         if mode == "predict":
             if not interpolation:
                 aggregate_data = {"dataset": {"prob_moss": dataset_p_cn_cm,
@@ -422,7 +420,7 @@ class GraphVAELogger(pl.Callback):
                 id_mode = "interp"
 
             aggregate_data["model"] = {"prob_moss": model_p_cn_cm,
-                             "prob_lava": dataset_p_cnn_cl,
+                             "prob_lava": model_p_cnn_cl,
                              "start_spl": model_spl_start,
                              "spl_med" : model_spl_med,
                              #"start_loc" : {"spl_start": model_spl_start, "spl_med": model_spl_med}
@@ -438,7 +436,7 @@ class GraphVAELogger(pl.Callback):
                     raise ValueError(f"Invalid data source {data_source}")
                 for query, data in data_dict.items(): #i.e "prob_X": data_X
                     if query in ["prob_moss", "prob_lava"]:
-                        use_data = [1 if spl < spl_nav_threshold else 0 for spl in data.keys()]
+                        use_data = [1 if spl < spl_nav_threshold else 0 for spl in data[0].keys()]
                         # TODO: hacky, a better way would be to log all points in a df and then compute the histogram by filtering the spl.
                         probs = (np.array(list(data[0].values())) * np.array(use_data)).tolist()
                         if query == "prob_moss":
