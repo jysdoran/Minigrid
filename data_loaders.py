@@ -22,7 +22,7 @@ from util import DotDict
 
 logger = logging.getLogger(__name__)
 
-class GridNav_Dataset(VisionDataset):
+class GridNavDataset(VisionDataset):
     """`MAZE`_ Dataset.
 
     Args:
@@ -225,9 +225,9 @@ class GridNav_Dataset(VisionDataset):
         split = "Train" if self.train is True else "Test"
         return f"Split: {split}"
 
-    def pickle(self, path, label_id, format='minigrid', level_info=None):
+    def pickle(self, path, label_id, format='bitmap', level_info=None):
 
-        if format == 'minigrid':
+        if format == 'bitmap':
             pass
         else:
             raise NotImplementedError
@@ -256,7 +256,48 @@ class GridNav_Dataset(VisionDataset):
             pickle.dump(data, f)
 
 
-class GridNavDataModule(pl.LightningDataModule):
+class CaveEscapeDataset(GridNavDataset):
+
+    def __init__(
+        self,
+        root: str,
+        train: bool = True,
+        transform: Optional[Callable] = None,
+        target_transform: Optional[Callable] = None,
+        no_images = False,
+        held_out_tasks: Optional[List[str]] = None,
+        ) -> None:
+
+        super().__init__(root=root, train=train, transform=transform, target_transform=target_transform,
+                         no_images=no_images, held_out_tasks=held_out_tasks)
+
+    def pickle(self, path, label_id, format='level_embedding', level_info=None):
+
+        if format == 'level_embedding':
+            pass
+        else:
+            raise NotImplementedError
+
+        if level_info is None:
+            level_info = self.dataset_metadata['level_info']
+        task_structure = self.target_contents['task_structure'][label_id]
+        seed = self.target_contents['seed'][label_id]
+
+        graph = self.data[label_id]
+        encoding = tr.Nav2DTransforms.dense_graph_to_minigrid([graph], level_info=level_info)[0]
+        data = {
+            'task_structure': task_structure,
+            'encoding': encoding,
+            'seed': seed,
+            'level_info': level_info
+            }
+
+        with open(path, 'wb') as f:
+            pickle.dump(data, f)
+
+
+class CustomDataModule(pl.LightningDataModule):
+
     def __init__(self, data_dir: str = "", batch_size: int = 32, num_samples: int = 2048,
                  transform=None, num_workers: int = 0, val_data: str = 'train', no_images=True,
                  held_out_tasks:List[str]=None,
@@ -288,7 +329,7 @@ class GridNavDataModule(pl.LightningDataModule):
         dataset_train = None
         dataset_test = None
         if stage == 'fit' or stage is None:
-            dataset_train = GridNav_Dataset(self.data_dir, train=True, transform=self.transform,
+            dataset_train = self.dataset_object(self.data_dir, train=True, transform=self.transform,
                                             no_images=self.no_images, held_out_tasks=self.held_out_tasks)
             self.dataset_metadata = dataset_train.dataset_metadata
             if self.val_data == 'train':
@@ -296,7 +337,7 @@ class GridNavDataModule(pl.LightningDataModule):
                 train, val = random_split(dataset_train, split_size)
             elif self.val_data == 'test':
                 train = dataset_train
-                dataset_test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
+                dataset_test = self.dataset_object(self.data_dir, train=False, transform=self.transform)
                 split_size = [int(0.5 * len(dataset_test)), len(dataset_test) - int(0.5 * len(dataset_test))]
                 val, test = random_split(dataset_test, split_size)
                 self.test = test
@@ -313,16 +354,16 @@ class GridNavDataModule(pl.LightningDataModule):
             self.samples["val"] = next(iter(self.create_dataloader(self.val, batch_size=n_samples)))
         if stage == 'test' or stage is None:
             if self.test is None:
-                dataset_test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
+                dataset_test = self.dataset_object(self.data_dir, train=False, transform=self.transform)
                 self.test = dataset_test
             n_samples = min(self.num_samples, len(self.test))
             self.samples["test"] = next(iter(self.create_dataloader(self.test, batch_size=n_samples)))
 
         if stage is None:
             if dataset_train is None:
-                dataset_train = GridNav_Dataset(self.data_dir, train=True, transform=self.transform)
+                dataset_train = self.dataset_object(self.data_dir, train=True, transform=self.transform)
             if dataset_test is None:
-                dataset_test = GridNav_Dataset(self.data_dir, train=False, transform=self.transform)
+                dataset_test = self.dataset_object(self.data_dir, train=False, transform=self.transform)
             self.dataset = torch.utils.data.ConcatDataset([dataset_train, dataset_test])
             targets = torch.concat([torch.stack(dataset_train.targets), torch.stack(dataset_test.targets)]).tolist()
             self.target_contents = dataset_train.target_contents
@@ -378,6 +419,10 @@ class GridNavDataModule(pl.LightningDataModule):
         return ids
 
     @property
+    def dataset_object(self):
+        return NotImplementedError
+
+    @property
     def images(self):
         try:
             images = self.target_contents['images'].to(torch.float)
@@ -390,6 +435,33 @@ class GridNavDataModule(pl.LightningDataModule):
     @property
     def task_structures(self):
         return self.target_contents['task_structure']
+
+class GridNavDataModule(CustomDataModule):
+
+    def __init__(self, data_dir: str = "", batch_size: int = 32, num_samples: int = 2048,
+                 transform=None, num_workers: int = 0, val_data: str = 'train', no_images=True,
+                 held_out_tasks:List[str]=None,
+                 **kwargs):
+        super().__init__(data_dir, batch_size, num_samples, transform, num_workers, val_data, no_images, held_out_tasks,
+                         **kwargs)
+
+    @property
+    def dataset_object(self):
+        return GridNavDataset
+
+
+class CaveEscapeDataModule(CustomDataModule):
+
+    def __init__(self, data_dir: str = "", batch_size: int = 32, num_samples: int = 2048,
+                 transform=None, num_workers: int = 0, val_data: str = 'train', no_images=True,
+                 held_out_tasks:List[str]=None,
+                 **kwargs):
+        super().__init__(data_dir, batch_size, num_samples, transform, num_workers, val_data, no_images, held_out_tasks,
+                         **kwargs)
+
+    @property
+    def dataset_object(self):
+        return CaveEscapeDataset
 
 
 class WrappedDataLoader:
