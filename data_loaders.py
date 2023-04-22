@@ -15,7 +15,6 @@ from torchvision.datasets.vision import VisionDataset
 from dgl.dataloading import GraphDataLoader
 
 #import memory_profiler
-import maze_representations.data_generators as dg
 import maze_representations.util.util as util
 import maze_representations.util.transforms as tr
 from util import DotDict
@@ -116,7 +115,7 @@ class GridNavDataset(VisionDataset):
                     graphs, labels = dgl.load_graphs(file_path)
                     if os.path.exists(extra_data_file_path):
                         extra_data = dgl.load_graphs(extra_data_file_path)
-                        extra_data = dg.GridNavDatasetGenerator.assemble_extra_data(extra_data)
+                        extra_data = util.assemble_extra_data(extra_data)
                         entry['label_contents']['edge_graphs'] = extra_data['edge_graphs']
 
                     self.data.extend(graphs)

@@ -11,7 +11,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import argparse
-from typing import Tuple, List, Union, Any
+from typing import Tuple, List, Union, Any, Dict
 import sys
 
 from . import transforms as tr
@@ -418,3 +418,17 @@ def load_state(file, model=None, optimizer=None, model_type=None, optim_type=Non
         model.load_state_dict(checkpoint['additional_model_states'][load_different_state])
         optimizer.load_state_dict(checkpoint['additional_optimizer_states'][load_different_state])
     return model, optimizer, parser
+
+
+def assemble_extra_data(entry: Tuple[List[dgl.DGLGraph], Dict[str, torch.Tensor]]) -> Dict[str, Any]:
+    # Takes as input entry = (graphs, extra), the output of a dgl.load_graphs call (https://docs.dgl.ai/_modules/dgl/data/graph_serialize.html#load_graphs).
+    # Returns a dictionary splitting the graphs into N chunks of equal size, where N is the number of keys returned in extras.
+    # Looks like this: output = {"edge_graphs":{key1: [graphs_chunk1], key2: [graphs_chunk2], ...}}
+    graphs, extra = entry
+    num_chunks = len(extra.keys())
+    len_chunks = len(graphs) // num_chunks
+    chunks = [graphs[x:x + len_chunks] for x in range(0, len(graphs), len_chunks)]
+    extra_data = {"edge_graphs":{}}
+    for c, key in enumerate(extra.keys()):
+        extra_data["edge_graphs"][key] = chunks[c]
+    return extra_data
