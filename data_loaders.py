@@ -2,8 +2,9 @@ import logging
 
 import os.path
 import pickle
-from typing import Any, Callable, Optional, Tuple, Dict, List
+from typing import Any, Callable, Optional, Tuple, Dict, List, Union
 
+import networkx as nx
 import numpy as np
 import torch
 import pytorch_lightning as pl
@@ -91,6 +92,100 @@ class GridNavDataset(VisionDataset):
 
         if not self.data:
             raise FileNotFoundError("Dataset not found at specified location.")
+
+        self.target2idx = {target.item(): idx for idx, target in enumerate(self.targets)}
+
+    def get_task_structure_from_target(self, target) -> str:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        return self.target_contents['task_structure'][self.target2idx[target]]
+
+    def get_resistance_distance_from_target(self, target, normalised=False) -> float:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        if not normalised:
+            if self.dataset_metadata.metrics_normalised:
+                norm_factor = self.dataset_metadata.config.label_descriptors_config.resistance['normalisation_factor']
+            else:
+                norm_factor = 1.0
+            metric = self.target_contents['resistance'][self.target2idx[target]].item() * norm_factor
+        else:
+            if not self.dataset_metadata.metrics_normalised:
+                logger.warning("Normalised metric requested, but metric is not normalised. Returning unnormalised metric.")
+            metric = self.target_contents['resistance'][self.target2idx[target]].item()
+        return metric
+
+    def get_shortest_path_from_target(self, target, normalised=False) -> float:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        if not normalised:
+            if self.dataset_metadata.metrics_normalised:
+                norm_factor = self.dataset_metadata.config.label_descriptors_config.resistance['normalisation_factor']
+            else:
+                norm_factor = 1.0
+            metric = int(np.round(self.target_contents['shortest_path'][self.target2idx[target]].item() * norm_factor))
+        else:
+            if not self.dataset_metadata.metrics_normalised:
+                logger.warning("Normalised metric requested, but metric is not normalised. Returning unnormalised metric.")
+            metric = self.target_contents['shortest_path'][self.target2idx[target]].item()
+        return metric
+    
+    def get_navigable_nodes_from_target(self, target, normalised=False) -> float:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        if not normalised:
+            if self.dataset_metadata.metrics_normalised:
+                norm_factor = self.dataset_metadata.config.label_descriptors_config.resistance['normalisation_factor']
+            else:
+                norm_factor = 1.0
+            metric = int(np.round(self.target_contents['navigable_nodes'][self.target2idx[target]].item() * norm_factor))
+        else:
+            if not self.dataset_metadata.metrics_normalised:
+                logger.warning("Normalised metric requested, but metric is not normalised. Returning unnormalised metric.")
+            metric = self.target_contents['navigable_nodes'][self.target2idx[target]].item()
+        return metric
+
+    def get_spl_from_target(self, target) -> Dict[Tuple[int, int], int]:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        return self.target_contents['shortest_path_dist'][self.target2idx[target]]
+
+    def get_nav_graph_from_target(self, target, to_nx=True, to_gridgraph=False) -> Union[nx.Graph, dgl.DGLGraph]:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        graph = self.target_contents['edge_graphs']['navigable'][self.target2idx[target]]
+        if to_nx:
+            graph = util.dgl_to_nx(graph)
+        if to_gridgraph:
+            assert to_nx, "Cannot convert to gridgraph without converting to nx first."
+            graph = tr.Nav2DTransforms.graph_to_grid_graph([graph], level_info=self.dataset_metadata.level_info)[0]
+
+        return graph
+
+    def get_level_encoding_from_target(self, target) -> np.ndarray:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        return self.target_contents['minigrid'][self.target2idx[target]].cpu().numpy()
+
+    def get_moss_density_from_target(self, target) -> float:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        return self.target_contents['moss_density'][self.target2idx[target]]
+
+    def get_lava_density_from_target(self, target) -> float:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        return self.target_contents['lava_density'][self.target2idx[target]]
+
+    def get_spl_vs_moss_count_from_target(self, target) -> Dict[Tuple[int, int], int]:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        return self.target_contents['spl_vs_moss_count'][self.target2idx[target]]
+
+    def get_spl_vs_lava_count_from_target(self, target) -> Dict[Tuple[int, int], int]:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        return self.target_contents['spl_vs_lava_count'][self.target2idx[target]]
 
     #@memory_profiler.profile
     def _load_data(self, file_path: str) -> None:

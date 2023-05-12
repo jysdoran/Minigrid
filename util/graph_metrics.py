@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict, OrderedDict
 
 from typing import List, Any, Dict, Union, Iterable, Tuple
 
@@ -54,6 +55,7 @@ def active_node_count(graph: nx.Graph) -> int:
     graph.remove_nodes_from(list(nx.isolates(graph)))
     return nx.number_of_nodes(graph)
 
+
 def num_nav_nodes(graph: nx.Graph) -> int:
     """
     Compute navigable node count in graph. Input graph should have a grid
@@ -78,6 +80,102 @@ def is_solvable(graph: nx.Graph, source, target) -> bool:
     Check if the graph is solvable.
     """
     return nx.has_path(graph, source, target) and source != target
+
+
+def object_count_vs_spl(graph: nx.Graph=None, target_node: Union[int, Tuple[int, int]]=None, object_type:'str'=None, navigable=True,
+                        grid_size: Tuple[int, int] = (13, 13), depth: int = 3, spl=None) -> Dict[int, int]:
+    """
+    Compute object count vs SPL for a given graph and target node.
+    Either provide as intput:
+    - graph: graph (nx.Graph), target_node (int), object_type (str) -> computes spl and then the count of all nodes matching object type in graph
+    - graph, graph(nx.Graph), spl: dict of shortest path lengths (dict), object_type (str) -> computes the count of all nodes matching object type in graph
+    - spl: dict of shortest path lengths (dict) -> computes the count of all nodes provided in spl
+    :param graph:
+    :param target_node:
+    :param object_type:
+    :param navigable:
+    :param grid_size:
+    :param depth:
+    :param spl:
+    :return:
+    """
+
+    spl_object = defaultdict(int)
+    if spl is None:
+        spl_graph = dict(nx.single_target_shortest_path_length(graph, target_node))
+    else:
+        spl_graph = spl
+    if not navigable:
+        non_nav_nodes = [n for n in graph.nodes if graph.nodes[n]['wall'] == 1.0 or graph.nodes[n]['lava'] == 1.0]
+        spl_graph = get_non_nav_spl(non_nav_nodes, spl_graph, grid_size, depth)
+    for n, s in spl_graph.items():
+        if object_type is None:
+            spl_object[int(s)] += 1
+        elif object_type is not None and graph.nodes[n][object_type] == 1.0:
+            spl_object[int(s)] += 1
+        else:
+            pass
+    return spl_object
+
+
+def compute_spl_distribution(spl_object_counts: List[Dict[int, int]], weights: np.ndarray = None) -> Dict[int, float]:
+    """
+    Compute SPL distribution from a list of SPL object counts.
+    """
+    assert weights.ndim == 1 if weights is not None else True
+    assert len(spl_object_counts) == len(weights) if weights is not None else True
+    spl_distribution = defaultdict(float)
+    for m, spl_object_count in enumerate(spl_object_counts):
+        if weights is not None:
+            w = weights[m]
+        else:
+            w = 1.0
+        for spl, count in spl_object_count.items():
+            spl_distribution[spl] += w * count
+    total = sum(spl_distribution.values())
+    spl_distribution = {spl: count / total for spl, count in spl_distribution.items()}
+    spl_distribution = OrderedDict(sorted(spl_distribution.items()))
+    return spl_distribution
+
+
+def object_density(graph: nx.Graph, object_type: str, node_domain: List[str] = None) -> float:
+    """
+    Compute object density in graph.
+    """
+    if node_domain is None:
+        total_nodes = len(graph.nodes)
+    else:
+        total_nodes = 0
+    node_count = 0
+    for n in graph.nodes:
+        if graph.nodes[n][object_type] == 1.0:
+            node_count += 1
+        if node_domain is not None:
+            for obj in node_domain:
+                if graph.nodes[n][obj] == 1.0:
+                    total_nodes += 1
+                    break
+    assert total_nodes > 0
+    return node_count / total_nodes
+
+
+def compute_weighted_density(densities: np.ndarray, weigths: np.ndarray = None) -> float:
+    """
+    Compute weighted density from a list of densities.
+    """
+    if isinstance(densities, list):
+        densities = np.array(densities)
+    if isinstance(weigths, list):
+        weigths = np.array(weigths)
+    assert densities.ndim == 1
+    assert weigths.ndim == 1 if weigths is not None else True
+    assert len(densities) == len(weigths) if weigths is not None else True
+    if weigths is None:
+        avg_density = float(np.mean(densities))
+    else:
+        w = weigths / np.sum(weigths)
+        avg_density = float(np.sum(w * densities))
+    return avg_density
 
 
 def prepare_graph(graph: Union[dgl.DGLGraph, nx.Graph], source: int=None, target: int=None)\
