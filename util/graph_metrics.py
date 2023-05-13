@@ -133,7 +133,16 @@ def compute_spl_distribution(spl_object_counts: List[Dict[int, int]], weights: n
         for spl, count in spl_object_count.items():
             spl_distribution[spl] += w * count
     total = sum(spl_distribution.values())
-    spl_distribution = {spl: count / total for spl, count in spl_distribution.items()}
+    spl_domain = list(spl_distribution.keys())
+    if len(spl_domain) == 0:
+        return {}
+    spl_max = int(max(spl_domain))
+    for spl in range(spl_max + 1):
+        if spl not in spl_distribution:
+            spl_distribution[spl] = 0.0
+        else:
+            spl_distribution[spl] = spl_distribution[spl] / total
+    # spl_distribution = {spl: count / total for spl, count in spl_distribution.items()}
     spl_distribution = OrderedDict(sorted(spl_distribution.items()))
     return spl_distribution
 
@@ -170,11 +179,12 @@ def compute_weighted_density(densities: np.ndarray, weigths: np.ndarray = None) 
     assert densities.ndim == 1
     assert weigths.ndim == 1 if weigths is not None else True
     assert len(densities) == len(weigths) if weigths is not None else True
+    # ignore nan or inf values in densities
     if weigths is None:
-        avg_density = float(np.mean(densities))
+        avg_density = float(np.mean(densities[np.isfinite(densities)]))
     else:
-        w = weigths / np.sum(weigths)
-        avg_density = float(np.sum(w * densities))
+        w = weigths[np.isfinite(densities)] / np.sum(weigths[np.isfinite(densities)])
+        avg_density = float(np.sum(w * densities[np.isfinite(densities)]))
     return avg_density
 
 
