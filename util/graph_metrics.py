@@ -164,8 +164,10 @@ def object_density(graph: nx.Graph, object_type: str, node_domain: List[str] = N
                 if graph.nodes[n][obj] == 1.0:
                     total_nodes += 1
                     break
-    assert total_nodes > 0
-    return node_count / total_nodes
+    if total_nodes > 0:
+        return node_count / total_nodes
+    else:
+        return 0.0
 
 
 def compute_weighted_density(densities: np.ndarray, weigths: np.ndarray = None) -> float:
