@@ -118,11 +118,12 @@ def object_count_vs_spl(graph: nx.Graph=None, target_node: Union[int, Tuple[int,
     return spl_object
 
 
-def compute_spl_distribution(spl_object_counts: List[Dict[int, int]], weights: np.ndarray = None) -> Dict[int, float]:
+def compile_spl_counts(spl_object_counts: List[Dict[int, int]], weights: np.ndarray = None) -> Dict[int, float]:
     """
     Compute SPL distribution from a list of SPL object counts.
     """
     assert weights.ndim == 1 if weights is not None else True
+    weights = weights / weights.sum() if weights is not None else None
     assert len(spl_object_counts) == len(weights) if weights is not None else True
     spl_distribution = defaultdict(float)
     for m, spl_object_count in enumerate(spl_object_counts):
@@ -132,7 +133,6 @@ def compute_spl_distribution(spl_object_counts: List[Dict[int, int]], weights: n
             w = 1.0
         for spl, count in spl_object_count.items():
             spl_distribution[spl] += w * count
-    total = sum(spl_distribution.values())
     spl_domain = list(spl_distribution.keys())
     if len(spl_domain) == 0:
         return {}
@@ -141,8 +141,7 @@ def compute_spl_distribution(spl_object_counts: List[Dict[int, int]], weights: n
         if spl not in spl_distribution:
             spl_distribution[spl] = 0.0
         else:
-            spl_distribution[spl] = spl_distribution[spl] / total
-    # spl_distribution = {spl: count / total for spl, count in spl_distribution.items()}
+            spl_distribution[spl] = spl_distribution[spl]
     spl_distribution = OrderedDict(sorted(spl_distribution.items()))
     return spl_distribution
 

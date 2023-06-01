@@ -187,6 +187,11 @@ class GridNavDataset(VisionDataset):
             target = target.item()
         return self.target_contents['spl_vs_lava_count'][self.target2idx[target]]
 
+    def get_spl_vs_wall_count_from_target(self, target) -> Dict[Tuple[int, int], int]:
+        if isinstance(target, torch.Tensor):
+            target = target.item()
+        return self.target_contents['spl_vs_wall_count'][self.target2idx[target]]
+
     #@memory_profiler.profile
     def _load_data(self, file_path: str) -> None:
 
