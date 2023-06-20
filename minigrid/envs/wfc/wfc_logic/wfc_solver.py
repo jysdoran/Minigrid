@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Callable, Collection, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple, TypeVar
-from scipy import sparse  # type: ignore
+# from scipy import sparse  # type: ignore
 import numpy
 import numpy as np
 import sys
 import math
 import itertools
 from numpy.typing import NBitBase, NDArray
-from hilbertcurve.hilbertcurve import HilbertCurve  # type: ignore
+# from hilbertcurve.hilbertcurve import HilbertCurve  # type: ignore
 
 logger = logging.getLogger(__name__)
 
