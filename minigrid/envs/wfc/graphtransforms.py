@@ -180,14 +180,15 @@ class GraphTransforms:
         return graphs, edge_graphs
 
     @staticmethod
-    def graph_features_to_minigrid(graph_features: Dict[str, np.ndarray], shape: Tuple[int, int]) -> np.ndarray:
+    def graph_features_to_minigrid(graph_features: Dict[str, np.ndarray], shape: Tuple[int, int], padding=1) -> np.ndarray:
 
         features = graph_features.copy()
         node_attributes = list(features.keys())
 
         color_config = GraphTransforms.MINIGRID_COLOR_CONFIG
 
-        shape_no_padding = (features[node_attributes[0]].shape[-2], shape[0] - 2, shape[1] - 2, 3)
+        # shape_no_padding = (features[node_attributes[0]].shape[-2], shape[0] - 2, shape[1] - 2, 3)
+        shape_no_padding = (shape[0] - 2*padding, shape[1] - 2*padding, 3)
         for attr in node_attributes:
             features[attr] = features[attr].reshape(*shape_no_padding[:-1])
         grids = np.ones(shape_no_padding, dtype=np.uint8) * OBJECT_TO_IDX['empty']
@@ -229,50 +230,79 @@ class GraphTransforms:
                 except KeyError:
                     pass
 
-        padding = np.array(minigrid_object_to_encoding_map['wall'], dtype=np.uint8)
+        wall_encoding = np.array(minigrid_object_to_encoding_map['wall'], dtype=np.uint8)
         # padded_grid = np.transpose(grids, (0, 3, 1, 2))
-        padded_grid = np.pad(grids, ((0, 0), (1, 1), (1, 1), (0, 0)), 'constant', constant_values=-1)
+        padded_grid = np.pad(grids, ((padding, padding), (padding, padding), (0, 0)), 'constant', constant_values=-1)
         # padded_grid = einops.rearrange(grids, 'b h w c -> b c h w')
         # padded_grid = torchvision.transforms.Pad(1, fill=-1, padding_mode='constant')(padded_grid)
         # padded_grid = einops.rearrange(padded_grid, 'b c h w -> b h w c')
-        padded_grid[np.where(padded_grid[..., 0] == -1)] = np.array(list(padding), dtype=np.uint8)
+        padded_grid = np.where(padded_grid == -np.ones(3, dtype=np.uint8), wall_encoding, padded_grid)
+        # padded_grid = np.where(padded_grid[:,:,0] == -np.ones(3, dtype=np.uint8), padding,padding_grid)
+        # padded_grid[np.where(padded_grid[..., 0] == -1)] = np.array(list(padding), dtype=np.uint8)
 
         # grids = padded_grid.cpu().numpy().astype(level_info['dtype'])
 
         return padded_grid
 
+    # @staticmethod
+    # def get_node_features(graph: dgl.DGLGraph, node_attributes: List[str] = None, reshape: bool = True) \
+    #         -> Tuple[np.ndarray, List[str]]:
+    #
+    #     if node_attributes is None:
+    #         # Get node attributes from some node
+    #         # node_attributes = next(iter(graph.nodes)).keys()
+    #
+    #     # Get node features
+    #     Fx = []
+    #     for attr in node_attributes:
+    #         f = graph.ndata[attr]
+    #         if reshape:
+    #             f = f.reshape(graph.batch_size, -1)
+    #         Fx.append(f)
+    #     # Fx = torch.stack(Fx, dim=-1).to(device)
+    #     Fx = np.concatenate(Fx, axis=-1)
+    #
+    #     return Fx, node_attributes
+
     @staticmethod
-    def get_node_features(graph: nx.Graph, node_attributes: List[str] = None, reshape: bool = True) \
+    def get_node_features(graph: nx.Graph, pattern_shape, node_attributes: List[str] = None, reshape=True) \
             -> Tuple[np.ndarray, List[str]]:
 
         if node_attributes is None:
-            node_attributes = graph.nodes[0].keys()
+            # Get node attributes from some node
+            node_attributes = list(next(iter(graph.nodes.data()))[1].keys())
 
         # Get node features
         Fx = []
         for attr in node_attributes:
-            f = graph.ndata[attr]
+            f = np.zeros(pattern_shape)
+            for node, data in graph.nodes.data(attr):
+                f[node] = data
             if reshape:
-                f = f.reshape(graph.batch_size, -1)
+                f = f.ravel()
             Fx.append(f)
         # Fx = torch.stack(Fx, dim=-1).to(device)
-        Fx = np.concatenate(Fx, axis=-1)
+        Fx = np.stack(Fx, axis=-1)
 
         return Fx, node_attributes
 
     @staticmethod
-    def dense_graph_to_minigrid(graph: nx.Graph, shape: Tuple[int, int], color_config=None) -> np.ndarray:
+    def dense_graph_to_minigrid(graph: nx.Graph, shape: Tuple[int, int], padding=1) -> np.ndarray:
 
-        features, node_attributes = GraphTransforms.get_node_features(graph, node_attributes=None, reshape=True)
-        num_zeros = features[features == 0.0].numel()
-        num_ones = features[features == 1.0].numel()
-        assert num_zeros + num_ones == features.numel(), "Graph features should be binary"
+        pattern_shape = (shape[0] - 2 * padding, shape[1] - 2 * padding)
+        features, node_attributes = GraphTransforms.get_node_features(graph, pattern_shape, node_attributes=None)
+        # num_zeros = features[features == 0.0].numel()
+        # num_ones = features[features == 1.0].numel()
+        num_zeros = (features == 0.0).sum()
+        num_ones = (features == 1.0).sum()
+
+        assert num_zeros + num_ones == features.size, "Graph features should be binary"
         features_dict = {}
         for i, key in enumerate(node_attributes):
-            features_dict[key] = features[..., i].float()
+            features_dict[key] = features[..., i]
         grids = GraphTransforms.graph_features_to_minigrid(features_dict,
                                                            shape=shape,
-                                                           color_config=color_config)
+                                                           padding=padding)
 
         return grids
 

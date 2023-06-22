@@ -44,8 +44,7 @@ WFC_PRESETS = {
                             choice_heuristic="weighted", backtracking=False)
 }
 
-# TODO: Work out what this is for
-FEATURE_DESCRIPTORS = {"empty", "wall", "lava", "moss", "start", "goal"}
+FEATURE_DESCRIPTORS = {"empty", "wall", "lava", "start", "goal"} | {"navigable", "non_navigable"}
 
 
 EDGE_CONFIG = {
@@ -117,6 +116,7 @@ class WFCEnv(MiniGridEnv):
         **kwargs,
     ):
         self.config = wfc_config if isinstance(wfc_config, WFCConfig) else WFC_PRESETS[wfc_config]
+        self.padding = 1
 
         # This controls whether to process the level such that there is only a single connected navigable area
         self.ensure_connected = ensure_connected
@@ -144,7 +144,7 @@ class WFCEnv(MiniGridEnv):
     def _gen_grid(self, width, height):
         shape = (height, width)
         for seed in range(self.max_attempts):
-            pattern = self._run_wfc(seed, shape)
+            pattern = self._run_wfc(seed, (shape[0]-2*self.padding, shape[1]-2*self.padding))
             if pattern is not None:
                 break
         else:
@@ -174,15 +174,21 @@ class WFCEnv(MiniGridEnv):
         graph = self._place_start_and_goal_random(graph)
 
         # Convert back to grid
-        grid_array = GraphTransforms.dense_graph_to_minigrid(graph, shape=shape)
+        grid_array = GraphTransforms.dense_graph_to_minigrid(graph, shape=shape, padding=self.padding)
 
         # Decode to minigrid and set variables
-        self.grid = Grid.decode(grid_array)
+        # TODO: set agent direction better?
+        self.agent_dir = 0
+        self.agent_pos = next(zip(*np.nonzero(grid_array[:,:,0] == OBJECT_TO_IDX["agent"])))
+        self.grid, _vismask = Grid.decode(grid_array)
         self.mission = self._gen_mission()
 
     def _run_wfc(self, seed, shape):
         # TODO: reimplement seeding
         # util.seed_everything(seed)=
+        # random.seed(seed)
+        # os.environ['PYTHONHASHSEED'] = str(seed)
+        np.random.seed(seed)
 
         try:
             generated_pattern, stats = wfc_control.execute_wfc(
@@ -250,11 +256,14 @@ class WFCEnv(MiniGridEnv):
 
         # possible_nodes = torch.where(graph.ndata[node_set])[0]
         possible_nodes = [n for n, d in graph.nodes(data=True) if d[node_set]]
-        inds = np.randperm(len(possible_nodes))[:2]
-        start_node, goal_node = possible_nodes[inds]
-        graph[start_node]["start"] = 1
-        graph[goal_node]["goal"] = 1
+        # inds = torch.randperm(len(possible_nodes))[:2]
+        inds = np.random.permutation(len(possible_nodes))[:2]
+        # start_node, goal_node = possible_nodes[inds]
+        start_node, goal_node = possible_nodes[inds[0]], possible_nodes[inds[1]]
+
         # graph.ndata["start"][start_node] = 1
         # graph.ndata["goal"][goal_node] = 1
+        graph.nodes[start_node]["start"] = 1
+        graph.nodes[goal_node]["goal"] = 1
 
         return graph

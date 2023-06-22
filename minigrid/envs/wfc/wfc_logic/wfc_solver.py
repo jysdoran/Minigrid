@@ -136,7 +136,8 @@ def makeAdj(
             # logger.debug(js)
             for j in js:
                 m[i, j] = 1
-        adjMatrices[d] = sparse.csr_matrix(m)
+        # adjMatrices[d] = sparse.csr_matrix(m)
+        adjMatrices[d] = m
     return adjMatrices
 
 
