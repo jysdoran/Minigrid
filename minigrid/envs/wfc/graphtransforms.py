@@ -275,7 +275,12 @@ class GraphTransforms:
         # Get node features
         Fx = []
         for attr in node_attributes:
-            f = np.zeros(pattern_shape)
+            if attr == 'non_navigable' or attr == 'wall':
+                # The graph we are getting is only the navigable nodes so those that
+                # are not present should be assumed to be walls and non-navigable
+                f = np.ones(pattern_shape)
+            else:
+                f = np.zeros(pattern_shape)
             for node, data in graph.nodes.data(attr):
                 f[node] = data
             if reshape:

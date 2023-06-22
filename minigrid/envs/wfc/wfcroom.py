@@ -184,16 +184,13 @@ class WFCEnv(MiniGridEnv):
         self.mission = self._gen_mission()
 
     def _run_wfc(self, seed, shape):
-        # TODO: reimplement seeding
-        # util.seed_everything(seed)=
-        # random.seed(seed)
-        # os.environ['PYTHONHASHSEED'] = str(seed)
+        # TODO: I don't know why this is necessary after changing all the random calls to use self._np_random
         np.random.seed(seed)
-
         try:
             generated_pattern, stats = wfc_control.execute_wfc(
                 attempt_limit=1,
                 output_size=shape,
+                np_random=self._np_random,
                 **self.config.wfc_kwargs
             )
         except wfc_solver.TimedOut or wfc_solver.StopEarly or wfc_solver.Contradiction:
