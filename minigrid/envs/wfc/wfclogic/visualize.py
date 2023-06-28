@@ -12,7 +12,7 @@ import struct
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 from numpy.typing import NDArray
-from .wfc_patterns import pattern_grid_to_tiles
+from .patterns import pattern_grid_to_tiles
 
 logger = logging.getLogger(__name__)
 

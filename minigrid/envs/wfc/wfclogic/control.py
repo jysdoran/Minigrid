@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import datetime
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple
-from .wfc_tiles import make_tile_catalog
-from .wfc_patterns import (
+from .tiles import make_tile_catalog
+from .patterns import (
     pattern_grid_to_tiles,
     make_pattern_catalog_with_rotations,
 )
-from .wfc_adjacency import adjacency_extraction
-from .wfc_solver import (
+from .adjacency import adjacency_extraction
+from .solver import (
     run,
     makeWave,
     makeAdj,
@@ -28,7 +28,7 @@ from .wfc_solver import (
     makeAntiEntropyLocationHeuristic,
     makeRarestPatternHeuristic,
 )
-from .wfc_visualize import (
+from .visualize import (
     figure_list_of_tiles,
     figure_false_color_tile_grid,
     figure_pattern_catalog,
