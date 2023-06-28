@@ -13,7 +13,6 @@ If you want direct control over running WFC, call `wfc_control.execute_wfc()`.
 
 The arguments it accepts are:
 
-- `filename=None`: path to the input image file, this is mostly for internal use and should be left as `None`, set `image` instead.
 - `tile_size=1`: size of the tiles it uses (1 is fine for pixel images, larger is for things like a Super Metroid map)
 - `pattern_width=2`: size of the patterns; usually 2 or 3 because bigger gets slower and
 - `rotations=8`: how many reflections and/or rotations to use with the patterns
@@ -24,7 +23,6 @@ The arguments it accepts are:
 - `input_periodic=True`: the input wraps at the edges
 - `loc_heuristic="entropy"`: what location heuristic to use; `entropy` is the original WFC behavior. The heuristics that are implemented are `lexical`, `hilbert`, `spiral`, `entropy`, `anti-entropy`, `simple`, `random`, but when in doubt stick with `entropy`.
 - `choice_heuristic="weighted"`: what choice heuristic to use; `weighted` is the original WFC behavior, other options are `random`, `rarest`, and `lexical`.
-- `visualize=False`: write intermediate images to disk?  requires `filename`.
 - `global_constraint=False`: what global constraint to use. Currently the only one implemented is `allpatterns`
 - `backtracking=False`: do we use backtracking if we run into a contradiction?
 - `log_filename="log"`: what should the log file be named?
