@@ -7,9 +7,9 @@ import pathlib
 import itertools
 from typing import Dict, Tuple
 import imageio  # type: ignore
-import matplotlib  # type: ignore
+# import matplotlib  # type: ignore
 import struct
-import matplotlib.pyplot as plt  # type: ignore
+# import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 from numpy.typing import NDArray
 from .patterns import pattern_grid_to_tiles
