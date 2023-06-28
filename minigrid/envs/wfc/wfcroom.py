@@ -184,13 +184,11 @@ class WFCEnv(MiniGridEnv):
         self.mission = self._gen_mission()
 
     def _run_wfc(self, seed, shape):
-        # TODO: I don't know why this is necessary after changing all the random calls to use self._np_random
-        np.random.seed(seed)
         try:
             generated_pattern, stats = wfc_control.execute_wfc(
                 attempt_limit=1,
                 output_size=shape,
-                np_random=self._np_random,
+                np_random=self.np_random,
                 **self.config.wfc_kwargs
             )
         except wfc_solver.TimedOut or wfc_solver.StopEarly or wfc_solver.Contradiction:
@@ -246,15 +244,13 @@ class WFCEnv(MiniGridEnv):
 
         return g_out
 
-    @staticmethod
-    def _place_start_and_goal_random(graph: nx.Graph):
-        # TODO: Fix for networkx
+    def _place_start_and_goal_random(self, graph: nx.Graph) -> nx.Graph:
         node_set = "navigable"
 
         # possible_nodes = torch.where(graph.ndata[node_set])[0]
         possible_nodes = [n for n, d in graph.nodes(data=True) if d[node_set]]
         # inds = torch.randperm(len(possible_nodes))[:2]
-        inds = np.random.permutation(len(possible_nodes))[:2]
+        inds = self.np_random.permutation(len(possible_nodes))[:2]
         # start_node, goal_node = possible_nodes[inds]
         start_node, goal_node = possible_nodes[inds[0]], possible_nodes[inds[1]]
 

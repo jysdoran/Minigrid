@@ -299,7 +299,8 @@ def makeWeightedPatternHeuristic(weights: NDArray[np.floating[Any]], np_random: 
     return weightedPatternHeuristic
 
 
-def makeRarestPatternHeuristic(weights: NDArray[np.floating[Any]], np_random: Optional[numpy.random.Generator]=None) -> Callable[[NDArray[np.bool_], NDArray[np.bool_]], int]:
+def makeRarestPatternHeuristic(weights: NDArray[np.floating[Any]], np_random: Optional[numpy.random.Generator] = None) \
+        -> Callable[[NDArray[np.bool_], NDArray[np.bool_]], int]:
     """Return a function that chooses the rarest (currently least-used) pattern."""
     np_random = numpy.random.default_rng() if np_random is None else np_random
 
