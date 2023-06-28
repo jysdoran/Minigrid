@@ -28,16 +28,7 @@ from .wfc_solver import (
     makeAntiEntropyLocationHeuristic,
     makeRarestPatternHeuristic,
 )
-from .wfc_visualize import (
-    figure_list_of_tiles,
-    figure_false_color_tile_grid,
-    figure_pattern_catalog,
-    render_tiles_to_output,
-    figure_adjacencies,
-    make_solver_visualizers,
-    make_solver_loggers,
-    tile_grid_to_image,
-)
+from .wfc_utilities import tile_grid_to_image
 import imageio  # type: ignore
 import numpy as np
 import time
@@ -45,19 +36,6 @@ import logging
 from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
-
-
-def visualize_tiles(unique_tiles, tile_catalog, tile_grid):
-    if False:
-        figure_list_of_tiles(unique_tiles, tile_catalog)
-        figure_false_color_tile_grid(tile_grid)
-
-
-def visualize_patterns(pattern_catalog, tile_catalog, pattern_weights, pattern_width):
-    if False:
-        figure_pattern_catalog(
-            pattern_catalog, tile_catalog, pattern_weights, pattern_width
-        )
 
 
 def make_log_stats() -> Callable[[Dict[str, Any], str], None]:
@@ -91,7 +69,6 @@ def execute_wfc(
     input_periodic: bool = True,
     loc_heuristic: Literal["lexical", "hilbert", "spiral", "entropy", "anti-entropy", "simple", "random"] = "entropy",
     choice_heuristic: Literal["lexical", "rarest", "weighted", "random"] = "weighted",
-    visualize: bool = False,
     global_constraint: Literal[False, "allpatterns"] = False,
     backtracking: bool = False,
     log_filename: str = "log",
@@ -148,54 +125,16 @@ def execute_wfc(
         tile_grid, pattern_width, input_is_periodic=input_periodic, rotations=rotations
     )
 
-    logger.debug("pattern catalog")
-
-    # visualize_tiles(unique_tiles, tile_catalog, tile_grid)
-    # visualize_patterns(pattern_catalog, tile_catalog, pattern_weights, pattern_width)
-    # figure_list_of_tiles(unique_tiles, tile_catalog, output_filename=f"visualization/tilelist_{filename}_{timecode}")
-    # figure_false_color_tile_grid(tile_grid, output_filename=f"visualization/tile_falsecolor_{filename}_{timecode}")
-    if visualize and filename:
-        figure_pattern_catalog(
-            pattern_catalog,
-            tile_catalog,
-            pattern_weights,
-            pattern_width,
-            output_filename=f"visualization/pattern_catalog_{filename}_{timecode}",
-        )
-
     logger.debug("profiling adjacency relations")
-    if False:
-        import pprofile  # type: ignore
-        profiler = pprofile.Profile()
-        with profiler:
-            adjacency_relations = adjacency_extraction(
-                pattern_grid,
-                pattern_catalog,
-                direction_offsets,
-                [pattern_width, pattern_width],
-            )
-        profiler.dump_stats(f"logs/profile_adj_{filename}_{timecode}.txt")
-    else:
-        adjacency_relations = adjacency_extraction(
-            pattern_grid,
-            pattern_catalog,
-            direction_offsets,
-            (pattern_width, pattern_width),
-        )
+
+    adjacency_relations = adjacency_extraction(
+        pattern_grid,
+        pattern_catalog,
+        direction_offsets,
+        (pattern_width, pattern_width),
+    )
 
     logger.debug("adjacency_relations")
-
-    if visualize:
-        figure_adjacencies(
-            adjacency_relations,
-            direction_offsets,
-            tile_catalog,
-            pattern_catalog,
-            pattern_width,
-            [tile_size, tile_size],
-            output_filename=f"visualization/adjacency_{filename}_{timecode}_A",
-        )
-        # figure_adjacencies(adjacency_relations, direction_offsets, tile_catalog, pattern_catalog, pattern_width, [tile_size, tile_size], output_filename=f"visualization/adjacency_{filename}_{timecode}_B", render_b_first=True)
 
     logger.debug(f"output size: {output_size}\noutput periodic: {output_periodic}")
     number_of_patterns = len(pattern_weights)
@@ -233,14 +172,6 @@ def execute_wfc(
             for k, v in pattern_catalog.items()
             if encode_patterns[k] in ground_list
         }
-        if visualize:
-            figure_pattern_catalog(
-                ground_catalog,
-                tile_catalog,
-                pattern_weights,
-                pattern_width,
-                output_filename=f"visualization/patterns_ground_{filename}_{timecode}",
-            )
 
     wave = makeWave(
         number_of_patterns, output_size[0], output_size[1], ground=ground_list
@@ -277,70 +208,6 @@ def execute_wfc(
     if loc_heuristic == "hilbert":
         location_heuristic = makeHilbertLocationHeuristic(choice_random_weighting)
 
-    ### Visualization ###
-
-    (
-        visualize_choice,
-        visualize_wave,
-        visualize_backtracking,
-        visualize_propagate,
-        visualize_final,
-        visualize_after,
-    ) = (None, None, None, None, None, None)
-    if filename and visualize:
-        (
-            visualize_choice,
-            visualize_wave,
-            visualize_backtracking,
-            visualize_propagate,
-            visualize_final,
-            visualize_after,
-        ) = make_solver_visualizers(
-            f"{filename}_{timecode}",
-            wave,
-            decode_patterns=decode_patterns,
-            pattern_catalog=pattern_catalog,
-            tile_catalog=tile_catalog,
-            tile_size=[tile_size, tile_size],
-        )
-    if filename and logging:
-        (
-            visualize_choice,
-            visualize_wave,
-            visualize_backtracking,
-            visualize_propagate,
-            visualize_final,
-            visualize_after,
-        ) = make_solver_loggers(f"{filename}_{timecode}", input_stats.copy())
-    if filename and logging and visualize:
-        vis = make_solver_visualizers(
-            f"{filename}_{timecode}",
-            wave,
-            decode_patterns=decode_patterns,
-            pattern_catalog=pattern_catalog,
-            tile_catalog=tile_catalog,
-            tile_size=[tile_size, tile_size],
-        )
-        log = make_solver_loggers(f"{filename}_{timecode}", input_stats.copy())
-
-        def visfunc(idx: int):
-            def vf(*args, **kwargs):
-                if vis[idx]:
-                    vis[idx](*args, **kwargs)
-                if log[idx]:
-                    return log[idx](*args, **kwargs)
-
-            return vf
-
-        (
-            visualize_choice,
-            visualize_wave,
-            visualize_backtracking,
-            visualize_propagate,
-            visualize_final,
-            visualize_after,
-        ) = [visfunc(x) for x in range(len(vis))]
-
     ### Global Constraints ###
     active_global_constraint = lambda wave: True
     if global_constraint == "allpatterns":
@@ -363,9 +230,6 @@ def execute_wfc(
         attempts += 1
         time_solve_start = time.perf_counter()
         stats = {}
-        # profiler = pprofile.Profile()
-        # with profiler:
-        # with PyCallGraph(output=GraphvizOutput(output_file=f"visualization/pycallgraph_{filename}_{timecode}.png")):
         try:
             solution = run(
                 wave.copy(),
@@ -374,24 +238,14 @@ def execute_wfc(
                 patternHeuristic=pattern_heuristic,
                 periodic=output_periodic,
                 backtracking=backtracking,
-                onChoice=visualize_choice,
-                onBacktrack=visualize_backtracking,
-                onObserve=visualize_wave,
-                onPropagate=visualize_propagate,
-                onFinal=visualize_final,
                 checkFeasible=combinedConstraints,
             )
-            if visualize_after:
-                stats = visualize_after()
-            # logger.debug(solution)
-            # logger.debug(stats)
             solution_as_ids = np.vectorize(lambda x: decode_patterns[x])(solution)
             solution_tile_grid = pattern_grid_to_tiles(
                 solution_as_ids, pattern_catalog
             )
 
             logger.debug("Solution:")
-            # logger.debug(solution_tile_grid)
             if filename:
                 render_tiles_to_output(
                     solution_tile_grid,
@@ -408,13 +262,9 @@ def execute_wfc(
             raise
         except TimedOut:
             logger.debug("Timed Out")
-            if visualize_after:
-                stats = visualize_after()
             stats.update({"outcome": "timed_out"})
         except Contradiction as exc:
             #logger.warning(f"Contradiction: {exc}")
-            if visualize_after:
-                stats = visualize_after()
             stats.update({"outcome": "contradiction"})
         finally:
             # profiler.dump_stats(f"logs/profile_{filename}_{timecode}.txt")

@@ -9,7 +9,6 @@ import sys
 import math
 import itertools
 from numpy.typing import NBitBase, NDArray
-# from hilbertcurve.hilbertcurve import HilbertCurve  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +135,7 @@ def makeAdj(
             # logger.debug(js)
             for j in js:
                 m[i, j] = 1
+        # If scipy is available, use sparse matrices.
         # adjMatrices[d] = sparse.csr_matrix(m)
         adjMatrices[d] = m
     return adjMatrices
@@ -244,6 +244,7 @@ def makeSpiralLocationHeuristic(preferences: NDArray[np.floating[Any]]) -> Calla
 
 
 def makeHilbertLocationHeuristic(preferences: NDArray[np.floating[Any]]) -> Callable[[NDArray[np.bool_]], Tuple[int, int]]:
+    from hilbertcurve.hilbertcurve import HilbertCurve  # type: ignore
     curve_size = math.ceil(math.sqrt(max(preferences.shape[0], preferences.shape[1])))
     logger.debug(curve_size)
     curve_size = 4

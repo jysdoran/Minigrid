@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Union, Tuple, Optional
+from typing import Literal
 
 import imageio
 import networkx as nx
@@ -18,6 +18,8 @@ from minigrid.envs.wfc.wfc_logic import wfc_control, wfc_solver
 from minigrid.envs.wfc.graphtransforms import GraphTransforms, EdgeDescriptor
 
 TEMPLATE_PATH = Path(__file__).parent / "templates"
+
+
 @dataclass
 class WFCConfig:
     """ Dataclass for holding WFC configuration parameters."""
@@ -27,8 +29,8 @@ class WFCConfig:
     rotations: int = 8
     output_periodic: bool = False
     input_periodic: bool = False
-    loc_heuristic: str = "entropy"
-    choice_heuristic: str = "weighted"
+    loc_heuristic: Literal["lexical", "spiral", "entropy", "anti-entropy", "simple", "random"] = "entropy"
+    choice_heuristic: Literal["lexical", "rarest", "weighted", "random"] = "weighted"
     backtracking: bool = False
 
     @property
@@ -111,6 +113,7 @@ class WFCEnv(MiniGridEnv):
     def __init__(
         self,
         wfc_config: WFCConfig | str = "SimpleMaze",
+        size: int = 25,
         ensure_connected: bool = True,
         max_steps: int | None = None,
         **kwargs,
@@ -123,7 +126,9 @@ class WFCEnv(MiniGridEnv):
 
         mission_space = MissionSpace(mission_func=self._gen_mission)
 
-        self.size = 25
+        if size < 3:
+            raise ValueError("Grid size must be at least 3 (currently {})".format(size))
+        self.size = size
         self.max_attempts = 5
 
         if max_steps is None:
